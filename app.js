@@ -316,14 +316,14 @@ async function loadRefs() {
 
 function renderShell() {
   const nav = [['dashboard', 'Dashboard'], ['work', isManager() ? 'All work' : 'My work'], ['calendar', 'Due dates'], ['notices', 'Notices'], ['updates', 'Updates'], ['checklists', 'Checklists']]
-    .concat(isManager() ? [['billing', 'Billing']] : []).concat(isPartner() ? [['reports', 'Reports']] : []).concat(isManager() ? [['clients', 'Clients']] : []);
+    .concat(isManager() ? [['workload', 'Workload'], ['billing', 'Billing']] : []).concat(isPartner() ? [['reports', 'Reports']] : []).concat(isManager() ? [['clients', 'Clients']] : []);
   root.innerHTML = `<header class="top">
       <div class="brand">${esc(settings.firm_name || cfg.FIRM_NAME || 'Office Work Tracker')}</div>
       <nav id="nav">${nav.map(([k, l]) => `<a href="#/${k}" data-k="${k}">${l}</a>`).join('')}</nav>
       <div class="user"><button class="btn ghost sm" id="userBtn">${esc(me.full_name || me.email)} ▾</button>
         <div class="menu" id="userMenu" hidden>
           <div class="menu-info">${esc(me.email)}<br><span class="badge">${esc(ROLE_LABEL[me.role] || me.role)}</span></div>
-          ${isAdmin() ? '<a href="#/team" data-act="nav">Team</a><a href="#/settings" data-act="nav">Settings</a>' : ''}<button data-act="install">Install app on this device</button><button data-act="theme">Theme</button><button data-act="pw">Change password</button><button data-act="out">Sign out</button></div></div>
+          ${isAdmin() ? '<a href="#/team" data-act="nav">Team</a><a href="#/settings" data-act="nav">Settings</a>' : ''}<a href="#/calc" data-act="nav">Late fee calculator</a><button data-act="install">Install app on this device</button><button data-act="theme">Theme</button><button data-act="pw">Change password</button><button data-act="out">Sign out</button></div></div>
     </header><main id="view"></main>`;
   const menu = $('#userMenu');
   $('#userBtn').onclick = e => { e.stopPropagation(); menu.hidden = !menu.hidden; };
@@ -434,7 +434,7 @@ async function route() {
   if (!me) return;
   const key = location.hash.replace(/^#\/?/, '').split('?')[0] || 'dashboard';
   const adminOnly = ['clients', 'team', 'settings', 'billing', 'reports'];
-  const need = { team: isAdmin, settings: isAdmin, reports: isPartner, clients: isManager, billing: isManager }[key];
+  const need = { team: isAdmin, settings: isAdmin, reports: isPartner, clients: isManager, billing: isManager, workload: isManager }[key];
   if (!VIEWS[key] || (need && !need())) { location.hash = '#/dashboard'; return; }
   $$('#nav a').forEach(a => a.classList.toggle('active', a.dataset.k === key));
   const v = $('#view');
@@ -445,12 +445,13 @@ async function route() {
 
 /* ---------- shared task table ---------- */
 function dataCell(r, can) {
-  if (r.data_received_on) return `<div class="muted small" style="margin-top:4px">Data ✓ ${fmtDate(r.data_received_on).slice(0, 6)}${r.data_source ? ' · ' + esc(r.data_source) : ''}</div>`;
-  if (r.status !== 'Pending data') return '';
+  if (r.data_received_on && !r.fu_count) return `<div class="muted small" style="margin-top:4px">Data ✓ ${fmtDate(r.data_received_on).slice(0, 6)}${r.data_source ? ' · ' + esc(r.data_source) : ''}</div>`;
+  if (r.data_received_on) return `<div class="muted small" style="margin-top:4px">Data ✓ ${fmtDate(r.data_received_on).slice(0, 6)}${r.data_source ? ' · ' + esc(r.data_source) : ''}</div>${fuLine(r)}`;
+  if (r.status !== 'Pending data') return fuLine(r);
   const c = clientById(r.client_id);
   const g = gmailSearchUrl(c);
   const wl = can && c && c.phone ? `<a class="small" href="${esc(waShare(docsRequestMsg(c, r), c.phone))}" target="_blank" rel="noopener" title="Ask client on WhatsApp">WhatsApp</a>` : '';
-  return `<div class="row-acts">${can ? `<button class="link small" data-got="${r.id}">Got data</button>` : ''}${g ? `<a class="small" href="${esc(g)}" target="_blank" rel="noopener">Check mail</a>` : ''}${wl}</div>`;
+  return `${fuLine(r)}<div class="row-acts">${can ? `<button class="link small" data-got="${r.id}">Got data</button>` : ''}${can && 'fu_count' in r ? `<button class="link small" data-fu="${r.id}">Follow-up</button>` : ''}${g ? `<a class="small" href="${esc(g)}" target="_blank" rel="noopener">Check mail</a>` : ''}${wl}</div>`;
 }
 function taskTable(rows, { showArn = true, showAssigned = true } = {}) {
   if (!rows.length) return '<div class="table-wrap"><div class="empty">Nothing here 🎉</div></div>';
@@ -503,6 +504,8 @@ function bindTaskTable(el, rows, refresh) {
     if (id) editTask(rows.find(r => r.id === id), refresh);
     const gid = e.target.dataset.got;
     if (gid) gotData(rows.find(r => r.id === gid), refresh);
+    const fid = e.target.dataset.fu;
+    if (fid) logFollowup({ kind: 'task', task: rows.find(r => r.id === fid) }, refresh);
     const cid = e.target.closest('[data-chk]')?.dataset.chk;
     if (cid) openChecklist(rows.find(r => r.id === cid), refresh);
   });
@@ -554,7 +557,7 @@ function editTask(task, refresh) {
     ${!isNew ? `<p class="muted small full">Last updated ${new Date(task.updated_at).toLocaleString('en-IN')}${task.updated_by ? ' by ' + esc(profName(task.updated_by)) : ''}</p>` : ''}
   </div>`;
   const extra = (isPartner() && !isNew ? '<button class="btn danger" data-del>Delete</button>' : '') +
-    (!isNew ? '<button class="btn" data-chkl>☑ Checklist</button>' : '');
+    (!isNew ? '<button class="btn" data-chkl>☑ Checklist</button>' : '') + (!isNew && can && 'fu_count' in task ? `<button class="btn" data-fulog>Follow-up${task.fu_count ? ' (' + task.fu_count + ')' : ''}</button>` : '');
   const m = modal(isNew ? 'Add work' : 'Work details', body, {
     extra,
     onSave: can ? async el => {
@@ -575,6 +578,8 @@ function editTask(task, refresh) {
   linkTypeToList(m.el);
   const chk = $('[data-chkl]', m.el);
   if (chk) chk.onclick = () => { m.close(); openChecklist(task, refresh); };
+  const ful = $('[data-fulog]', m.el);
+  if (ful) ful.onclick = () => { m.close(); logFollowup({ kind: 'task', task }, refresh); };
   const del = $('[data-del]', m.el);
   if (del) del.onclick = async () => {
     if (!confirm('Delete this work item permanently?')) return;
@@ -978,20 +983,22 @@ VIEWS.dashboard = async v => {
   const now = new Date(), t = today(), in7 = iso(addDays(now, 7));
   const y = now.getFullYear(), m = now.getMonth() + 1;
   const mStart = iso(new Date(y, m - 1, 1)), mEnd = iso(new Date(y, m, 0));
-  let notRows = [], invRows = null, luNew = 0;
+  let notRows = [], invRows = null, luNew = 0, payFu = [];
   const [open, month, dd] = await Promise.all([
     must(sb.from('tasks').select('*').not('status', 'in', '("Filed","Not applicable")').order('due_date', { ascending: true, nullsFirst: false }).limit(3000)),
     must(sb.from('tasks').select('id,client_id,work_type,return_name,status,due_date,filed_on,remarks').gte('due_date', mStart).lte('due_date', mEnd).limit(5000)),
     must(sb.from('due_dates').select('*').order('sort')),
     safe(sb.from('notices').select('id,status,reply_due,hearing_date').neq('status', 'Closed').limit(3000)),
     safe(sb.from('law_updates').select('id').eq('status', 'published').gte('published_at', iso(addDays(now, -14))).limit(100)),
-    isManager() && P4() ? safe(sb.from('invoices').select('total,paid').limit(5000)) : Promise.resolve({ data: null })
-  ]).then(r => { notRows = r[3].error ? [] : r[3].data || []; luNew = r[4].error ? 0 : (r[4].data || []).length; invRows = r[5].error ? null : r[5].data; return r; });
+    isManager() && P4() ? safe(sb.from('invoices').select('client_id,total,paid').limit(5000)) : Promise.resolve({ data: null }),
+    isManager() ? safe(sb.from('followups').select('client_id,on_date,next_on,created_at').eq('kind', 'payment').order('on_date', { ascending: false }).order('created_at', { ascending: false }).limit(5000)) : Promise.resolve({ data: [] })
+  ]).then(r => { notRows = r[3].error ? [] : r[3].data || []; luNew = r[4].error ? 0 : (r[4].data || []).length; invRows = r[5].error ? null : r[5].data; payFu = r[6].error ? [] : r[6].data || []; return r; });
   const rows = open.data || [];
   const mrows = (month.data || []).filter(r => r.status !== 'Not applicable');
   const overdue = rows.filter(r => r.due_date && r.due_date < t);
   const soon = rows.filter(r => r.due_date && r.due_date >= t && r.due_date <= in7);
   const waiting = rows.filter(r => r.status === 'Pending data');
+  const fuDue = waiting.filter(r => r.fu_next && r.fu_next <= t);
   const filedMonth = mrows.filter(r => r.status === 'Filed').length;
   const pct = mrows.length ? Math.round(100 * filedMonth / mrows.length) : 0;
   const hour = now.getHours();
@@ -1044,6 +1051,12 @@ VIEWS.dashboard = async v => {
   if (nSoon) chips.push(`<a class="chip amber" href="#/notices">${nSoon} notice repl${nSoon > 1 ? 'ies' : 'y'} due in 7 days</a>`);
   if (invRows) { const bal = invRows.reduce((a, i) => a + num(i.total) - num(i.paid), 0); if (bal > 0.009) chips.push(`<a class="chip blue" href="#/billing" data-billdue>${inr(bal)} payments pending</a>`); }
   if (luNew) chips.push(`<a class="chip blue" href="#/updates">${luNew} new law update${luNew > 1 ? 's' : ''}</a>`);
+  if (fuDue.length) chips.push(`<a class="chip amber" href="#/work" data-jump="fudue">${fuDue.length} client follow-up${fuDue.length > 1 ? 's' : ''} due today</a>`);
+  if (invRows && payFu.length) {
+    const bal = {}; invRows.forEach(i => { bal[i.client_id] = (bal[i.client_id] || 0) + num(i.total) - num(i.paid); });
+    const seen = new Set(), dueP = payFu.filter(f => !seen.has(f.client_id) && seen.add(f.client_id)).filter(f => f.next_on && f.next_on <= t && (bal[f.client_id] || 0) > 0.009).length;
+    if (dueP) chips.push(`<a class="chip amber" href="#/billing" data-billdue>${dueP} payment follow-up${dueP > 1 ? 's' : ''} due</a>`);
+  }
   if (waitingClients) chips.push(`<span class="chip amber">${waitingClients} client${waitingClients > 1 ? 's haven’t' : ' hasn’t'} sent data</span>`);
   if (isManager()) {
     const cnt = {}; rows.forEach(r => { if (r.assigned_to) cnt[r.assigned_to] = (cnt[r.assigned_to] || 0) + 1; });
@@ -1089,6 +1102,7 @@ VIEWS.dashboard = async v => {
     </section>
   </div>
   ${isManager() ? shareCard() : ''}
+  ${fuDue.length ? '<div class="card" style="margin-top:16px"><h3>Client follow-ups due today</h3><div data-t="fu"></div></div>' : ''}
   <div class="card" style="margin-top:16px"><h3>Overdue</h3><div data-t="late"></div></div>
   <div class="card"><h3>Due in the next 7 days</h3><div data-t="soon"></div></div>`;
   const refresh = () => route();
@@ -1097,8 +1111,10 @@ VIEWS.dashboard = async v => {
   soonEl.innerHTML = taskTable(soon.slice(0, 50), { showArn: false, showAssigned: isManager() });
   bindTaskTable(lateEl, overdue, refresh);
   bindTaskTable(soonEl, soon, refresh);
+  const fuEl = $('[data-t=fu]', v);
+  if (fuEl) { fuEl.innerHTML = taskTable(fuDue.slice(0, 50), { showArn: false, showAssigned: isManager() }); bindTaskTable(fuEl, fuDue, refresh); }
   $$('[data-jump]', v).forEach(a => a.onclick = () => {
-    wf = { ...WF_DEFAULT, status: a.dataset.jump === 'waiting' ? 'Pending data' : 'open', quick: a.dataset.jump };
+    wf = { ...WF_DEFAULT, status: ['waiting', 'fudue'].includes(a.dataset.jump) ? 'Pending data' : 'open', quick: a.dataset.jump };
   });
   $$('[data-dept]', v).forEach(a => a.onclick = () => { wf = { ...WF_DEFAULT, type: a.dataset.dept, month: t.slice(0, 7), status: 'all' }; });
   countUp(v);
@@ -1130,7 +1146,7 @@ VIEWS.work = async v => {
       <button class="btn sm" id="clearF">Clear</button>
       <button class="btn sm" id="csvBtn">Export CSV</button>
     </div>
-    ${wf.quick ? `<p class="note small">Showing: <b>${{ overdue: 'Overdue', soon: 'Due in next 7 days', waiting: 'Waiting for client data' }[wf.quick] || ''}</b> · <button class="link" id="dropQuick">show all</button></p>` : ''}
+    ${wf.quick ? `<p class="note small">Showing: <b>${{ overdue: 'Overdue', soon: 'Due in next 7 days', waiting: 'Waiting for client data', fudue: 'Client follow-ups due' }[wf.quick] || ''}</b> · <button class="link" id="dropQuick">show all</button></p>` : ''}
     <div id="workList"><div class="loading">Loading…</div></div>`;
   $('#fStatus').value = wf.status;
   let rows = [];
@@ -1148,6 +1164,7 @@ VIEWS.work = async v => {
     const t = today(), in7 = iso(addDays(new Date(), 7));
     if (wf.quick === 'overdue') q = q.lt('due_date', t);
     if (wf.quick === 'soon') q = q.gte('due_date', t).lte('due_date', in7);
+    if (wf.quick === 'fudue') q = q.eq('status', 'Pending data').lte('fu_next', t);
     rows = (await must(q)).data || [];
     render();
   };
@@ -1213,6 +1230,7 @@ VIEWS.calendar = async v => {
       <button class="btn sm" id="nextM" aria-label="Next month">›</button>
       <button class="btn sm" id="thisM">This month</button>
       <span class="spacer"></span>
+      <a class="btn" href="#/calc">Late fee calculator</a>
       ${isManager() ? '<button class="btn" id="addDue">+ Add due date</button>' : ''}</div>
     <p class="note warn small">These are the standard statutory dates. When the government extends a date or changes a form, ${isManager() ? 'click <b>Edit</b> on that row to update it.' : 'ask the admin to update it.'}</p>
     <div class="card" style="padding:0">${items.length ? items.map((d, i) => {
@@ -1829,19 +1847,47 @@ async function showPayments(i) {
     try { await must(sb.from('payments').delete().eq('id', id)); m.close(); toast('Removed'); route(); } catch (err) { toast(friendly(err), true); }
   });
 }
-function renderDue(box, due) {
+let dueFilter = 'all';
+async function renderDue(box, due) {
   const by = {};
   due.forEach(i => { const b = by[i.client_id] = by[i.client_id] || { inv: [], total: 0, paid: 0, oldest: i.inv_date }; b.inv.push(i); b.total += num(i.total); b.paid += num(i.paid); if (i.inv_date < b.oldest) b.oldest = i.inv_date; });
-  const ids = Object.keys(by).sort((a, b) => (by[b].total - by[b].paid) - (by[a].total - by[a].paid));
-  const days = d => Math.floor((new Date(today()) - new Date(d)) / 864e5);
-  box.innerHTML = ids.length ? `<div class="table-wrap"><table><thead><tr><th>Client</th><th>Invoices</th><th class="r">Billed</th><th class="r">Received</th><th class="r">Balance</th><th>Oldest</th><th></th></tr></thead><tbody>
-    ${ids.map(cid => { const b = by[cid], c = clientById(cid) || {}, bal = b.total - b.paid;
-      const msg = `Dear ${c.contact_person || c.name},\nA balance of ${inr(bal)} is pending against invoice${b.inv.length > 1 ? 's' : ''} ${b.inv.map(i => i.inv_no).join(', ')}.\nKindly arrange the payment at the earliest.${settings.bank_details ? '\n\nBank details:\n' + settings.bank_details : ''}\n- ${firmName()}`;
-      return `<tr><td class="wrap"><b>${esc(c.name || '')}</b></td><td class="small">${b.inv.map(i => esc(i.inv_no)).join('<br>')}</td>
-        <td class="r">${inr(b.total)}</td><td class="r">${inr(b.paid)}</td><td class="r"><b>${inr(bal)}</b></td>
-        <td class="${days(b.oldest) > 30 ? 'late' : ''}">${fmtDate(b.oldest)}<div class="muted small">${days(b.oldest)} days</div></td>
-        <td class="row-btns"><a class="btn sm" href="${esc(waShare(msg, c.phone))}" target="_blank" rel="noopener">WhatsApp reminder</a></td></tr>`; }).join('')}
-    </tbody></table></div>` : '<div class="table-wrap"><div class="empty">No pending payments 🎉</div></div>';
+  const fr = await safe(sb.from('followups').select('client_id,on_date,mode,note,promised_on,next_on,created_at').eq('kind', 'payment').order('on_date', { ascending: false }).order('created_at', { ascending: false }).limit(5000));
+  const fuOn = !fr.error, last = {}, cnt = {};
+  (fr.data || []).forEach(f => { cnt[f.client_id] = (cnt[f.client_id] || 0) + 1; if (!last[f.client_id]) last[f.client_id] = f; });
+  const t = today();
+  const age = cid => daysFrom(by[cid].oldest);
+  const bucket = d => d <= 30 ? 0 : d <= 60 ? 1 : d <= 90 ? 2 : 3;
+  const B = [['0–30 days', 'blue'], ['31–60 days', 'amber'], ['61–90 days', 'amber'], ['Over 90 days', 'red']].map(x => [...x, 0]);
+  Object.keys(by).forEach(cid => { B[bucket(age(cid))][2] += by[cid].total - by[cid].paid; });
+  const isDue = cid => last[cid] && last[cid].next_on && last[cid].next_on <= t;
+  let ids = Object.keys(by).sort((a, b) => (by[b].total - by[b].paid) - (by[a].total - by[a].paid));
+  if (dueFilter === 'fu') ids = ids.filter(isDue);
+  if (dueFilter === 'none') ids = ids.filter(cid => !last[cid]);
+  if (dueFilter === '90') ids = ids.filter(cid => age(cid) > 90);
+  const nDue = Object.keys(by).filter(isDue).length;
+  box.innerHTML = !Object.keys(by).length ? '<div class="table-wrap"><div class="empty">No pending payments 🎉</div></div>' : `
+    <section class="bento-stats stats4" style="margin-bottom:14px">${B.map(([l, c, amt]) => `<div class="mini ${c}"><span>${l}</span><b style="font-size:1.5rem">${inr(amt)}</b></div>`).join('')}</section>
+    <div class="toolbar"><div class="seg">${[['all', 'All'], ['fu', `Follow-up due (${nDue})`], ['none', 'Never followed up'], ['90', 'Over 90 days']].map(([k, l]) => `<button data-df="${k}" class="${dueFilter === k ? 'on' : ''}">${l}</button>`).join('')}</div></div>
+    <div class="table-wrap">${ids.length ? `<table><thead><tr><th>Client</th><th>Invoices</th><th class="r">Balance</th><th>Oldest</th>${fuOn ? '<th>Last follow-up</th>' : ''}<th></th></tr></thead><tbody>
+    ${ids.map(cid => { const b = by[cid], c = clientById(cid) || {}, bal = b.total - b.paid, nos = b.inv.map(i => i.inv_no), l = last[cid], d = age(cid);
+      const mail = payMailUrl(c, bal, nos);
+      return `<tr class="${isDue(cid) ? 'fu-due-row' : ''}"><td class="wrap"><b>${esc(c.name || '')}</b>${c.phone ? `<div class="muted small">${esc(c.phone)}</div>` : ''}</td>
+        <td class="small">${nos.map(esc).join('<br>')}<div class="muted">billed ${inr(b.total)} · received ${inr(b.paid)}</div></td>
+        <td class="r"><b>${inr(bal)}</b></td>
+        <td class="${d > 60 ? 'late' : ''}">${fmtDate(b.oldest)}<div class="muted small">${d} days</div></td>
+        ${fuOn ? `<td class="small">${l ? `${FU_ICON[l.mode] || ''} ${fmtDate(l.on_date).slice(0, 6)} · ${esc(l.mode)}${cnt[cid] > 1 ? ` <span class="muted">(${cnt[cid]}×)</span>` : ''}
+            ${l.note ? `<div class="muted">${esc(l.note)}</div>` : ''}${l.promised_on ? `<div>Promised: <b>${fmtDate(l.promised_on)}</b></div>` : ''}
+            ${l.next_on ? `<div class="${l.next_on <= t ? 'late' : 'muted'}">Next: ${fmtDate(l.next_on)}</div>` : ''}` : '<span class="muted">None yet</span>'}</td>` : ''}
+        <td class="row-btns"><a class="btn sm" href="${esc(waShare(payMsg(c, bal, nos), c.phone))}" target="_blank" rel="noopener">WhatsApp</a>
+          ${mail ? `<a class="btn sm" href="${esc(mail)}">Email</a>` : ''}
+          ${fuOn ? `<button class="btn sm primary" data-pfu="${cid}">Log follow-up</button>` : ''}</td></tr>`; }).join('')}
+    </tbody></table>` : '<div class="empty">Nothing in this view.</div>'}</div>
+    ${fuOn ? '' : '<p class="note small">Run <b>update-followups.sql</b> in Supabase to log payment follow-ups here.</p>'}`;
+  $$('[data-df]', box).forEach(b => b.onclick = () => { dueFilter = b.dataset.df; renderDue(box, due); });
+  $$('[data-pfu]', box).forEach(b => b.onclick = () => {
+    const cid = b.dataset.pfu, x = by[cid];
+    logFollowup({ kind: 'payment', client_id: cid, bal: x.total - x.paid, invNos: x.inv.map(i => i.inv_no) }, () => renderDue(box, due));
+  });
 }
 function renderFees(box, fees) {
   const allRet = [].concat(...WORK_TYPES.map(w => WORK_ITEMS[w] || []));
@@ -2463,7 +2509,273 @@ async function renderClientFiles(box, task) {
   };
 }
 
+
+/* =====================================================================
+   FOLLOW-UPS (client data + payments)
+   ===================================================================== */
+const FU_MODES = ['Phone call', 'Email', 'WhatsApp', 'Visit / meeting', 'Other'];
+const FU_ICON = { 'Phone call': '📞', 'Email': '✉️', 'WhatsApp': '💬', 'Visit / meeting': '🤝', 'Other': '•' };
+const daysFrom = (a, b = today()) => Math.round((new Date(b + 'T00:00:00') - new Date(a + 'T00:00:00')) / 864e5);
+const fuLine = r => {
+  if (!r.fu_count) return '';
+  const due = r.fu_next && r.fu_next <= today() && r.status === 'Pending data';
+  return `<div class="fu-line ${due ? 'due' : ''}">Followed up ${r.fu_count}× · last ${fmtDate(r.fu_last).slice(0, 6)}${r.fu_next ? ` · next <b>${fmtDate(r.fu_next).slice(0, 6)}</b>` : ''}</div>`;
+};
+const payMsg = (c, bal, invNos) => `Dear ${c.contact_person || c.name},\nA balance of ${inr(bal)} is pending against invoice${invNos.length > 1 ? 's' : ''} ${invNos.join(', ')}.\nKindly arrange the payment at the earliest.${settings.bank_details ? '\n\nBank details:\n' + settings.bank_details : ''}\n- ${firmName()}`;
+const payMailUrl = (c, bal, invNos) => {
+  const em = clientEmails(c); if (!em.length) return '';
+  return `mailto:${em.join(',')}?subject=${encodeURIComponent(`Payment reminder: ${invNos.join(', ')}`)}&body=${encodeURIComponent(payMsg(c, bal, invNos))}`;
+};
+
+// kind 'task': { task } · kind 'payment': { client_id, bal, invNos }
+async function logFollowup({ kind = 'task', task, client_id, bal = 0, invNos = [] }, refresh = () => {}) {
+  const cid = kind === 'task' ? task.client_id : client_id;
+  const c = clientById(cid) || {};
+  let q = sb.from('followups').select('*').order('on_date', { ascending: false }).order('created_at', { ascending: false }).limit(50);
+  q = kind === 'task' ? q.eq('task_id', task.id) : q.eq('kind', 'payment').eq('client_id', cid);
+  const h = await safe(q);
+  if (h.error) return toast('Follow-up log is not set up yet — run update-followups.sql in Supabase', true);
+  const hist = h.data || [];
+  const wa = c.phone ? waShare(kind === 'task' ? docsRequestMsg(c, task) : payMsg(c, bal, invNos), c.phone) : '';
+  const mail = kind === 'task' ? requestMailUrl(c, task) : payMailUrl(c, bal, invNos);
+  const head = kind === 'task'
+    ? `<b>${esc(c.name || '')}</b> · ${esc(task.return_name)} · ${esc(task.period)}${task.due_date ? ' · due ' + fmtDate(task.due_date) : ''}`
+    : `<b>${esc(c.name || '')}</b> · balance <b>${inr(bal)}</b> · ${esc(invNos.join(', '))}`;
+  const body = `<p class="muted small" style="margin-top:0">${head}</p>
+    <div class="toolbar" style="margin:0 0 12px">${c.phone ? `<a class="btn sm" href="tel:${esc(c.phone)}">📞 Call ${esc(c.phone)}</a>` : ''}
+      ${wa ? `<a class="btn sm" href="${esc(wa)}" target="_blank" rel="noopener">💬 WhatsApp message</a>` : ''}
+      ${mail ? `<a class="btn sm" href="${esc(mail)}">✉️ Email</a>` : ''}
+      ${!c.phone && !mail ? '<span class="muted small">No phone or email saved for this client.</span>' : ''}</div>
+    <div class="form-grid">
+      <label>Date<input type="date" name="f_on" value="${today()}"></label>
+      <label>How<select name="f_mode">${opts(FU_MODES, 'Phone call')}</select></label>
+      <label class="full">What happened<input name="f_note" placeholder="${kind === 'task' ? 'e.g. Spoke to accountant, will send sales data' : 'e.g. Promised to pay by NEFT'}"></label>
+      <label>${kind === 'task' ? 'Client promised data by' : 'Client promised payment by'}<input type="date" name="f_prom"></label>
+      <label>Follow up again on<input type="date" name="f_next" value="${iso(addDays(new Date(), 3))}"></label>
+    </div>
+    <h4 style="margin:18px 0 8px">History ${hist.length ? `<span class="muted small">(${hist.length})</span>` : ''}</h4>
+    ${hist.length ? `<div class="fu-hist">${hist.map(f => `<div class="fu-item"><span class="fu-ico" aria-hidden="true">${FU_ICON[f.mode] || '•'}</span>
+        <div><b>${fmtDate(f.on_date)}</b> · ${esc(f.mode)}${f.created_by ? ` · <span class="muted">${esc(profName(f.created_by))}</span>` : ''}
+        ${f.note ? `<div>${esc(f.note)}</div>` : ''}
+        <div class="muted small">${f.promised_on ? 'Promised by ' + fmtDate(f.promised_on) : ''}${f.promised_on && f.next_on ? ' · ' : ''}${f.next_on ? 'Next follow-up ' + fmtDate(f.next_on) : ''}</div></div>
+        ${isManager() || f.created_by === me.id ? `<button type="button" class="link small danger-t" data-fdel="${f.id}">Remove</button>` : ''}</div>`).join('')}</div>`
+      : '<p class="muted small">No follow-ups yet.</p>'}`;
+  const m = modal(kind === 'task' ? 'Follow-up · client data' : 'Follow-up · payment', body, {
+    saveText: 'Save follow-up', wide: true,
+    onSave: async el => {
+      const rec = { kind, on_date: fv(el, 'f_on') || today(), mode: fv(el, 'f_mode'), note: fv(el, 'f_note') || null,
+        promised_on: fv(el, 'f_prom') || null, next_on: fv(el, 'f_next') || null, client_id: cid };
+      if (kind === 'task') rec.task_id = task.id;
+      await must(sb.from('followups').insert(rec));
+      toast('Follow-up saved'); refresh();
+    }
+  });
+  m.el.addEventListener('click', async e => {
+    const id = e.target.dataset.fdel; if (!id || !confirm('Remove this follow-up entry?')) return;
+    try { await must(sb.from('followups').delete().eq('id', id)); toast('Removed'); m.close(); refresh(); } catch (err) { toast(friendly(err), true); }
+  });
+}
+
+/* =====================================================================
+   STAFF WORKLOAD (manager and above)
+   ===================================================================== */
+let wlMonth = today().slice(0, 7);
+VIEWS.workload = async v => {
+  const [y, m] = wlMonth.split('-').map(Number);
+  const mStart = iso(new Date(y, m - 1, 1)), mEnd = iso(new Date(y, m, 0)), t = today();
+  const [open, month, fu] = await Promise.all([
+    must(sb.from('tasks').select('id,assigned_to,due_date,status').not('status', 'in', '("Filed","Not applicable")').limit(10000)),
+    must(sb.from('tasks').select('id,assigned_to,due_date,status,filed_on').gte('due_date', mStart).lte('due_date', mEnd).neq('status', 'Not applicable').limit(10000)),
+    safe(sb.from('followups').select('created_by,kind').gte('on_date', mStart).lte('on_date', mEnd).limit(10000))
+  ]);
+  const O = open.data || [], M = month.data || [], F = fu.error ? null : fu.data || [];
+  const people = activeStaff().map(p => p.id).concat(['']);
+  const stat = id => {
+    const mine = r => (r.assigned_to || '') === id;
+    const o = O.filter(mine), mm = M.filter(mine), filed = mm.filter(r => r.status === 'Filed');
+    const onTime = filed.filter(r => r.filed_on && r.due_date && r.filed_on <= r.due_date).length;
+    return { id, open: o.length, overdue: o.filter(r => r.due_date && r.due_date < t).length, waiting: o.filter(r => r.status === 'Pending data').length,
+      week: o.filter(r => r.due_date && r.due_date >= t && r.due_date <= iso(addDays(new Date(), 7))).length,
+      month: mm.length, filed: filed.length, onTime, pct: filed.length ? Math.round(100 * onTime / filed.length) : null,
+      fu: F ? F.filter(f => (f.created_by || '') === id).length : null };
+  };
+  const rows = people.map(stat).filter(s => s.id || s.open || s.month);
+  const max = Math.max(1, ...rows.map(s => s.open));
+  const tot = rows.reduce((a, s) => ({ open: a.open + s.open, overdue: a.overdue + s.overdue, month: a.month + s.month, filed: a.filed + s.filed }), { open: 0, overdue: 0, month: 0, filed: 0 });
+  v.innerHTML = `<div class="page-head"><h2>Staff workload</h2><span class="spacer"></span>
+      <label class="small">Month <input type="month" id="wlM" value="${esc(wlMonth)}"></label></div>
+    <section class="bento-stats stats4" style="margin-bottom:16px">
+      <div class="mini blue"><span>Open work (all)</span><b>${tot.open}</b></div>
+      <div class="mini red"><span>Overdue now</span><b>${tot.overdue}</b></div>
+      <div class="mini amber"><span>Due in ${MONTHS[m - 1]}</span><b>${tot.month}</b></div>
+      <div class="mini green"><span>Filed (${MONTHS[m - 1]})</span><b>${tot.filed}</b></div></section>
+    <div class="table-wrap"><table class="wl"><thead><tr><th>Staff</th><th style="min-width:180px">Open work now</th><th class="r">Overdue</th><th class="r">Waiting data</th><th class="r">Due 7 days</th>
+      <th class="r">${MONTHS[m - 1]}: due</th><th class="r">Filed</th><th class="r">On time</th>${F ? '<th class="r">Follow-ups</th>' : ''}<th></th></tr></thead><tbody>
+    ${rows.map(s => `<tr><td><b>${s.id ? esc(profName(s.id)) : '<span class="muted">Unassigned</span>'}</b>${s.id ? `<div class="muted small">${esc(ROLE_LABEL[(profiles.find(p => p.id === s.id) || {}).role] || '')}</div>` : ''}</td>
+      <td><div class="wl-bar"><i style="width:${Math.round(100 * s.open / max)}%"></i><i class="od" style="width:${Math.round(100 * s.overdue / max)}%"></i></div><span class="small"><b>${s.open}</b> open</span></td>
+      <td class="r ${s.overdue ? 'late' : ''}">${s.overdue}</td><td class="r">${s.waiting}</td><td class="r">${s.week}</td>
+      <td class="r">${s.month}</td><td class="r">${s.filed}</td>
+      <td class="r">${s.pct == null ? '—' : `<span class="pill ${s.pct >= 90 ? 'g' : s.pct >= 70 ? 'a' : 'r'}">${s.pct}%</span>`}</td>
+      ${F ? `<td class="r">${s.fu}</td>` : ''}
+      <td class="row-btns"><a class="btn sm" href="#/work" data-wls="${s.id || 'none'}">Open list</a></td></tr>`).join('')}
+    </tbody></table></div>
+    <p class="muted small">Open work and overdue are as of today. “On time” = filed on or before the due date, for work due in the selected month. Follow-ups = calls / mails / WhatsApp logged in that month.</p>`;
+  $('#wlM').onchange = e => { wlMonth = e.target.value || today().slice(0, 7); route(); };
+  $$('[data-wls]', v).forEach(a => a.onclick = () => { wf = { ...WF_DEFAULT, staff: a.dataset.wls }; });
+  countUp(v);
+};
+
+/* =====================================================================
+   LATE FEE & INTEREST CALCULATOR
+   ===================================================================== */
+const CR = 1e7;
+// GST late fee (Sec 47 + relief notifications) and interest (Sec 50, 18% p.a.)
+function gstLateFee({ ret, nil, turnover, due, filed }) {
+  const days = Math.max(0, daysFrom(due, filed));
+  let perDay, cap, note = '';
+  if (ret === 'GSTR-9') {
+    const t = num(turnover);
+    perDay = t <= 5 * CR ? 50 : t <= 20 * CR ? 100 : 200;
+    cap = t > 0 ? Math.round(t * (t <= 20 * CR ? 0.0004 : 0.005)) : Infinity;
+    note = 'FY 2022-23 onwards: ₹50 / ₹100 / ₹200 a day by turnover, capped at 0.04% (0.5% above ₹20 Cr) of state turnover.';
+  } else if (ret === 'GSTR-7') {
+    perDay = nil ? 0 : 50; cap = nil ? 0 : 2000; note = 'Nil GSTR-7: no late fee.';
+  } else if (ret === 'GSTR-4') {
+    perDay = 50; cap = nil ? 500 : 2000;
+  } else if (ret === 'CMP-08') {
+    perDay = 0; cap = 0; note = 'CMP-08 has no late fee — only interest.';
+  } else {                                     // GSTR-3B / GSTR-1 / IFF
+    const t = num(turnover);
+    perDay = nil ? 20 : 50;
+    cap = nil ? 500 : t > 5 * CR ? 10000 : t > 1.5 * CR ? 5000 : 2000;
+  }
+  const fee = Math.min(days * perDay, cap);
+  return { days, perDay, cap, fee, cgst: fee / 2, sgst: fee / 2, note };
+}
+const gstInterest = (tax, from, to, rate = 18) => { const d = Math.max(0, daysFrom(from, to)); return { days: d, amount: Math.round(num(tax) * rate / 100 * d / 365) }; };
+// TDS: months = calendar months touched (part of a month counts as a full month)
+const monthsSpan = (a, b) => { if (!a || !b || b <= a) return 0; const [y1, m1] = a.split('-').map(Number), [y2, m2] = b.split('-').map(Number); return (y2 - y1) * 12 + (m2 - m1) + 1; };
+const tdsDepositDue = deducted => { if (!deducted) return ''; const [y, m] = deducted.split('-').map(Number); return m === 3 ? `${y}-04-30` : iso(new Date(y, m, 7)); };
+function tdsCalc({ amount, deductible, deducted, deposited, stmtDue, stmtFiled }) {
+  const a = num(amount);
+  const m1 = deducted && deductible && deducted > deductible ? monthsSpan(deductible, deducted) : 0;
+  const depDue = tdsDepositDue(deducted || deductible);
+  const m2 = deposited && depDue && deposited > depDue ? monthsSpan(deducted || deductible, deposited) : 0;
+  const lateDays = stmtDue && stmtFiled ? Math.max(0, daysFrom(stmtDue, stmtFiled)) : 0;
+  const fee = Math.min(lateDays * 200, a || Infinity);
+  return { m1, i1: Math.round(a * 0.01 * m1), depDue, m2, i2: Math.round(a * 0.015 * m2), lateDays, fee: lateDays ? fee : 0 };
+}
+// MCA / ROC additional fee
+const ROC_NORMAL = [[1e5, 200], [5e5, 300], [25e5, 400], [1e7, 500], [Infinity, 600]];
+const LLP_NORMAL = [[1e5, 50], [5e5, 100], [1e6, 150], [25e5, 200], [1e7, 400], [Infinity, 600]];
+const slabFee = (table, cap, upTo = false) => (table.find(([lim]) => upTo ? num(cap) <= lim : num(cap) < lim) || table[table.length - 1])[1];   // company: 'below' slabs · LLP: 'up to' slabs
+const bandMult = (days, bands) => { for (const [lim, x] of bands) if (days <= lim) return x; return bands[bands.length - 1][1]; };
+function rocCalc({ form, capital, due, filed, fy, llpSmall }) {
+  const days = Math.max(0, daysFrom(due, filed));
+  let normal = 0, add = 0, note = '';
+  if (form === 'DIR-3 KYC') { add = days ? 5000 : 0; note = 'Flat ₹5,000 when filed late (or to reactivate a DIN).'; }
+  else if (form === 'LLP Form 8' || form === 'LLP Form 11') {
+    normal = slabFee(LLP_NORMAL, capital, true);
+    const bands = llpSmall ? [[0, 0], [15, 1], [30, 2], [60, 4], [90, 6], [180, 10], [360, 15]] : [[0, 0], [15, 1], [30, 4], [60, 8], [90, 12], [180, 20], [360, 30]];
+    const x = days ? bandMult(days, bands) : 0;
+    add = normal * x + (days > 360 ? (days - 360) * (llpSmall ? 10 : 20) : 0);
+    note = `${llpSmall ? 'Small LLP' : 'LLP'}: ${x}× normal fee${days > 360 ? ' + ₹' + (llpSmall ? 10 : 20) + ' a day beyond 360 days' : ''}.`;
+  } else {
+    normal = slabFee(ROC_NORMAL, capital);
+    if (['AOC-4', 'MGT-7', 'MGT-7A'].includes(form)) {
+      add = days * 100; note = '₹100 a day of delay (no upper limit).';
+      const waiver = fy === '2025-26' && ((form === 'AOC-4' && filed <= '2026-12-31') || (form !== 'AOC-4' && filed <= '2027-01-31'));
+      if (waiver && days) { add = 0; note = 'MCA General Circular 05/2026: FY 2025-26 ' + (form === 'AOC-4' ? 'AOC-4 filed by 31 Dec 2026' : 'MGT-7 / 7A filed by 31 Jan 2027') + ' — no additional fee.'; }
+    } else {
+      const bands = form === 'ADT-1' ? [[0, 0], [15, 1], [30, 2], [60, 4], [90, 6], [180, 10], [Infinity, 12]] : [[0, 0], [30, 2], [60, 4], [90, 6], [180, 10], [Infinity, 12]];
+      const x = days ? bandMult(days, bands) : 0;
+      add = normal * x; note = `${x}× normal fee for ${days} day${days === 1 ? '' : 's'} late.`;
+    }
+  }
+  return { days, normal, add, total: normal + add, note };
+}
+
+let calcTab = 'gst';
+VIEWS.calc = async v => {
+  const fyNow = (() => { const d = new Date(); const y = d.getMonth() >= 3 ? d.getFullYear() : d.getFullYear() - 1; return y; })();
+  const fys = [0, 1, 2, 3].map(k => `${fyNow - k}-${String((fyNow - k + 1) % 100).padStart(2, '0')}`);
+  const forms = {
+    gst: `<div class="form-grid">
+      <label>Return<select name="ret">${opts(['GSTR-3B', 'GSTR-1', 'IFF', 'GSTR-4', 'GSTR-7', 'GSTR-9', 'CMP-08'], 'GSTR-3B')}</select></label>
+      <label class="check" style="align-self:end"><input type="checkbox" name="nil"> Nil return</label>
+      <label>Aggregate turnover (₹)<input name="turn" type="number" min="0" placeholder="e.g. 20000000"><span class="muted small" data-turnw></span></label>
+      <label>Due date<input type="date" name="due"></label>
+      <label>Filed / filing on<input type="date" name="filed" value="${today()}"></label>
+      <label>Tax paid in cash late (₹)<input name="tax" type="number" min="0" placeholder="for interest"></label>
+      <label>Tax paid on<input type="date" name="paid" value="${today()}"></label></div>`,
+    tds: `<div class="form-grid">
+      <label>TDS / TCS amount (₹)<input name="amt" type="number" min="0"></label>
+      <label>Date tax was deductible<input type="date" name="dble"><span class="muted small">payment / credit date</span></label>
+      <label>Date actually deducted<input type="date" name="dted"></label>
+      <label>Date deposited<input type="date" name="dep" value="${today()}"></label>
+      <label>Statement (24Q / 26Q …) due date<input type="date" name="sdue"></label>
+      <label>Statement filed on<input type="date" name="sfil"></label></div>`,
+    roc: `<div class="form-grid">
+      <label>Form<select name="form">${opts(['AOC-4', 'MGT-7', 'MGT-7A', 'ADT-1', 'DIR-12', 'MGT-14', 'PAS-3', 'DPT-3', 'INC-22', 'CHG-4', 'Other company form', 'LLP Form 8', 'LLP Form 11', 'DIR-3 KYC'], 'AOC-4')}</select></label>
+      <label>Financial year<select name="fy">${opts(fys, fys[1])}</select></label>
+      <label><span data-caplab>Nominal share capital (₹)</span><input name="cap" type="number" min="0" placeholder="e.g. 100000"></label>
+      <label class="check" style="align-self:end" data-llp hidden><input type="checkbox" name="small" checked> Small LLP</label>
+      <label>Due date<input type="date" name="due"></label>
+      <label>Filed / filing on<input type="date" name="filed" value="${today()}"></label></div>`
+  };
+  v.innerHTML = `<div class="page-head"><h2>Late fee & interest calculator</h2></div>
+    <div class="seg" style="margin-bottom:16px">${[['gst', 'GST'], ['tds', 'TDS / TCS'], ['roc', 'MCA / ROC']].map(([k, l]) => `<button data-ct="${k}" class="${calcTab === k ? 'on' : ''}">${l}</button>`).join('')}</div>
+    <div class="calc-grid"><div class="card" id="calcIn">${forms[calcTab]}</div>
+      <div class="card calc-out" id="calcOut"></div></div>
+    <p class="muted small">Indicative figures based on the rules in force (checked Nov 2026): GST Sec 47 relief notifications &amp; Sec 50 (18% p.a.); TDS ₹200/day statement fee capped at the tax, interest 1% / 1.5% a month (part month = full month);
+      MCA additional-fee rules incl. General Circular 05/2026. The portal's own figure is final — check for any new waiver before advising a client.</p>`;
+  $$('[data-ct]', v).forEach(b => b.onclick = () => { calcTab = b.dataset.ct; route(); });
+  const box = $('#calcIn', v), out = $('#calcOut', v);
+  const line = (l, val, strong) => `<div class="calc-line ${strong ? 'tot' : ''}"><span>${l}</span><b>${val}</b></div>`;
+  const words = n => num(n) >= 1e7 ? ` (${(num(n) / 1e7).toLocaleString('en-IN', { maximumFractionDigits: 2 })} Cr)` : num(n) >= 1e5 ? ` (${(num(n) / 1e5).toLocaleString('en-IN', { maximumFractionDigits: 2 })} lakh)` : '';
+  const calc = () => {
+    const g = n => fv(box, n), ck = n => !!($(`[name="${n}"]`, box) || {}).checked;
+    if (calcTab === 'gst') {
+      $('[data-turnw]', box).textContent = num(g('turn')) ? '₹' + num(g('turn')).toLocaleString('en-IN') + words(g('turn')) : '';
+      if (!g('due')) { out.innerHTML = '<p class="muted">Enter the due date to see the late fee.</p>'; return; }
+      const r = gstLateFee({ ret: g('ret'), nil: ck('nil'), turnover: g('turn'), due: g('due'), filed: g('filed') || today() });
+      const it = num(g('tax')) ? gstInterest(g('tax'), g('due'), g('paid') || today()) : null;
+      out.innerHTML = `<h3 style="margin-top:0">${esc(g('ret'))}${ck('nil') ? ' (nil)' : ''}</h3>
+        ${line('Days late', r.days)}${line('Late fee per day', r.perDay ? inr(r.perDay) + ' (CGST ' + inr(r.perDay / 2) + ' + SGST ' + inr(r.perDay / 2) + ')' : '—')}
+        ${line('Maximum late fee', isFinite(r.cap) ? inr(r.cap) : 'enter turnover')}
+        ${line('Late fee', inr(r.fee) + (r.fee ? ` <span class="muted small">= CGST ${inr(r.cgst)} + SGST ${inr(r.sgst)}</span>` : ''), true)}
+        ${it ? line(`Interest 18% × ${it.days} days on ${inr(g('tax'))}`, inr(it.amount)) + line('Total to pay (fee + interest)', inr(r.fee + it.amount), true) : ''}
+        ${r.note ? `<p class="muted small">${esc(r.note)}</p>` : ''}${!ck('nil') && ['GSTR-3B', 'GSTR-1', 'IFF'].includes(g('ret')) && !num(g('turn')) ? '<p class="muted small">No turnover entered — using the ₹2,000 cap (turnover up to ₹1.5 Cr).</p>' : ''}
+        <p class="muted small">Late fee is paid in cash only (not from ITC). Interest = tax × 18% × days ÷ 365.</p>`;
+    }
+    if (calcTab === 'tds') {
+      const r = tdsCalc({ amount: g('amt'), deductible: g('dble'), deducted: g('dted'), deposited: g('dep'), stmtDue: g('sdue'), stmtFiled: g('sfil') });
+      if (!num(g('amt'))) { out.innerHTML = '<p class="muted">Enter the TDS amount and dates.</p>'; return; }
+      out.innerHTML = `<h3 style="margin-top:0">TDS / TCS</h3>
+        ${line('Late deduction — 1% × ' + r.m1 + ' month' + (r.m1 === 1 ? '' : 's'), inr(r.i1))}
+        ${line(`Late deposit — 1.5% × ${r.m2} month${r.m2 === 1 ? '' : 's'}${r.depDue ? ' <span class="muted small">(due ' + fmtDate(r.depDue) + ')</span>' : ''}`, inr(r.i2))}
+        ${line('Interest total', inr(r.i1 + r.i2), true)}
+        ${line(`Late statement fee — ₹200 × ${r.lateDays} days`, inr(r.fee) + (r.lateDays * 200 > num(g('amt')) ? ' <span class="muted small">(capped at TDS)</span>' : ''))}
+        ${line('Total (interest + fee)', inr(r.i1 + r.i2 + r.fee), true)}
+        <p class="muted small">Deposit due: 7th of next month (30 April for March). Interest must be paid before filing the statement. A further penalty (₹10,000 – ₹1 lakh) can apply if the statement is over a year late.</p>`;
+    }
+    if (calcTab === 'roc') {
+      const f = g('form'), llp = /^LLP/.test(f);
+      $('[data-llp]', box).hidden = !llp;
+      $('[data-caplab]', box).textContent = llp ? 'Total contribution (₹)' : 'Nominal share capital (₹)';
+      if (!g('due')) { out.innerHTML = '<p class="muted">Enter the due date to see the fee.</p>'; return; }
+      const r = rocCalc({ form: f, capital: g('cap'), due: g('due'), filed: g('filed') || today(), fy: g('fy'), llpSmall: ck('small') });
+      out.innerHTML = `<h3 style="margin-top:0">${esc(f)}</h3>
+        ${line('Days late', r.days)}${r.normal ? line('Normal filing fee', inr(r.normal)) : ''}
+        ${line('Additional (late) fee', inr(r.add))}${line('Total MCA fee', inr(r.total), true)}
+        <p class="muted small">${esc(r.note)}</p>
+        ${['AOC-4', 'MGT-7', 'MGT-7A'].includes(f) ? '<p class="muted small">Separate penalties can apply for long delays (Sec 137 / 92: ₹10,000 + ₹100 a day, up to ₹2 lakh for the company).</p>' : ''}`;
+    }
+  };
+  box.addEventListener('input', calc); box.addEventListener('change', calc); calc();
+};
+
 // expose pure helpers for testing
-window.__tracker = { periodFor, dueDateFor, parseCSV, toCSV };
+window.__tracker = { periodFor, dueDateFor, parseCSV, toCSV, gstLateFee, gstInterest, tdsCalc, rocCalc, monthsSpan, tdsDepositDue };
 start();
 })();
