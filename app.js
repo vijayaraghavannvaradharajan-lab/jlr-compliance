@@ -361,10 +361,11 @@ function renderShell() {
   root.innerHTML = `<header class="top">
       <div class="brand">${esc(settings.firm_name || cfg.FIRM_NAME || 'Office Work Tracker')}</div>
       <nav id="nav">${nav.map(([k, l]) => `<a href="#/${k}" data-k="${k}">${l}</a>`).join('')}</nav>
+      <a href="#/inbox" id="mailBadge" class="mail-badge" hidden title="New mail from clients">📥 <b>0</b></a>
       <div class="user"><button class="btn ghost sm" id="userBtn">${esc(me.full_name || me.email)} ▾</button>
         <div class="menu" id="userMenu" hidden>
           <div class="menu-info">${esc(me.email)}<br><span class="badge">${esc(ROLE_LABEL[me.role] || me.role)}</span></div>
-          ${isAdmin() ? '<a href="#/team" data-act="nav">Team</a><a href="#/settings" data-act="nav">Settings</a>' : ''}<a href="#/checklists" data-act="nav">Checklists</a><a href="#/calc" data-act="nav">Late fee calculator</a><button data-act="install">Install app on this device</button><button data-act="theme">Theme</button><button data-act="pw">Change password</button><button data-act="out">Sign out</button></div></div>
+          ${isAdmin() ? '<a href="#/team" data-act="nav">Team</a><a href="#/settings" data-act="nav">Settings</a>' : ''}<a href="#/inbox" data-act="nav">Client mail</a><a href="#/checklists" data-act="nav">Checklists</a><a href="#/calc" data-act="nav">Late fee calculator</a><button data-act="install">Install app on this device</button><button data-act="theme">Theme</button><button data-act="pw">Change password</button><button data-act="out">Sign out</button></div></div>
     </header><main id="view"></main>`;
   const menu = $('#userMenu');
   $('#userBtn').onclick = e => { e.stopPropagation(); menu.hidden = !menu.hidden; };
@@ -482,6 +483,7 @@ async function route() {
   v.innerHTML = '<div class="loading">Loading…</div>';
   try { await VIEWS[key](v); }
   catch (e) { v.innerHTML = `<div class="card"><p class="error">Something went wrong: ${esc(friendly(e))}</p></div>`; }
+  refreshMailBadge().catch(() => {});
 }
 
 /* ---------- shared task table ---------- */
@@ -1533,6 +1535,9 @@ VIEWS.settings = async v => {
   const gst = document.createElement('div');
   v.appendChild(gst);
   renderGst(gst);
+  const ml = document.createElement('div');
+  v.appendChild(ml);
+  renderMailSettings(ml);
 };
 
 /* ---------- GST auto-status via Sandbox (admin, Settings page) ---------- */
@@ -2547,8 +2552,8 @@ async function renderPortalLogins(box, c) {
 async function renderClientFiles(box, task) {
   const r = await safe(sb.from('client_uploads').select('*').eq('task_id', task.id).order('uploaded_at', { ascending: false }));
   if (r.error || !(r.data || []).length) { box.innerHTML = ''; return; }
-  box.innerHTML = `<div class="docs-box"><div class="docs-head"><h4 style="margin:0">Files uploaded by the client</h4><span class="muted small">${r.data.length}</span></div>
-    ${r.data.map(u => `<div class="file-row"><span>📄 ${esc(u.file_name)}</span><span class="muted small">${new Date(u.uploaded_at).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}${u.size_bytes ? ' · ' + Math.max(1, Math.round(u.size_bytes / 1024)) + ' KB' : ''}</span>
+  box.innerHTML = `<div class="docs-box"><div class="docs-head"><h4 style="margin:0">Files from the client</h4><span class="muted small">${r.data.length}</span></div>
+    ${r.data.map(u => `<div class="file-row"><span>📄 ${esc(u.file_name)}${u.source === 'Email' ? ' <span class="badge">by email</span>' : ''}</span><span class="muted small">${new Date(u.uploaded_at).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}${u.size_bytes ? ' · ' + Math.max(1, Math.round(u.size_bytes / 1024)) + ' KB' : ''}</span>
       <button type="button" class="btn sm" data-dlf="${esc(u.path)}">Download</button></div>`).join('')}</div>`;
   box.onclick = async e => {
     const p = e.target.dataset.dlf; if (!p) return;
@@ -3248,6 +3253,133 @@ const RECO = (() => {
 })();
 
 /* =====================================================================
+   CLIENT MAIL INBOX  (#/inbox)  - attachments emailed by clients, picked up every minute
+   ===================================================================== */
+const MAIL_KIND = { sales: ['Sales register', 'g'], purchases: ['Purchase register', 'g'], gstr2b: ['GSTR-2B', 'g'], excel: ['Excel', 'b'], json: ['JSON', 'b'],
+  pdf: ['PDF', 'a'], image: ['Photo', 'a'], tally: ['Tally', 'b'], zip: ['Zip', 'a'], file: ['File', 'a'] };
+let inboxFilter = 'New', pendingGstImport = null;
+async function mailNewCount() {
+  const r = await safe(sb.from('mail_inbox').select('id', { count: 'exact', head: true }).eq('status', 'New'));
+  return r.error ? 0 : r.count || 0;
+}
+async function refreshMailBadge() {
+  const b = $('#mailBadge'); if (!b) return;
+  const n = await mailNewCount(); b.hidden = !n; $('b', b).textContent = n;
+}
+const monthLbl = p => p ? `${MONTHS[+p.slice(5, 7) - 1]} ${p.slice(0, 4)}` : '';
+async function openMailFile(path, asFile) {
+  const { data, error } = await sb.storage.from('client-docs').createSignedUrl(path, 120, { download: !asFile });
+  if (error) throw error;
+  if (!asFile) { window.open(data.signedUrl, '_blank', 'noopener'); return null; }
+  const r = await fetch(data.signedUrl); if (!r.ok) throw new Error('Could not download the file');
+  return new File([await r.blob()], path.split('/').pop().replace(/^[^-]+-\d+-/, ''));
+}
+
+VIEWS.inbox = async v => {
+  const r = await safe(sb.from('mail_inbox').select('*').order('received_at', { ascending: false }).limit(300));
+  if (r.error) { v.innerHTML = '<div class="card"><p class="note">Client mail is not set up yet — run <b>update-mail-intake.sql</b> in Supabase.</p></div>'; return; }
+  const all = r.data || [], tasksById = {};
+  const ids = [...new Set(all.flatMap(m => m.task_ids || []))];
+  if (ids.length) { const t = await safe(sb.from('tasks').select('id,return_name,period,status').in('id', ids)); (t.data || []).forEach(x => tasksById[x.id] = x); }
+  const n = k => all.filter(m => k === 'All' || m.status === k).length;
+  const draw = () => {
+    const list = all.filter(m => inboxFilter === 'All' || m.status === inboxFilter);
+    v.innerHTML = `<div class="page-head"><h2>Client mail</h2><span class="spacer"></span>
+        <div class="seg">${['New', 'Done', 'Ignored', 'All'].map(k => `<button data-mf="${k}" class="${inboxFilter === k ? 'on' : ''}">${k} · ${n(k)}</button>`).join('')}</div></div>
+      <p class="muted small" style="margin:-6px 0 14px">Attachments that clients email to the office mailbox appear here within about a minute. The month's “Pending data” work is marked as received automatically.</p>
+      ${list.length ? list.map(m => { const c = clientById(m.client_id) || { name: 'Client' }, ts = (m.task_ids || []).map(id => tasksById[id]).filter(Boolean);
+        return `<div class="card mail" data-mail="${m.id}">
+          <div class="mail-h"><div><b>${esc(c.name)}</b> <span class="muted small">· ${esc(m.from_name ? `${m.from_name} <${m.from_email}>` : m.from_email)}</span>
+            <div class="mail-sub">${esc(m.subject || '(no subject)')}</div></div><span class="spacer"></span>
+            <div class="mail-meta"><span class="muted small">${new Date(m.received_at).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}</span>
+              <span class="pill ${m.period_guess ? 'a' : 'b'} small" title="${m.period_guess ? 'Month not in the subject — taken as the month before the mail' : 'Month read from the subject / file name'}">${monthLbl(m.period)}${m.period_guess ? ' (assumed)' : ''}</span></div></div>
+          ${m.snippet ? `<div class="mail-snip muted small">${esc(m.snippet.slice(0, 220))}${m.snippet.length > 220 ? '…' : ''}</div>` : ''}
+          <div class="mail-files">${(m.files || []).map((f, i) => `<div class="mail-file"><span class="pill ${MAIL_KIND[f.kind] ? MAIL_KIND[f.kind][1] : 'a'} small">${(MAIL_KIND[f.kind] || ['File'])[0]}</span>
+            <span class="mail-fn">${esc(f.name)}</span><span class="muted small">${Math.max(1, Math.round((f.size || 0) / 1024))} KB</span>
+            <button class="btn sm" data-dl="${i}">Download</button>${['sales', 'purchases', 'gstr2b', 'excel', 'json'].includes(f.kind) && c.gstin ? `<button class="btn sm primary" data-imp="${i}">Import to GST review</button>` : ''}</div>`).join('')}</div>
+          <div class="mail-foot">${ts.length ? `<span class="small">✓ Marked data received: ${ts.map(t => `<a href="#/work" class="tag-link">${esc(t.return_name)} · ${esc(t.period)}</a>`).join(', ')}</span>`
+            : `<span class="small muted">No “Pending data” work found for ${monthLbl(m.period)} — mark it on the work item if needed.</span>`}
+            <span class="spacer"></span>${m.status !== 'Done' ? '<button class="btn sm" data-st="Done">✓ Done</button>' : ''}${m.status === 'New' ? '<button class="btn sm ghost" data-st="Ignored">Ignore</button>' : ''}${m.status !== 'New' ? '<button class="btn sm ghost" data-st="New">Back to new</button>' : ''}</div>
+          ${m.status !== 'New' && m.handled_by ? `<div class="muted tiny">${esc(m.status)} by ${esc(profName(m.handled_by) || '')} · ${new Date(m.handled_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}</div>` : ''}</div>`; }).join('')
+        : `<div class="card"><div class="empty">${inboxFilter === 'New' ? 'No new client mail 🎉' : 'Nothing here.'}</div></div>`}`;
+  };
+  draw();
+  v.onclick = async e => {
+    const b = e.target.closest('button'); if (!b) return;
+    if (b.dataset.mf) { inboxFilter = b.dataset.mf; draw(); return; }
+    const box = b.closest('[data-mail]'); if (!box) return;
+    const m = all.find(x => x.id === box.dataset.mail);
+    try {
+      if (b.dataset.dl) await openMailFile(m.files[+b.dataset.dl].path, false);
+      if (b.dataset.st) {
+        const patch = { status: b.dataset.st, handled_by: b.dataset.st === 'New' ? null : me.id, handled_at: b.dataset.st === 'New' ? null : new Date().toISOString() };
+        await must(sb.from('mail_inbox').update(patch).eq('id', m.id)); Object.assign(m, patch); draw(); refreshMailBadge();
+      }
+      if (b.dataset.imp) {
+        const f = m.files[+b.dataset.imp];
+        let kind = ['sales', 'purchases', 'gstr2b'].includes(f.kind) ? f.kind : null;
+        if (!kind) kind = await new Promise(res => { const md = modal('What is this file?', `<p class="small" style="margin-top:0">${esc(f.name)}</p><div class="seg">${[['sales', 'Sales register'], ['purchases', 'Purchase register'], ['gstr2b', 'GSTR-2B']].map(([k, l]) => `<button type="button" data-k="${k}">${l}</button>`).join('')}</div>`);
+          md.el.addEventListener('click', ev => { const k = ev.target.closest('[data-k]'); if (k) { md.close(); res(k.dataset.k); } }); $$('[data-x]', md.el).forEach(x => x.addEventListener('click', () => res(null))); });
+        if (!kind) return;
+        b.disabled = true; b.textContent = 'Opening…';
+        const file = await openMailFile(f.path, true);
+        pendingGstImport = { client: m.client_id, month: m.period.slice(0, 7), kind, file, mailId: m.id };
+        grClient = m.client_id; grMonth = m.period.slice(0, 7); grTab = kind === 'sales' ? 'draft' : 'recon';
+        location.hash = '#/gst';
+      }
+    } catch (err) { toast(friendly(err), true); b.disabled = false; }
+  };
+};
+
+/* ---------- Settings: client mail (admin) ---------- */
+async function renderMailSettings(box) {
+  const r = await safe(sb.rpc('mail_admin_status'));
+  if (r.error) { box.innerHTML = '<div class="card"><h3>Client mail → tracker</h3><p class="note small">Run <b>update-mail-intake.sql</b> in Supabase to switch this on.</p></div>'; return; }
+  const s = r.data || {};
+  const when = t => t ? new Date(t).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : '—';
+  box.innerHTML = `<div class="card"><h3>Client mail → tracker</h3>
+    <p class="muted">Attachments that clients email to the office mailbox are saved with the client and their “Pending data” work for that month is marked as received — within about a minute. Mail from addresses that are not saved on a client is ignored.</p>
+    <div class="mail-stat"><span class="pill ${s.enabled && s.key_set ? 'g' : 'a'}">${s.enabled && s.key_set ? '● Running' : s.key_set ? 'Switched off' : 'Not set up'}</span>
+      <span class="small">Last mail: <b>${when(s.last_mail_at)}</b> · Today: <b>${s.today || 0}</b> · Waiting: <b>${s.new || 0}</b></span></div>
+    ${s.last_error ? `<p class="note warn small">Last problem: ${esc(s.last_error)}</p>` : ''}
+    <div class="form-grid" style="margin-top:12px">
+      <label>Office mailbox (for display)<input id="mlBox" value="${esc(s.mailbox || '')}" placeholder="e.g. data@yourfirm.in"></label>
+      <label>Only mail whose subject has (optional)<input id="mlFilter" value="${esc(s.subject_filter || '')}" placeholder="e.g. DATA, GST — leave empty for all"></label></div>
+    <label class="check" style="margin-top:8px"><input type="checkbox" id="mlOn" ${s.enabled ? 'checked' : ''}> Switched on</label>
+    <div class="toolbar" style="margin-top:12px"><button class="btn primary" id="mlSave">Save</button><span class="spacer"></span>
+      <button class="btn" id="mlKey">${s.key_set ? 'Make a new key' : 'Make the mailbox key'}</button><button class="btn" id="mlScript">Mailbox script &amp; steps</button></div>
+    ${s.key_set ? `<p class="muted small">Key made ${when(s.key_set_at)}. Making a new key stops the old one — paste the new key in the mailbox script.</p>` : ''}</div>`;
+  $('#mlSave', box).onclick = async () => {
+    try { await must(sb.rpc('mail_admin_save', { p_enabled: $('#mlOn', box).checked, p_filter: $('#mlFilter', box).value, p_mailbox: $('#mlBox', box).value })); toast('Saved'); renderMailSettings(box); }
+    catch (e) { toast(friendly(e), true); }
+  };
+  $('#mlKey', box).onclick = async () => {
+    if (s.key_set && !confirm('Make a new key? The mailbox script will stop sending until you paste the new key into it.')) return;
+    const bytes = crypto.getRandomValues(new Uint8Array(24)), key = 'jlr_' + [...bytes].map(x => x.toString(16).padStart(2, '0')).join('');
+    const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(key)))].map(x => x.toString(16).padStart(2, '0')).join('');
+    try { await must(sb.rpc('mail_admin_set_key', { p_hash: hash })); }
+    catch (e) { return toast(friendly(e), true); }
+    const m = modal('Mailbox key', `<p class="small" style="margin-top:0">Copy this key and paste it in the mailbox script (Project Settings → Script properties → <b>INTAKE_KEY</b>). <b>It is shown only once</b> — the tracker keeps only a fingerprint of it.</p>
+      <div class="linkbox"><input readonly value="${esc(key)}" id="mlK"><button class="btn sm" id="mlCp">Copy</button></div>`);
+    $('#mlCp', m.el).onclick = () => copySecret(key, 'Key copied');
+    $$('[data-x]', m.el).forEach(x => x.addEventListener('click', () => renderMailSettings(box)));
+  };
+  $('#mlScript', box).onclick = async () => {
+    let code = '';
+    try { const rr = await fetch('mail-intake-apps-script.gs', { cache: 'no-store' }); code = rr.ok ? await rr.text() : ''; } catch (e) {}
+    const m = modal('Connect the office mailbox', `<ol class="small steps">
+        <li>Sign in to the office Gmail, open <a href="https://script.google.com/home/projects/create" target="_blank" rel="noopener">script.google.com → New project</a>.</li>
+        <li>Delete what is there, paste the script below, and click <b>Save</b>. Name it “JLR mail intake”.</li>
+        <li>Click the gear (<b>Project Settings</b>) → <b>Script properties</b> → <b>Add</b>: name <b>INTAKE_KEY</b>, value = the key from “Make the mailbox key”.</li>
+        <li>Back in the editor choose <b>setup</b> at the top and click <b>Run</b>. Allow the Gmail permission (it says “unverified app” because it is your own script — click Advanced → Go to JLR mail intake).</li>
+        <li>Send a test mail with an attachment from a client's saved email address. It appears in <a href="#/inbox">Client mail</a> within a minute.</li></ol>
+      ${code ? `<textarea readonly rows="14" class="code" id="mlCode">${esc(code)}</textarea>` : '<p class="note warn small">Script file not found on the site — upload mail-intake-apps-script.gs with the other files.</p>'}`,
+      { wide: true, extra: code ? '<button class="btn" id="mlCpS">Copy script</button>' : '' });
+    if (code) $('#mlCpS', m.el).onclick = () => copySecret(code, 'Script copied');
+  };
+}
+
+/* =====================================================================
    GST REVIEW PAGE  (#/gst)  - data in, summary out, verify
    ===================================================================== */
 async function loadXlsxFull() {
@@ -3496,9 +3628,9 @@ VIEWS.gst = async v => {
 
   // ----- data in -----
   const pickFile = accept => new Promise(res => { const i = document.createElement('input'); i.type = 'file'; i.accept = accept; i.onchange = () => res(i.files[0]); i.click(); });
-  async function upload(kind) {
-    const f = await pickFile(kind === 'gstr2b' ? '.json,.xlsx,.xls,.zip' : '.xlsx,.xls,.csv');
-    if (!f) return;
+  async function upload(kind, given) {
+    const f = given || await pickFile(kind === 'gstr2b' ? '.json,.xlsx,.xls,.zip' : '.xlsx,.xls,.csv');
+    if (!f) return false;
     if (/\.zip$/i.test(f.name)) return toast('Please unzip the portal download first and upload the .json file inside', true);
     try {
       let rows = [], meta = '';
@@ -3524,8 +3656,8 @@ VIEWS.gst = async v => {
       const t = rows.reduce((a, x) => a + gTax(x), 0), tx = rows.reduce((a, x) => a + (x.t || 0), 0);
       const label = { sales: 'sales register', purchases: 'purchase register', gstr2b: 'GSTR-2B' }[kind];
       if (!confirm(`${f.name}\n\n${rows.length} documents found\nTaxable value: ${gst$(tx)}\nTotal tax: ${gst$(t)}\n\nSave as this month's ${label}?${row[kind] ? '\n(This replaces the current data.)' : ''}`)) return;
-      await save({ [kind]: { rows, file: f.name, source: 'file', ...by() } });
-      toast(`${label} saved — ${rows.length} documents`);
+      await save({ [kind]: { rows, file: f.name, source: given ? 'email' : 'file', ...by() } });
+      toast(`${label} saved — ${rows.length} documents`); return true;
     } catch (e) { toast('Could not read the file: ' + friendly(e), true); }
   }
   function enterFigures(kind) {
@@ -3566,6 +3698,14 @@ VIEWS.gst = async v => {
     if (b.id === 'grUnver') { await save({ status: 'Draft' }).catch(err => toast(friendly(err), true)); }
   });
   render();
+  // file sent from Client mail → "Import to GST review"
+  if (pendingGstImport && pendingGstImport.client === grClient && pendingGstImport.month === grMonth) {
+    const p = pendingGstImport; pendingGstImport = null;
+    if (await upload(p.kind, p.file)) {
+      await safe(sb.from('mail_inbox').update({ status: 'Done', handled_by: me.id, handled_at: new Date().toISOString() }).eq('id', p.mailId));
+      refreshMailBadge().catch(() => {});
+    }
+  }
 };
 
 // ----- GST portal fetch (OTP) through the "gst-data" server function -----

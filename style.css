@@ -469,6 +469,7 @@ tr.fu-due-row td:first-child{box-shadow:inset 3px 0 0 var(--amber)}
 .wl-bar i.od{background:var(--red)}
 .pill{display:inline-block;padding:2px 9px;border-radius:99px;font-weight:700;font-size:.8rem}
 .pill.g{background:var(--green-soft);color:var(--green)}.pill.a{background:var(--amber-soft);color:var(--amber)}.pill.r{background:var(--red-soft);color:var(--red)}
+.pill.b{background:var(--blue-soft);color:var(--blue)}
 .calc-grid{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);gap:16px;align-items:start}
 .calc-grid .card{margin:0}
 .calc-out{position:sticky;top:84px}
@@ -660,3 +661,22 @@ tr.g1-autorow td{background:var(--grey-soft,#f2f2f2)}
   .lg-side .auth{padding:24px 20px}
   .lg-fx i:nth-child(1){width:200px;height:200px}
 }
+
+/* ===== v15 client mail inbox ===== */
+.mail-badge{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:999px;background:var(--red-soft);color:var(--red);font-weight:800;font-size:.85rem;text-decoration:none;margin-right:8px}
+.mail-badge[hidden]{display:none}
+:root[data-anim="full"] .mail-badge:not([hidden]){animation:lg-bob 2.6s ease-in-out infinite}
+.mail{padding:16px 18px;margin-bottom:12px}
+.mail-h{display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap}
+.mail-sub{font-weight:700;margin-top:4px}
+.mail-meta{display:flex;flex-direction:column;align-items:flex-end;gap:6px}
+.mail-snip{margin:8px 0 0;line-height:1.5}
+.mail-files{display:grid;gap:8px;margin:12px 0}
+.mail-file{display:flex;align-items:center;gap:10px;flex-wrap:wrap;border:1px solid var(--line);border-radius:12px;padding:8px 12px}
+.mail-fn{flex:1;min-width:160px;font-weight:600;word-break:break-all}
+.mail-foot{display:flex;align-items:center;gap:8px;flex-wrap:wrap;border-top:1px solid var(--line);padding-top:10px}
+.tag-link{color:var(--blue);text-decoration:none;font-weight:600}
+.mail-stat{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+textarea.code{width:100%;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.75rem;line-height:1.45;white-space:pre}
+.steps{line-height:1.7;padding-left:20px;margin-top:0}
+@media (max-width:640px){.mail-meta{align-items:flex-start}.mail-badge{padding:5px 9px;margin-right:4px}}
