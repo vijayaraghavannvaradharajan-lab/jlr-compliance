@@ -3507,7 +3507,7 @@ function renderG1(o, { client: c, getRow, save }) {
   o.innerHTML = `<div class="g1-bar"><div class="seg">${[['sales', 'Sales'], ['amend', 'Amendments'], ['adv', 'Advances'], ['docs', 'Documents'], ['sum', 'Summary']]
       .map(([k, l]) => `<button data-g1t="${k}" class="${g1Tab === k ? 'on' : ''}">${l}${k !== 'sum' && k !== 'docs' ? ` <small data-g1n="${k}"></small>` : ''}</button>`).join('')}</div>
       <span class="spacer"></span><span class="small" data-g1st></span>
-      <button class="btn sm" data-g1dl>Blank template</button><button class="btn sm" data-g1up>Upload filled template</button><button class="btn sm" data-g1xl>Download Excel</button>
+      <button class="btn sm" data-g1dl>Blank template</button><button class="btn sm" data-g1up>Upload filled template</button><button class="btn sm" data-g1xl>Download Excel</button><button class="btn sm" data-g1wb title="Your GST Workings master template, filled for the whole financial year">GST workings (master)</button>
       <button class="btn sm primary" data-g1save>Save</button></div>
     <div data-g1body></div>`;
   const body = $('[data-g1body]', o), st = $('[data-g1st]', o);
@@ -3647,6 +3647,10 @@ function renderG1(o, { client: c, getRow, save }) {
         toast(`${g.sales.length} sales, ${g.amend.length} amendment, ${g.adv.length} advance rows loaded — check and Save`);
       } catch (err) { toast('Could not read the file: ' + friendly(err), true); }
     }
+    if ('g1wb' in d) {
+      if (D.dirty && !confirm('You have unsaved changes. The workings use the SAVED data — continue without saving?')) return;
+      b.disabled = true; try { await downloadGstWorkings(c, row.period); } catch (err) { toast(friendly(err), true); } finally { b.disabled = false; }
+    }
     if ('g1xl' in d) {
       const X = await loadXlsx(), s = sm(), C = calc(), wbk = X.utils.book_new();
       const sheet = (tab, name) => { const cols = COLS[tab], au = AUTO[tab];
@@ -3680,7 +3684,162 @@ function renderG1(o, { client: c, getRow, save }) {
   draw();
 }
 
+
+/* =====================================================================
+   GST WORKINGS – MASTER TEMPLATE filler (firm's own workbook, formats kept)
+   data = { client:{name,gstin,trade}, fy:'2026-27', month:'October', months:[{period,g1,sales,purchases,gstr2b,gstr3b,status}],
+            notices:[...], g1tasks:[{period,status,filed_on,arn}], preparedBy, verifiedBy }
+   ===================================================================== */
+const GW_MONTHS = ['April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December', 'January', 'February', 'March'];
+async function fillGstWorkings(XP, templateBytes, data) {
+  const wb = await XP.fromDataAsync(templateBytes);
+  const r2 = x => Math.round((+x || 0) * 100) / 100;
+  const fyStart = +String(data.fy).slice(0, 4);
+  const monthName = period => GW_MONTHS[(+period.slice(5, 7) + 8) % 12];
+  const mIdx = period => (+period.slice(5, 7) + 8) % 12;                       // April = 0
+  const toDate = s => { if (!s) return null; const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? new Date(+m[1], +m[2] - 1, +m[3]) : null; };
+  const has = v => v !== undefined && v !== null && String(v).trim() !== '';
+  const set = (sh, addr, v) => { if (v === undefined) return; sh.cell(addr).value(v === null ? undefined : v); };
+
+  // ---------- Home ----------
+  const home = wb.sheet('Home');
+  set(home, 'B3', data.client.name || ''); set(home, 'B4', data.client.gstin || ''); set(home, 'B5', data.fy); set(home, 'B6', data.client.trade || '');
+
+  // ---------- GSTR-1 (all months) ----------
+  const g = wb.sheet('GSTR-1');
+  let r = 3, sno = 0;
+  const dateStyle = g.cell('D3')._styleId;                                     // template's own date format (no new styles)
+  const turnover = Array(12).fill(null);
+  const months = [...data.months].sort((a, b) => a.period.localeCompare(b.period));
+  for (const m of months) {
+    const mi = mIdx(m.period), mName = GW_MONTHS[mi];
+    let lines = [];
+    if (m.g1 && (m.g1.sales || []).length) {
+      const own = String(data.client.gstin || '').slice(0, 2);
+      lines = G1.calcSales(m.g1.sales, own, data.client.gstin).filter(o => o.x && o.x.ok).map(({ row: s, x }) => {
+        const exp = s.exp || '', wp = /With GST/.test(exp) && !/Without/.test(exp);
+        const st = /^SEZ/.test(exp) ? (wp ? 'SEZWP' : 'SEZWOP') : /^Export/.test(exp) ? (wp ? 'EXPWP' : 'EXPWOP')
+          : ['B2CL'].includes(x.table) ? 'B2CL' : (has(s.gstin) ? 'B2B' : 'B2C');
+        return { no: s.no, d: s.d, gstin: (s.gstin || '').toUpperCase(), name: s.name || '', hsn: s.hsn || '', qty: has(s.qty) ? +s.qty : null, uqc: s.uqc || '',
+          pos: `${x.sc}-${x.st}`, tx: r2(x.amt), rate: has(s.nil) ? 0 : +s.rate || 0, ig: x.ig, cg: x.cg, sg: x.sg,
+          te: s.nil === 'Nil rated' ? 'Nil' : s.nil === 'Exempted' ? 'Exempted' : s.nil === 'Non-GST' ? 'Non-GST' : 'Taxable',
+          tms: /^99/.test(String(s.hsn)) ? 'Services' : '', rc: s.rc === 'Yes' ? 'Yes' : 'No', reg: has(s.gstin) ? 'Registered' : 'Unregistered',
+          sales: x.type === 'Credit Note' ? 'Sales Return' : 'Sales', doc: x.type, st, signedTx: x.sign * x.amt };
+      });
+    } else if (m.sales && (m.sales.rows || []).length) {           // uploaded sales register (no GSTR-1 entry)
+      lines = m.sales.rows.map(s => ({ no: s.i, d: s.d, gstin: s.g || '', name: s.n || '', hsn: '', qty: null, uqc: '', pos: '', tx: Math.abs(s.t), rate: null,
+        ig: Math.abs(s.ig), cg: Math.abs(s.cg), sg: Math.abs(s.sg), te: 'Taxable', tms: '', rc: 'No', reg: s.g ? 'Registered' : 'Unregistered',
+        sales: s.cn ? 'Sales Return' : 'Sales', doc: s.cn ? 'Credit Note' : 'Invoice', st: s.g ? 'B2B' : 'B2C', signedTx: s.t }));
+    }
+    if (!lines.length) continue;
+    turnover[mi] = r2(lines.reduce((a, l) => a + l.signedTx, 0));
+    for (const l of lines) {
+      sno++;
+      const vals = { A: mName, B: sno, C: l.no, E: l.gstin || undefined, F: l.name, G: l.hsn || undefined, H: l.qty ?? undefined, I: l.uqc || undefined, J: l.pos || undefined,
+        K: l.tx, L: l.rate ?? undefined, M: l.ig, N: l.cg, O: l.sg, Q: l.te, S: l.tms || undefined, T: l.rc, U: l.reg, V: l.sales, W: l.doc, X: l.st, Y: 'NA' };
+      for (const [c, v] of Object.entries(vals)) if (v !== undefined && v !== '') g.cell(`${c}${r}`).value(v);
+      const dt = toDate(l.d); if (dt) { const dc = g.cell(`D${r}`); dc.value(dt); dc._styleId = dateStyle; }
+      g.cell(`P${r}`).formula(`K${r}+SUM(M${r}:O${r})`);
+      g.cell(`Z${r}`).formula(`IF(Q${r}="Exempted","Exempted",IF(Q${r}="Nil","Nil",IF(Q${r}="Non-GST","Non-GST",IF(OR(X${r}="SEZWP",X${r}="SEZWOP",X${r}="EXPWP",X${r}="EXPWOP",X${r}="DE"),"Zero Rated","Taxable"))))`);
+      g.cell(`AA${r}`).formula(`IF(W${r}="Debit Note","Debit Note",IF(W${r}="Credit Note","Credit Note","Invoice"))`);
+      r++; if (r > 2000) break;
+    }
+  }
+
+  // ---------- Turnover summary ----------
+  const ts = wb.sheet('Turnover summary');
+  for (let i = 0; i < 12; i++) {
+    ts.cell(`A${3 + i}`).value(new Date(fyStart + (i >= 9 ? 1 : 0), (i + 3) % 12, 1));
+    ts.cell(`B${3 + i}`).value(turnover[i] == null ? undefined : turnover[i]);
+  }
+
+  // ---------- MonthlyInputs (2B / RCM / books) ----------
+  const mi = wb.sheet('MonthlyInputs');
+  const col = i => String.fromCharCode(67 + i);                                   // C..N
+  const sum = (rows, f) => rows.filter(f).reduce((a, x) => ({ t: a.t + Math.abs(x.t || 0), ig: a.ig + Math.abs(x.ig || 0), cg: a.cg + Math.abs(x.cg || 0), sg: a.sg + Math.abs(x.sg || 0) }), { t: 0, ig: 0, cg: 0, sg: 0 });
+  const put = (row, i, v) => mi.cell(`${col(i)}${row}`).value(r2(v));
+  for (const m of months) {
+    const i = mIdx(m.period), B = (m.gstr2b && m.gstr2b.rows) || [];
+    if (B.length) {
+      const isCdn = x => /CDN/.test(x.src || ''), isImp = x => /IMP/.test(x.src || '');
+      const actual = sum(B, x => !isCdn(x) && !isImp(x) && !x.na && !x.rc), dn = sum(B, x => isCdn(x) && !x.cn && !x.na), cn = sum(B, x => isCdn(x) && x.cn && !x.na);
+      const imp = sum(B, x => isImp(x)), inel = sum(B, x => x.na), rcm = sum(B, x => x.rc && !x.na);
+      [[11, actual], [14, dn], [20, imp], [23, inel], [29, rcm], [32, cn]].forEach(([row, v]) => { put(row, i, v.ig); put(row + 1, i, v.cg); put(row + 2, i, v.sg); });
+      put(5, i, rcm.t);                                                            // RCM u/s 9(3) – tax value
+      [[43, actual], [47, imp], [58, cn], [62, dn]].forEach(([row, v]) => { put(row, i, v.t); put(row + 1, i, v.ig); put(row + 2, i, v.cg); put(row + 3, i, v.sg); });
+    }
+    const P = (m.purchases && m.purchases.rows) || [];
+    if (P.length) { const w = P.filter(x => !x.rc).reduce((a, x) => ({ ig: a.ig + (x.ig || 0), cg: a.cg + (x.cg || 0), sg: a.sg + (x.sg || 0) }), { ig: 0, cg: 0, sg: 0 }); put(35, i, w.ig); put(36, i, w.cg); put(37, i, w.sg); }
+  }
+
+  // ---------- Reconciliation: GSTR-3B liability per month ----------
+  const rc = wb.sheet('Reconciliation');
+  set(rc, 'A12', `Tax Period: FY ${data.fy}`);
+  for (const m of months) {
+    const t = m.gstr3b && m.gstr3b.t31a; if (!t) continue;
+    const row = 16 + mIdx(m.period);
+    rc.cell(`G${row}`).value(r2(t.ig)); rc.cell(`H${row}`).value(r2(t.cg)); rc.cell(`I${row}`).value(r2(t.sg)); rc.cell(`J${row}`).value(r2(t.cs));
+  }
+
+  // ---------- Summary month + Checklist ----------
+  set(wb.sheet('Summary(1&3B)'), 'B3', data.month);
+  const ck = wb.sheet('Checklist'), selPeriod = months.find(m => monthName(m.period) === data.month);
+  set(ck, 'C1', `Client Name: ${data.client.name || ''}`); set(ck, 'C2', `GSTIN: ${data.client.gstin || ''}`);
+  set(ck, 'D1', `Month-Year: ${data.month} ${GW_MONTHS.indexOf(data.month) >= 9 ? fyStart + 1 : fyStart}`);
+  set(ck, 'C38', selPeriod && (selPeriod.g1 || selPeriod.sales) ? 'Done' : 'Pending');
+  const t1 = (data.g1tasks || []).find(t => monthName(t.period) === data.month);
+  if (t1) { set(ck, 'C43', t1.status === 'Filed' ? 'Done' : 'Pending'); if (t1.filed_on) set(ck, 'D43', `Filed ${t1.filed_on.split('-').reverse().join('-')}${t1.arn ? ' · ARN ' + t1.arn : ''}`); }
+  if (selPeriod && selPeriod.status === 'Verified') set(ck, 'C42', 'Done');
+  if (data.preparedBy) set(ck, 'B46', `Prepared by ${data.preparedBy}`);
+  if (data.verifiedBy) set(ck, 'E47', `Verified by ${data.verifiedBy}`);
+
+  // ---------- Notices Summary ----------
+  const ns = wb.sheet('Notices Summary');
+  (data.notices || []).forEach((n, k) => {
+    const row = 3 + k, d = n.notice_date ? toDate(n.notice_date) : null;
+    set(ns, `A${row}`, d ? `${GW_MONTHS[(d.getMonth() + 9) % 12]} ${d.getFullYear()}` : '-');
+    set(ns, `B${row}`, [n.dept, n.notice_type, n.ref_no && 'Ref ' + n.ref_no, n.period && 'Period ' + n.period, n.amount ? 'Amount ₹' + Number(n.amount).toLocaleString('en-IN') : '',
+      n.reply_due && 'Reply due ' + n.reply_due.split('-').reverse().join('-')].filter(Boolean).join(' · '));
+    set(ns, `C${row}`, n.status === 'Replied' || n.status === 'Closed' ? `Replied${n.replied_on ? ' on ' + n.replied_on.split('-').reverse().join('-') : ''}${n.ack_no ? ' · Ack ' + n.ack_no : ''}` : (n.remarks || 'Pending'));
+    set(ns, `D${row}`, n.status === 'Hearing' ? `Hearing${n.hearing_date ? ' on ' + n.hearing_date.split('-').reverse().join('-') : ''}` : n.status);
+  });
+
+  // Excel recalculates every formula when the file is opened
+  const calc = wb._node.children.find(c => c.name === 'calcPr');
+  if (calc) calc.attributes.fullCalcOnLoad = '1'; else wb._node.children.push({ name: 'calcPr', attributes: { fullCalcOnLoad: '1' }, children: [] });
+  return wb.outputAsync();
+}
+
+// ----- "GST workings (master)" download: the firm's own master workbook, filled for the whole financial year -----
+async function loadXlsxPopulate() {
+  if (window.XlsxPopulate) return window.XlsxPopulate;
+  await new Promise((ok, bad) => { const s = document.createElement('script'); s.src = 'xlsx-populate.min.js'; s.onload = ok; s.onerror = () => bad(new Error('Could not load the workbook helper')); document.head.appendChild(s); });
+  return window.XlsxPopulate;
+}
+async function downloadGstWorkings(c, period) {
+  const y = +period.slice(0, 4), m = +period.slice(5, 7), fyStart = m >= 4 ? y : y - 1, fy = `${fyStart}-${String((fyStart + 1) % 100).padStart(2, '0')}`;
+  toast('Preparing GST workings for FY ' + fy + '…');
+  const [XP, tpl, gm, nt, tk] = await Promise.all([
+    loadXlsxPopulate(),
+    fetch('gst-workings-master.xlsx', { cache: 'no-store' }).then(r => { if (!r.ok) throw new Error('Master template not found on the site'); return r.arrayBuffer(); }),
+    must(sb.from('gst_months').select('*').eq('client_id', c.id).gte('period', `${fyStart}-04-01`).lte('period', `${fyStart + 1}-03-01`).order('period')),
+    safe(sb.from('notices').select('*').eq('client_id', c.id).order('notice_date')),
+    safe(sb.from('tasks').select('return_name,period,status,filed_on,arn').eq('client_id', c.id).ilike('return_name', 'GSTR-1%').limit(500))
+  ]);
+  const months = (gm.data || []).map(r => ({ period: r.period, g1: r.g1, sales: r.sales, purchases: r.purchases, gstr2b: r.gstr2b, gstr3b: r.gstr3b, status: r.status }));
+  if (!months.length) return toast('No GST data saved for this client in FY ' + fy, true);
+  const g1tasks = (tk.data || []).map(t => ({ ...t, period: (periodToMonth(t.period) || '') + '-01' })).filter(t => t.period.length === 10 && t.period >= `${fyStart}-04-01` && t.period <= `${fyStart + 1}-03-01`);
+  const sel = (gm.data || []).find(r => r.period === period);
+  const out = await fillGstWorkings(XP, new Uint8Array(tpl), {
+    client: { name: c.name, gstin: c.gstin, trade: c.trade_name || '' }, fy, month: GW_MONTHS[(m + 8) % 12], months,
+    notices: nt.error ? [] : nt.data || [], g1tasks, preparedBy: me.full_name || me.email, verifiedBy: sel && sel.verified_by ? profName(sel.verified_by) : '' });
+  const blob = new Blob([out], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `GST Workings - ${c.name} - FY ${fy}.xlsx`;
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  toast(`GST workings downloaded — ${months.length} month${months.length > 1 ? 's' : ''} of FY ${fy}`);
+}
+
 // expose pure helpers for testing
-window.__tracker = { G1, GR, gstr3bFromApi, periodToMonth, strongPassword, periodFor, dueDateFor, parseCSV, toCSV, gstLateFee, gstInterest, tdsCalc, rocCalc, monthsSpan, tdsDepositDue };
+window.__tracker = { fillGstWorkings, G1, GR, gstr3bFromApi, periodToMonth, strongPassword, periodFor, dueDateFor, parseCSV, toCSV, gstLateFee, gstInterest, tdsCalc, rocCalc, monthsSpan, tdsDepositDue };
 start();
 })();
