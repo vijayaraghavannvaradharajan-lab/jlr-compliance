@@ -473,7 +473,7 @@ function taskTable(rows, { showArn = true, showAssigned = true } = {}) {
       <td>${statusCell}${dataCell(r, can)}</td>
       ${showAssigned ? `<td>${assignedCell}</td>` : ''}
       ${showArn ? `<td class="small">${esc(r.arn || '')}${r.filed_on ? `<div class="muted">${fmtDate(r.filed_on)}</div>` : ''}</td>` : ''}
-      <td class="row-btns"><button class="btn sm" data-edit="${r.id}">${can ? 'Edit' : 'View'}</button>${hasChecklist(r) ? `<button class="btn sm" data-chk="${r.id}" title="Checklist">☑ Checklist</button>` : ''}</td></tr>`;
+      <td class="row-btns"><button class="btn sm" data-edit="${r.id}">${can ? 'Edit' : 'View'}</button>${hasChecklist(r) ? `<button class="btn sm" data-chk="${r.id}" title="Checklist">☑ Checklist</button>` : ''}${can ? `<button class="btn sm ghost" data-lgk="${r.client_id}" title="Portal logins for this client" aria-label="Portal logins">🔑</button>` : ''}</td></tr>`;
   }).join('');
   return `<div class="table-wrap"><table><thead><tr><th>Client</th><th>Type</th><th>Return / Period</th><th>Due</th><th>Status</th>
     ${showAssigned ? '<th>Assigned</th>' : ''}${showArn ? '<th>ARN / Filed</th>' : ''}<th></th></tr></thead><tbody>${body}</tbody></table></div>`;
@@ -506,6 +506,8 @@ function bindTaskTable(el, rows, refresh) {
     if (gid) gotData(rows.find(r => r.id === gid), refresh);
     const fid = e.target.dataset.fu;
     if (fid) logFollowup({ kind: 'task', task: rows.find(r => r.id === fid) }, refresh);
+    const lk = e.target.closest('[data-lgk]')?.dataset.lgk;
+    if (lk) openLogins(clientById(lk));
     const cid = e.target.closest('[data-chk]')?.dataset.chk;
     if (cid) openChecklist(rows.find(r => r.id === cid), refresh);
   });
@@ -1297,7 +1299,7 @@ let clientQ = '', showInactive = false;
 VIEWS.clients = async v => {
   await loadRefs();
   v.innerHTML = `<div class="page-head"><h2>Clients</h2><span class="muted">${clients.filter(c => c.active).length} active</span><span class="spacer"></span>
-      <button class="btn" id="tplBtn">CSV template</button><button class="btn" id="impBtn">Import CSV</button>
+      ${isAdmin() ? '<button class="btn ghost" id="lgLog">Login access log</button>' : ''}<button class="btn" id="tplBtn">CSV template</button><button class="btn" id="impBtn">Import CSV</button>
       <button class="btn primary" id="addC">+ Add client</button><input type="file" id="impFile" accept=".csv,text/csv" hidden></div>
     <div class="toolbar"><input type="search" id="cq" placeholder="Search name / GSTIN / PAN" value="${esc(clientQ)}">
       <label class="check"><input type="checkbox" id="inact" ${showInactive ? 'checked' : ''}> Show inactive</label></div>
@@ -1312,7 +1314,7 @@ VIEWS.clients = async v => {
         <td>${esc(c.gst_scheme)}</td><td class="wrap">${(c.services || []).map(wtBadge).join(' ')}</td>
         <td>${esc(profName(c.default_staff) || '—')}</td>
         <td class="row-btns"><button class="btn sm" data-copy="${c.id}">Copy link</button><a class="btn sm" href="${esc(waShare(clientMsg(c), c.phone))}" target="_blank" rel="noopener" title="Send on WhatsApp">WhatsApp</a><a class="btn sm ghost" href="${esc(statusUrl(c.status_token))}" target="_blank" rel="noopener">Open</a></td>
-        <td><button class="btn sm" data-ed="${c.id}">Edit</button></td></tr>`).join('')}
+        <td class="row-btns"><button class="btn sm" data-lgc="${c.id}" title="GST / TDS / MCA portal logins">🔑 Logins</button><button class="btn sm" data-ed="${c.id}">Edit</button></td></tr>`).join('')}
       </tbody></table></div>` : `<div class="table-wrap"><div class="empty">${clients.length ? 'No match.' : 'No clients yet. Add one, or import your list from a CSV file.'}</div></div>`;
   };
   render();
@@ -1322,7 +1324,9 @@ VIEWS.clients = async v => {
   $('#cList').onclick = e => {
     if (e.target.dataset.copy) copy(statusUrl(clientById(e.target.dataset.copy).status_token));
     if (e.target.dataset.ed) editClient(clientById(e.target.dataset.ed));
+    if (e.target.dataset.lgc) openLogins(clientById(e.target.dataset.lgc));
   };
+  if ($('#lgLog')) $('#lgLog').onclick = () => loginLog(null);
   $('#tplBtn').onclick = () => download('clients-template.csv', toCSV([
     ['name', 'gstin', 'pan', 'tan', 'cin', 'contact_person', 'phone', 'email', 'gst_scheme', 'services', 'default_staff_email'],
     ['ABC Traders', '33AAAAA0000A1Z5', 'AAAAA0000A', 'CHEA00000A', '', 'Mr. Kumar', '9876543210', 'abc@example.com', 'Monthly', 'GST;TDS;Income Tax', me.email]]));
@@ -1373,6 +1377,7 @@ function editClient(c) {
     <label class="check full"><input type="checkbox" name="active" ${c.active ? 'checked' : ''}> Active client</label>
     ${!isNew && c.gstin && isAdmin() ? `<div class="full"><button type="button" class="btn sm" data-gstnow>Check GST filing now</button>
       <span class="muted small">Looks up this GSTIN's filed returns and marks matching open GST work as Filed.</span></div>` : ''}
+    ${!isNew ? '<div class="full"><button type="button" class="btn sm" data-govlg>🔑 GST / TDS / MCA portal logins</button> <span class="muted small">Encrypted · every view is logged</span></div>' : ''}
     ${!isNew && isManager() ? '<div class="full portal-box" data-portal></div>' : ''}
     ${!isNew ? `<div class="full"><div class="small muted" style="font-weight:500">Client status link (share with this client only)</div>
       <div class="linkbox"><input readonly value="${esc(statusUrl(c.status_token))}"><button type="button" class="btn sm" data-cp>Copy</button><a class="btn sm" href="${esc(waShare(clientMsg(c), c.phone))}" target="_blank" rel="noopener">WhatsApp</a><button type="button" class="btn sm" data-regen>New link</button></div></div>` : ''}
@@ -1410,6 +1415,7 @@ function editClient(c) {
     finally { b.disabled = false; }
   };
   if ($('[data-portal]', el)) renderPortalLogins($('[data-portal]', el), c);
+  if ($('[data-govlg]', el)) $('[data-govlg]', el).onclick = () => openLogins(c);
   if ($('[data-regen]', el)) $('[data-regen]', el).onclick = async () => {
     if (!confirm('Create a new link? The old link will stop working.')) return;
     try {
@@ -2775,7 +2781,137 @@ VIEWS.calc = async v => {
   box.addEventListener('input', calc); box.addEventListener('change', calc); calc();
 };
 
+
+/* =====================================================================
+   CLIENT PORTAL LOGINS (GST / TDS / MCA ...) - passwords live in Supabase Vault
+   ===================================================================== */
+const GOV_PORTALS = [
+  ['GST', 'https://services.gst.gov.in/services/login'],
+  ['E-way bill', 'https://ewaybillgst.gov.in/'],
+  ['E-invoice (IRP)', 'https://einvoice1.gst.gov.in/'],
+  ['TRACES (TDS)', 'https://www.tdscpc.gov.in/app/login.xhtml'],
+  ['Income Tax e-filing', 'https://eportal.incometax.gov.in/iec/foservices/#/login'],
+  ['MCA V3', 'https://www.mca.gov.in/content/mca/global/en/foportal/fologin.html'],
+  ['EPFO (employer)', 'https://unifiedportal-emp.epfindia.gov.in/epfo/'],
+  ['ESIC', 'https://portal.esic.gov.in/EmployerPortal/ESICInsurance1/HomePageEmployer.aspx'],
+  ['Professional Tax', ''], ['Bank / net banking', ''], ['Other', '']
+];
+const portalUrlFor = (p, url) => url || (GOV_PORTALS.find(x => x[0] === p) || [])[1] || '';
+const portalIcon = p => /GST|E-way|E-invoice/.test(p) ? wtIcon('GST', 16) : /TRACES/.test(p) ? wtIcon('TDS', 16) : /MCA/.test(p) ? wtIcon('ROC/MCA', 16) : wtIcon('Other', 16);
+// 12 characters, always upper + lower + digit + symbol; no look-alike characters (O/0, l/1/I).
+// Fits GST (8-15), TRACES, Income Tax (8-14) and MCA password rules.
+function strongPassword(len = 12) {
+  const sets = ['ABCDEFGHJKLMNPQRSTUVWXYZ', 'abcdefghijkmnpqrstuvwxyz', '23456789', '@#$%&*!'];
+  const all = sets.join(''), r = n => { const a = new Uint32Array(1); crypto.getRandomValues(a); return a[0] % n; };
+  const out = sets.map(s => s[r(s.length)]);
+  while (out.length < len) out.push(all[r(all.length)]);
+  for (let i = out.length - 1; i > 0; i--) { const j = r(i + 1); [out[i], out[j]] = [out[j], out[i]]; }
+  return out.join('');
+}
+function copySecret(text, msg = 'Copied') {
+  const done = () => toast(msg + ' — paste it within a minute');
+  if (navigator.clipboard) return navigator.clipboard.writeText(text).then(done).catch(() => fallback());
+  fallback();
+  function fallback() { const t = document.createElement('textarea'); t.value = text; t.style.cssText = 'position:fixed;opacity:0'; document.body.appendChild(t); t.select(); try { document.execCommand('copy'); done(); } catch (e) { toast('Could not copy', true); } t.remove(); }
+}
+
+async function openLogins(c) {
+  if (!c) return;
+  const m = modal(`Portal logins · ${c.name}`, `<div data-lg><div class="loading">Loading…</div></div>`, { wide: true,
+    extra: (isAdmin() ? '<button class="btn ghost" data-lglog>Access log</button>' : '') + '<button class="btn primary" data-lgadd>+ Add login</button>' });
+  const box = $('[data-lg]', m.el);
+  let rows = [];
+  const load = async () => {
+    const r = await safe(sb.from('client_logins').select('*').eq('client_id', c.id).order('portal'));
+    if (r.error) { box.innerHTML = '<p class="note">Portal logins are not set up yet — run <b>update-portal-logins.sql</b> in Supabase.</p>'; return; }
+    rows = r.data || [];
+    const old = d => d && daysFrom(d) > 180;
+    box.innerHTML = `<p class="muted small" style="margin-top:0">🔒 Passwords are encrypted and hidden. Every <b>Show</b> or <b>Copy</b> is recorded with your name and time.</p>` +
+      (rows.length ? `<div class="lg-list">${rows.map(l => { const url = portalUrlFor(l.portal, l.url); return `<div class="lg-card" data-id="${l.id}">
+        <div class="lg-top"><span class="lg-portal">${portalIcon(l.portal)} ${esc(l.portal)}</span>${url ? `<a class="btn sm" href="${esc(url)}" target="_blank" rel="noopener noreferrer">Open portal ↗</a>` : ''}</div>
+        <div class="lg-row"><span class="muted small">Login ID</span><code>${esc(l.login_id)}</code><button type="button" class="btn sm ghost" data-cpid="${l.id}">Copy</button></div>
+        <div class="lg-row"><span class="muted small">Password</span><code data-pw="${l.id}">${l.secret_id ? '••••••••••' : '<span class="muted">not saved</span>'}</code>
+          ${l.secret_id ? `<button type="button" class="btn sm ghost" data-show="${l.id}">Show</button><button type="button" class="btn sm ghost" data-cppw="${l.id}">Copy</button>` : ''}</div>
+        ${l.otp_contact ? `<div class="lg-row"><span class="muted small">OTP goes to</span><span>${esc(l.otp_contact)}</span></div>` : ''}
+        ${l.notes ? `<div class="lg-row"><span class="muted small">Notes</span><span class="small">${esc(l.notes)}</span></div>` : ''}
+        <div class="lg-foot"><span class="muted small ${old(l.pw_changed_on) ? 'late' : ''}">${l.pw_changed_on ? `Password set ${fmtDate(l.pw_changed_on)}${old(l.pw_changed_on) ? ' · over 6 months old' : ''}` : ''}${l.updated_by ? ` · by ${esc(profName(l.updated_by))}` : ''}</span><span class="spacer"></span>
+          <button type="button" class="btn sm" data-lged="${l.id}">Edit / change password</button>${isManager() ? `<button type="button" class="link small danger-t" data-lgdel="${l.id}">Delete</button>` : ''}</div></div>`; }).join('')}</div>`
+      : '<div class="empty">No logins saved for this client yet.</div>');
+  };
+  const reveal = async (id, action) => { const { data, error } = await sb.rpc('login_reveal', { p_id: id, p_action: action }); if (error) { toast(friendly(error), true); return null; } return data; };
+  box.addEventListener('click', async e => {
+    const b = e.target.closest('button'); if (!b) return;
+    const d = b.dataset;
+    if (d.cpid) copySecret(rows.find(r => r.id === d.cpid).login_id, 'Login ID copied');
+    if (d.show) {
+      const el = $(`[data-pw="${d.show}"]`, box);
+      if (b.textContent === 'Hide') { el.textContent = '••••••••••'; b.textContent = 'Show'; return; }
+      b.disabled = true; const pw = await reveal(d.show, 'view'); b.disabled = false;
+      if (pw == null) return;
+      el.textContent = pw; b.textContent = 'Hide';
+      setTimeout(() => { if (el.isConnected) { el.textContent = '••••••••••'; b.textContent = 'Show'; } }, 20000);
+    }
+    if (d.cppw) { b.disabled = true; const pw = await reveal(d.cppw, 'copy'); b.disabled = false; if (pw != null) copySecret(pw, 'Password copied'); }
+    if (d.lged) editLogin(c, rows.find(r => r.id === d.lged), load);
+    if (d.lgdel) {
+      const l = rows.find(r => r.id === d.lgdel);
+      if (!confirm(`Delete the ${l.portal} login "${l.login_id}"? The saved password is erased permanently.`)) return;
+      try { await must(sb.rpc('login_delete', { p_id: l.id })); toast('Login deleted'); load(); } catch (err) { toast(friendly(err), true); }
+    }
+  });
+  $('[data-lgadd]', m.el).onclick = () => editLogin(c, null, load);
+  if ($('[data-lglog]', m.el)) $('[data-lglog]', m.el).onclick = () => loginLog(c);
+  load();
+}
+
+function editLogin(c, l, done) {
+  const isNew = !l; l = l || { portal: 'GST' };
+  const pOpts = GOV_PORTALS.map(x => x[0]).concat(GOV_PORTALS.some(x => x[0] === l.portal) ? [] : [l.portal]);
+  const m = modal(isNew ? `Add login · ${c.name}` : `Edit login · ${l.portal}`, `<div class="form-grid">
+      <label>Portal<select name="lp">${opts(pOpts, l.portal)}</select></label>
+      <label>Login ID / user name<input name="li" value="${esc(l.login_id || '')}" autocomplete="off" spellcheck="false" placeholder="${esc(c.gstin || c.tan || c.pan || '')}"></label>
+      <label class="full">${isNew ? 'Password' : 'New password <span class="muted small">(leave empty to keep the current one)</span>'}
+        <div class="pw-wrap"><input name="pw" type="password" autocomplete="new-password" spellcheck="false" maxlength="200">
+          <button type="button" class="btn sm ghost" data-eye>Show</button><button type="button" class="btn sm" data-gen>Generate strong</button></div>
+        <span class="muted small" data-pwhint></span></label>
+      <label>OTP goes to (mobile / email)<input name="lo" value="${esc(l.otp_contact || '')}"></label>
+      <label>Portal link <span class="muted small">(optional)</span><input name="lu" value="${esc(l.url || '')}" placeholder="${esc(portalUrlFor(l.portal) || 'https://')}"></label>
+      <label class="full">Notes <span class="muted small">(no passwords here)</span><input name="ln" value="${esc(l.notes || '')}" placeholder="e.g. Primary authorised signatory: Mr. Kumar"></label>
+    </div>`, {
+    saveText: isNew ? 'Save login' : 'Save changes',
+    onSave: async el => {
+      const pw = $('[name=pw]', el).value;
+      if (!fv(el, 'li')) { toast('Enter the login ID', true); return false; }
+      if (isNew && !pw && !confirm('Save without a password?')) return false;
+      await must(sb.rpc('login_save', { p_id: isNew ? null : l.id, p_client: c.id, p_portal: fv(el, 'lp'), p_login: fv(el, 'li'),
+        p_password: pw || null, p_url: fv(el, 'lu') || null, p_otp: fv(el, 'lo') || null, p_notes: fv(el, 'ln') || null }));
+      toast(isNew ? 'Login saved (password encrypted)' : pw ? 'Password changed' : 'Saved'); done();
+    }
+  });
+  const el = m.el, pw = $('[name=pw]', el), hint = $('[data-pwhint]', el);
+  const rate = () => { const v = pw.value; if (!v) { hint.textContent = ''; return; }
+    const ok = [/[A-Z]/, /[a-z]/, /[0-9]/, /[^A-Za-z0-9]/].filter(rx => rx.test(v)).length;
+    hint.textContent = v.length >= 8 && v.length <= 15 && ok === 4 ? '✓ Strong — meets GST / TRACES / MCA rules' : 'Portals need 8–15 characters with upper case, lower case, a number and a symbol';
+    hint.className = 'small ' + (v.length >= 8 && v.length <= 15 && ok === 4 ? 'ok-t' : 'late'); };
+  pw.oninput = rate;
+  $('[name=lp]', el).onchange = e => { $('[name=lu]', el).placeholder = portalUrlFor(e.target.value) || 'https://'; };
+  $('[data-eye]', el).onclick = e => { pw.type = pw.type === 'password' ? 'text' : 'password'; e.target.textContent = pw.type === 'password' ? 'Show' : 'Hide'; };
+  $('[data-gen]', el).onclick = () => { pw.value = strongPassword(); pw.type = 'text'; $('[data-eye]', el).textContent = 'Hide'; rate();
+    toast('Set this same password on the portal first, then save here'); };
+}
+
+async function loginLog(c) {
+  let q = sb.from('login_access_log').select('*').order('at', { ascending: false }).limit(300);
+  if (c) q = q.eq('client_id', c.id);
+  const r = await safe(q);
+  if (r.error) return toast(friendly(r.error), true);
+  const rows = r.data || [];
+  modal(c ? `Access log · ${c.name}` : 'Portal login access log', rows.length ? `<div class="table-wrap"><table><thead><tr><th>When</th><th>Who</th>${c ? '' : '<th>Client</th>'}<th>Portal</th><th>Action</th></tr></thead><tbody>
+    ${rows.map(x => `<tr><td class="small">${new Date(x.at).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}</td><td>${esc(profName(x.user_id) || '—')}</td>${c ? '' : `<td class="wrap">${esc(x.client_id ? clientName(x.client_id) : '—')}</td>`}
+      <td>${esc(x.portal || '')}</td><td><span class="badge ${/copy|view/.test(x.action) ? '' : 'lg-act'}">${esc(x.action)}</span></td></tr>`).join('')}</tbody></table></div>` : '<div class="empty">No activity yet.</div>', { wide: true });
+}
+
 // expose pure helpers for testing
-window.__tracker = { periodFor, dueDateFor, parseCSV, toCSV, gstLateFee, gstInterest, tdsCalc, rocCalc, monthsSpan, tdsDepositDue };
+window.__tracker = { strongPassword, periodFor, dueDateFor, parseCSV, toCSV, gstLateFee, gstInterest, tdsCalc, rocCalc, monthsSpan, tdsDepositDue };
 start();
 })();
