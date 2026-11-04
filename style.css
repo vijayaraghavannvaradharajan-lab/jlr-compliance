@@ -513,3 +513,20 @@ tr.warn-row td{background:var(--amber-soft)}
 .form-grid.g5{grid-template-columns:repeat(5,minmax(0,1fr))}
 @media (max-width:700px){.form-grid.g5{grid-template-columns:1fr 1fr}}
 .gr-verify textarea{width:100%}
+
+/* ---------- GSTR-1 entry (v11) ---------- */
+.g1-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+.g1-bar .seg small{font-weight:700;opacity:.7}
+.g1-wrap{max-height:62vh;overflow:auto}
+table.g1-grid{border-collapse:separate;border-spacing:0;font-size:.82rem}
+table.g1-grid th{position:sticky;top:0;z-index:2;background:var(--surface);font-size:.72rem;white-space:normal;line-height:1.2;vertical-align:bottom}
+table.g1-grid td{padding:2px 3px;border-bottom:1px solid var(--line)}
+table.g1-grid input,table.g1-grid select{font:inherit;font-size:.82rem;padding:5px 6px;border:1px solid transparent;border-radius:6px;background:#fff9db;color:#1f3a8a;min-height:30px;box-sizing:border-box}
+:root[data-theme="dark"] table.g1-grid input,:root[data-theme="dark"] table.g1-grid select{background:#2a2a1c;color:#cfe0ff}
+table.g1-grid input:focus,table.g1-grid select:focus{border-color:var(--blue);outline:none;background:var(--surface)}
+table.g1-grid input.r{text-align:right}table.g1-grid input.up{text-transform:uppercase}
+td.g1-auto,th.g1-auto{background:var(--grey-soft,#f2f2f2);white-space:nowrap;padding:4px 8px!important;font-size:.8rem}
+td.g1-auto.r{text-align:right}
+td.g1-chk.ok{color:var(--green);font-weight:700}td.g1-chk.bad{color:var(--red);font-weight:700;white-space:normal;min-width:180px}
+table.g1-docs input{width:130px}
+tr.g1-autorow td{background:var(--grey-soft,#f2f2f2)}

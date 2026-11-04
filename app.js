@@ -3106,7 +3106,7 @@ const prevMonth = () => { const d = new Date(); d.setDate(1); d.setMonth(d.getMo
 const periodToMonth = p => { const m = String(p || '').match(/([A-Za-z]{3})[a-z]*[\s-]+(\d{4})/); if (!m) return ''; const i = MONTHS.findIndex(x => x.toLowerCase() === m[1].toLowerCase()); return i < 0 ? '' : `${m[2]}-${pad(i + 1)}`; };
 const gTax = o => GR.tax(o || {});
 const gst$ = n => inr(Math.round(n || 0));
-let grClient = '', grMonth = prevMonth(), grTab = 'draft', grRecFilter = 'books_only';
+let grClient = '', grMonth = prevMonth(), grTab = 'g1', grRecFilter = 'books_only';
 
 VIEWS.gst = async v => {
   const gClients = clients.filter(c => c.active && c.gstin && (isManager() || c.default_staff === me.id || c.id === grClient));
@@ -3143,7 +3143,7 @@ VIEWS.gst = async v => {
         ${row.status === 'Verified' ? `<span class="st st-filed">✓ Verified by ${esc(profName(row.verified_by) || '')} · ${row.verified_at ? new Date(row.verified_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) : ''}</span>` : '<span class="st st-pending-data">Draft — not verified</span>'}
         <button class="btn sm" data-portal-api>Fetch from GST portal</button></div>
       <div class="gr-srcs">
-        ${card('sales', 'Sales register', S, S ? `${S.rows.length} documents · taxable ${gst$(sm.out.t)} · tax ${gst$(gTax(sm.out))}` : 'Client sales — Excel / CSV / Tally export',
+        ${card('sales', 'Sales register', S, S ? `${S.rows.length} documents · taxable ${gst$(sm.out.t)} · tax ${gst$(gTax(sm.out))}` : 'Type in the GSTR-1 entry tab, or upload an Excel / CSV / Tally export',
           `<button class="btn sm" data-up="sales">Upload</button><button class="link small" data-tpl="sales">Template</button>`)}
         ${card('purchases', 'Purchase register (books)', P, P ? `${P.rows.length} documents · ITC in books ${gst$(gTax(sm.itcBooks))}` : 'Purchases as per books, for the 2B match',
           `<button class="btn sm" data-up="purchases">Upload</button><button class="link small" data-tpl="purchases">Template</button>`)}
@@ -3154,7 +3154,7 @@ VIEWS.gst = async v => {
         ${card('gstr1', 'GSTR-1 (filed)', G1, G1 ? `Taxable ${gst$(G1.t)} · tax ${gst$(gTax(G1))}` : 'Filed totals — type in from the GSTR-1 summary',
           `<button class="btn sm" data-ent="gstr1">${G1 ? 'Edit' : 'Enter'} totals</button>`)}
       </div>
-      <div class="seg gr-tabs">${[['draft', 'Draft GSTR-3B'], ['recon', `2B vs books${sm.rec ? ` · ${(sm.rec.groups.books_only || {}).n || 0} at risk` : ''}`], ['checks', `GSTR-1 vs 3B${sm.checks.some(x => !x.ok) ? ' ⚠' : ''}`], ['trend', 'Trend']].map(([k, l]) => `<button data-gt="${k}" class="${grTab === k ? 'on' : ''}">${l}</button>`).join('')}</div>
+      <div class="seg gr-tabs">${[['g1', 'GSTR-1 entry'], ['draft', 'Draft GSTR-3B'], ['recon', `2B vs books${sm.rec ? ` · ${(sm.rec.groups.books_only || {}).n || 0} at risk` : ''}`], ['checks', `GSTR-1 vs 3B${sm.checks.some(x => !x.ok) ? ' ⚠' : ''}`], ['trend', 'Trend']].map(([k, l]) => `<button data-gt="${k}" class="${grTab === k ? 'on' : ''}">${l}</button>`).join('')}</div>
       <div class="card" id="grOut"></div>
       <div class="card gr-verify"><label class="full">Review notes<textarea id="grNotes" rows="2" placeholder="e.g. Reversed ITC on 2 invoices missing in 2B; client informed">${esc(row.notes || '')}</textarea></label>
         <div class="toolbar" style="margin:8px 0 0"><button class="btn sm" id="grSaveNotes">Save notes</button><span class="spacer"></span>
@@ -3162,6 +3162,7 @@ VIEWS.gst = async v => {
     renderOut(sm);
   }
   function renderOut(sm) {
+    if (grTab === 'g1') { renderG1($('#grOut', body), { client: c, getRow: () => row, save }); return; }
     const o = $('#grOut', body), row4 = (l, x, cls = '') => `<tr class="${cls}"><td>${l}</td><td class="r">${gst$(x.t)}</td><td class="r">${gst$(x.ig)}</td><td class="r">${gst$(x.cg)}</td><td class="r">${gst$(x.sg)}</td><td class="r">${gst$(x.cs)}</td></tr>`;
     const th = '<thead><tr><th></th><th class="r">Taxable</th><th class="r">IGST</th><th class="r">CGST</th><th class="r">SGST</th><th class="r">Cess</th></tr></thead>';
     if (grTab === 'draft') {
@@ -3346,7 +3347,340 @@ function gstr3bFromApi(j) {
   return { t31a: { t: n(o.txval), ig: n(o.iamt), cg: n(o.camt), sg: n(o.samt), cs: n(o.csamt) }, itc_net: { ig: n(net.iamt), cg: n(net.camt), sg: n(net.samt), cs: n(net.csamt) }, cash };
 }
 
+const G1L = {"states": [["35", "ANDAMAN AND NICOBAR"], ["37", "ANDHRA PRADESH"], ["12", "ARUNACHAL PRADESH"], ["18", "ASSAM"], ["10", "BIHAR"], ["04", "CHANDIGARH"], ["22", "CHHATTISGARH"], ["26", "DADRA AND NAGAR HAVELI"], ["25", "DAMAN AND DIU"], ["07", "DELHI"], ["30", "GOA"], ["24", "GUJARAT"], ["06", "HARYANA"], ["02", "HIMACHAL PRADESH"], ["01", "JAMMU AND KASHMIR"], ["20", "JHARKHAND"], ["29", "KARNATAKA"], ["32", "KERALA"], ["31", "LAKSHADWEEP"], ["38", "LADAKH"], ["23", "MADHYA PRADESH"], ["27", "MAHARASHTRA "], ["14", "MANIPUR"], ["17", "MEGHALAYA"], ["15", "MIZORAM"], ["13", "NAGALAND"], ["21", "ODISHA"], ["99", "OVERSEAS"], ["34", "PUDUCHERRY"], ["03", "PUNJAB"], ["08", "RAJASTHAN"], ["11", "SIKKIM"], ["33", "TAMIL NADU"], ["36", "TELANGANA"], ["16", "TRIPURA"], ["09", "UTTAR PRADESH"], ["05", "UTTARAKHAND"], ["19", "WEST BENGAL"], ["97", "OTHER TERRITORY"]], "uqc": ["BAG", "BAL", "BDL", "BKL", "BOU", "BOX", "BTL", "BUN", "CAN", "CBM", "CCM", "CMS", "CTN", "DOZ", "DRM", "GGK", "GMS", "GRS", "GYD", "KGS", "KLR", "KME", "LTR", "MLT", "MTR", "MTS", "NOS", "PAC", "PCS", "PRS", "QTL", "ROL", "SET", "SQF", "SQM", "SQY", "TBS", "TGM", "THD", "TON", "TUB", "UGS", "UNT", "YDS", "OTH"], "docs": ["Invoices for outward supply", "Invoices for inward supply from unregistered person", "Revised Invoice", "Debit Note", "Credit Note", "Receipt voucher", "Payment Voucher", "Refund voucher", "Delivery Challan for job work", "Delivery Challan for supply on approval", "Delivery Challan in case of liquid gas", "Delivery Challan in cases other than by way of supply (excluding at S no. 9 to 11)"]};
+/* =====================================================================
+   GSTR-1 SIMPLE ENTRY ENGINE  (same rules as JLR-GSTR1-Simple-Entry.xlsx)
+   ===================================================================== */
+const G1 = (() => {
+  const RATES = [0, 0.25, 3, 5, 12, 18, 28, 40];
+  const DOCTYPES = ['Invoice', 'Credit Note', 'Debit Note'];
+  const EXPSEZ = ['Export - With GST', 'Export - Without GST', 'SEZ - With GST', 'SEZ - Without GST'];
+  const NIL = ['Nil rated', 'Exempted', 'Non-GST'];
+  const ADVT = ['Advance received (11A)', 'Advance adjusted (11B)'];
+  const r2 = x => Math.round((+x || 0) * 100) / 100;
+  const n = v => { const x = parseFloat(String(v ?? '').replace(/[₹,\s]/g, '')); return isFinite(x) ? x : 0; };
+  const has = v => v !== undefined && v !== null && String(v).trim() !== '';
+  const up = v => String(v ?? '').trim().toUpperCase();
+  const code = name => { const s = G1L.states.find(x => x[1].trim() === String(name || '').trim().toUpperCase()); return s ? s[0] : null; };
+  const sname = c => { const s = G1L.states.find(x => x[0] === c); return s ? s[1].trim() : null; };
+  const SALES = [ // key, label, kind, width
+    ['d', 'Date', 'date', 118], ['no', 'Invoice / Note no', 'text', 120], ['ty', 'Document type', DOCTYPES, 108], ['name', 'Customer name', 'text', 180],
+    ['gstin', 'Customer GSTIN', 'gstin', 150], ['state', 'State (unregistered, other state)', 'state', 150], ['hsn', 'HSN / SAC', 'text', 80],
+    ['qty', 'Qty', 'num', 64], ['uqc', 'Unit', 'uqc', 72], ['tx', 'Taxable value', 'num', 104], ['rate', 'GST %', RATES, 64], ['cess', 'Cess', 'num', 72],
+    ['nil', 'Nil / Exempt / Non-GST', NIL, 110], ['exp', 'Export / SEZ', EXPSEZ, 150], ['rc', 'Reverse charge', ['Yes'], 70], ['eco', 'E-com operator GSTIN', 'gstin', 150],
+    ['ono', 'Original invoice no (notes)', 'text', 120], ['odt', 'Original date', 'date', 118]];
+  const AMEND = [['ty', 'Document type', DOCTYPES, 108], ['ono', 'Original no', 'text', 110], ['odt', 'Original date', 'date', 118], ['omon', 'Original month (e.g. Aug-2026)', 'text', 110],
+    ['no', 'Revised no', 'text', 110], ['d', 'Revised date', 'date', 118], ['name', 'Customer name', 'text', 170], ['gstin', 'Customer GSTIN', 'gstin', 150],
+    ['state', 'State (unregistered)', 'state', 140], ['hsn', 'HSN / SAC', 'text', 80], ['tx', 'Taxable value (corrected)', 'num', 110], ['rate', 'GST %', RATES, 64],
+    ['cess', 'Cess', 'num', 72], ['exp', 'Export / SEZ', EXPSEZ, 150]];
+  const ADV = [['ty', 'Type', ADVT, 170], ['d', 'Date', 'date', 118], ['rv', 'Receipt voucher no', 'text', 120], ['name', 'Customer name', 'text', 170],
+    ['gstin', 'Customer GSTIN', 'gstin', 150], ['state', 'State (if no GSTIN)', 'state', 140], ['amt', 'Amount (excl. GST)', 'num', 110], ['rate', 'GST %', RATES, 64], ['cess', 'Cess', 'num', 72]];
+  const filled = (row, cols) => cols.some(([k]) => has(row[k]));
+  // place of supply / tax for any row type
+  function tax(row, own, amtKey = 'tx') {
+    const amt = n(row[amtKey]);
+    const sc = has(row.gstin) ? up(row.gstin).slice(0, 2) : /^Export/.test(row.exp || '') ? '99' : has(row.state) ? (code(row.state) || '??') : own;
+    const inter = has(row.exp) || sc !== own;
+    const nil = has(row.nil), without = /Without/.test(row.exp || '');
+    const ig = !nil && inter && !without ? r2(amt * n(row.rate) / 100) : 0;
+    const cg = !nil && !inter ? r2(amt * n(row.rate) / 200) : 0;
+    return { sc, st: sname(sc) || 'CHECK', inter, ig, cg, sg: cg, cs: n(row.cess), amt };
+  }
+  // ---------------- Sales ----------------
+  function calcSales(rows, own, ownGstin) {
+    const out = rows.map(row => ({ row, x: filled(row, SALES) ? tax(row, own) : null }));
+    const invVal = {};
+    out.forEach(o => { if (!o.x) return; const v = o.x.amt + (o.row.rc === 'Yes' ? 0 : o.x.ig + o.x.cg + o.x.sg) + o.x.cs; o.x.val = r2(v); const k = up(o.row.no); invVal[k] = r2((invVal[k] || 0) + v); });
+    out.forEach(o => {
+      if (!o.x) return; const r = o.row, x = o.x, t = r.ty || 'Invoice';
+      x.type = t;
+      x.table = t !== 'Invoice' ? (has(r.gstin) ? 'CDNR' : 'CDNUR') : has(r.nil) ? 'NIL' : /^SEZ/.test(r.exp || '') ? 'SEZ' : /^Export/.test(r.exp || '') ? 'EXP'
+        : has(r.gstin) ? 'B2B' : (x.inter && invVal[up(r.no)] > 100000 ? 'B2CL' : 'B2CS');
+      const no = String(r.no ?? '');
+      x.check = !has(r.d) ? 'Date missing' : !has(no) ? 'Invoice no missing' : no.length > 16 ? 'Invoice no over 16 characters' : / /.test(no.trim()) ? 'Remove spaces from invoice no'
+        : !has(r.tx) ? 'Taxable value missing'
+        : has(r.gstin) && up(r.gstin).length !== 15 ? 'Customer GSTIN must be 15 characters' : has(r.gstin) && up(r.gstin) === up(ownGstin) ? 'Customer GSTIN = client\'s own GSTIN'
+        : x.st === 'CHECK' ? 'Unknown state / GSTIN state code' : !has(r.nil) && !has(r.rate) ? 'GST rate missing' : String(r.hsn ?? '').trim().length < 4 ? 'HSN / SAC must be at least 4 digits'
+        : has(r.qty) && !has(r.uqc) ? 'Unit (UQC) needed when quantity is given' : has(r.eco) && up(r.eco).length !== 15 ? 'E-commerce GSTIN must be 15 characters'
+        : t !== 'Invoice' && !has(r.ono) ? 'Original invoice no needed for a note' : 'OK';
+      x.ok = x.check === 'OK'; x.sign = t === 'Credit Note' ? -1 : 1;
+    });
+    return out;
+  }
+  function calcAmend(rows, own) {
+    return rows.map(r => {
+      if (!filled(r, AMEND)) return { row: r, x: null };
+      const x = tax(r, own), t = r.ty || 'Invoice'; x.val = r2(x.amt + x.ig + x.cg + x.sg + x.cs);
+      x.table = t !== 'Invoice' ? (has(r.gstin) ? 'CDNRA' : 'CDNURA') : /^SEZ/.test(r.exp || '') ? 'B2BA' : /^Export/.test(r.exp || '') ? 'EXPA' : has(r.gstin) ? 'B2BA' : (x.inter && x.val > 100000 ? 'B2CLA' : 'B2CSA');
+      x.check = !has(r.ono) || !has(r.odt) ? 'Original no and date needed' : !has(r.no) || !has(r.d) ? 'Revised no and date needed'
+        : String(r.no).length > 16 || / /.test(String(r.no).trim()) ? 'Revised no: max 16 characters, no spaces' : has(r.gstin) && up(r.gstin).length !== 15 ? 'GSTIN must be 15 characters'
+        : x.st === 'CHECK' ? 'Unknown state' : !has(r.rate) ? 'GST rate missing' : !has(r.tx) ? 'Taxable value missing' : 'OK';
+      x.ok = x.check === 'OK'; return { row: r, x };
+    });
+  }
+  function calcAdv(rows, own) {
+    return rows.map(r => {
+      if (!filled(r, ADV)) return { row: r, x: null };
+      const x = tax({ ...r, exp: '' }, own, 'amt');
+      x.check = !has(r.ty) ? 'Choose 11A or 11B' : !has(r.d) ? 'Date missing' : !has(r.amt) ? 'Amount missing' : !has(r.rate) ? 'GST rate missing'
+        : has(r.gstin) && up(r.gstin).length !== 15 ? 'GSTIN must be 15 characters' : x.st === 'CHECK' ? 'Unknown state' : 'OK';
+      x.ok = x.check === 'OK'; return { row: r, x };
+    });
+  }
+  // ---------------- Summary ----------------
+  const Z = () => ({ n: 0, t: 0, ig: 0, cg: 0, sg: 0, cs: 0 });
+  const add = (a, x, s = 1, amt = x.amt) => { a.n++; a.t = r2(a.t + s * amt); a.ig = r2(a.ig + s * x.ig); a.cg = r2(a.cg + s * x.cg); a.sg = r2(a.sg + s * x.sg); a.cs = r2(a.cs + s * x.cs); return a; };
+  function summary(g1, client) {
+    const own = String(client.gstin || '').slice(0, 2);
+    const S = calcSales(g1.sales || [], own, client.gstin), A = calcAmend(g1.amend || [], own), V = calcAdv(g1.adv || [], own);
+    const ok = S.filter(o => o.x && o.x.ok), errors = [...S, ...A, ...V].filter(o => o.x && !o.x.ok).length;
+    const tables = {}, rateW = {}, b2cs = {}, t8 = {}, hsn = {};
+    const T = k => tables[k] = tables[k] || Z();
+    ok.forEach(({ row: r, x }) => {
+      add(T(x.table), x);
+      if (r.rc === 'Yes') add(T('RCM'), x);
+      if (!has(r.nil)) add(rateW[n(r.rate)] = rateW[n(r.rate)] || Z(), x, x.sign);
+      if (x.table === 'B2CS') { const k = x.st + '|' + n(r.rate); add(b2cs[k] = b2cs[k] || Z(), x); }
+      if (x.table === 'NIL') { const k = (x.inter ? 'Inter' : 'Intra') + '|' + (has(r.gstin) ? 'Reg' : 'Unreg') + '|' + r.nil; t8[k] = r2((t8[k] || 0) + x.amt); }
+      const tab = ['B2B', 'SEZ', 'CDNR'].includes(x.table) || (x.table === 'NIL' && has(r.gstin)) ? 'B2B' : 'B2C';
+      const uqc = /^99/.test(String(r.hsn)) ? 'NA' : (r.uqc || 'NA'), rate = has(r.nil) ? 0 : n(r.rate), k = [tab, String(r.hsn).trim(), rate, uqc].join('|');
+      const h = hsn[k] = hsn[k] || { ...Z(), q: 0 }; add(h, x, x.sign); h.q = r2(h.q + x.sign * n(r.qty));
+    });
+    A.filter(o => o.x && o.x.ok).forEach(({ x }) => add(T(x.table), x));
+    V.filter(o => o.x && o.x.ok).forEach(({ row: r, x }) => add(T(/11B/.test(r.ty) ? 'AT_ADJ' : 'AT'), x));
+    const payable = Z(); ok.forEach(({ row: r, x }) => { if (x.table === 'NIL') return; add(payable, r.rc === 'Yes' ? { ...x, ig: 0, cg: 0, sg: 0, cs: 0 } : x, x.sign); });
+    // documents (Table 13): auto rows from entries
+    const first = (list, key) => list.length ? list[0][key] : '', last = (list, key) => list.length ? list[list.length - 1][key] : '';
+    const uniq = arr => arr.filter((o, i) => arr.findIndex(p => up(p.row.no) === up(o.row.no)) === i);
+    const inv = uniq(ok.filter(o => o.x.type === 'Invoice')).map(o => o.row), cn = uniq(ok.filter(o => o.x.type === 'Credit Note')).map(o => o.row), dn = uniq(ok.filter(o => o.x.type === 'Debit Note')).map(o => o.row);
+    const rv = V.filter(o => o.x && o.x.ok && /11A/.test(o.row.ty) && has(o.row.rv)).map(o => ({ no: o.row.rv }));
+    const auto = { 'Invoices for outward supply': inv, 'Credit Note': cn, 'Debit Note': dn, 'Receipt voucher': rv };
+    const docs = G1L.docs.map(nat => { const typed = (g1.docs || []).find(d => d.nat === nat) || {};
+      const a = auto[nat]; const from = a ? first(a, 'no') : typed.from || '', to = a ? last(a, 'no') : typed.to || '', total = a ? a.length : n(typed.total), cancelled = n(typed.cancelled);
+      return { nat, from, to, total, cancelled, net: total ? total - cancelled : 0, auto: !!a }; });
+    return { S, A, V, tables, rateW, b2cs, t8, hsn, payable, docs, errors, okCount: ok.length };
+  }
+  // rows for the GST review engine (sales register shape)
+  function toRegister(S) {
+    return S.filter(o => o.x && o.x.ok).map(({ row: r, x }) => { const s = x.sign, rc = r.rc === 'Yes';
+      return { g: up(r.gstin), n: r.name || '', i: String(r.no), d: r.d || '', t: r2(s * x.amt), ig: rc ? 0 : r2(s * x.ig), cg: rc ? 0 : r2(s * x.cg), sg: rc ? 0 : r2(s * x.sg), cs: r2(s * x.cs),
+        v: r2(s * x.val), cn: s < 0 || undefined, src: 'G1' }; });
+  }
+  // read the filled Excel template (sheets Sales / Amendments / Advances / Documents, data from row 5)
+  const xdate = v => { if (typeof v === 'number' && v > 20000) { const d = new Date(Math.round((v - 25569) * 864e5)); return d.toISOString().slice(0, 10); } return GR.toDate(v); };
+  function fromWorkbook(sheets) {
+    const get = name => (sheets.find(s => s.name.trim().toLowerCase() === name.toLowerCase()) || {}).rows || null;
+    const S = get('Sales'); if (!S) return { error: 'This is not the JLR GSTR-1 entry template (no "Sales" sheet).' };
+    const take = (rows, cols, dates) => (rows || []).slice(4).map(r => { const o = {}; cols.forEach(([k], j) => { let v = r[j]; if (v === '' || v == null) return; if (dates.includes(k)) v = xdate(v); o[k] = typeof v === 'string' ? v.trim() : v; }); return o; })
+      .filter(o => cols.some(([k]) => has(o[k])) && !(Object.keys(o).length === 1 && o.name && /sample rows/i.test(o.name)));
+    const sales = take(S, SALES, ['d', 'odt']).filter(o => has(o.tx) || has(o.no));
+    const amend = take(get('Amendments'), AMEND, ['odt', 'd']).filter(o => has(o.tx));
+    const adv = take(get('Advances'), ADV, ['d']).filter(o => has(o.amt));
+    const D = get('Documents'), docs = [];
+    (D || []).slice(4).forEach(r => { if (G1L.docs.includes(String(r[0]).trim())) docs.push({ nat: String(r[0]).trim(), from: r[1] || '', to: r[2] || '', total: r[3] || '', cancelled: r[4] || 0 }); });
+    const setup = get('Setup') || []; const g = String((setup[3] || [])[1] || '').trim().toUpperCase();
+    return { sales, amend, adv, docs, gstin: g };
+  }
+  return { SALES, AMEND, ADV, RATES, calcSales, calcAmend, calcAdv, summary, toRegister, fromWorkbook, code, sname, has };
+})();
+
+/* =====================================================================
+   GSTR-1 ENTRY (tab inside GST review)
+   ===================================================================== */
+const g1Drafts = {};             // unsaved work per client|month, survives tab switches
+let g1Tab = 'sales';
+addEventListener('beforeunload', e => { if (Object.values(g1Drafts).some(d => d.dirty)) { e.preventDefault(); e.returnValue = ''; } });
+const G1_LABEL = { B2B: '4A  B2B — registered customers', B2CL: '5  B2CL — inter-state unregistered above ₹1 lakh', EXP: '6A  Exports', SEZ: '6B  SEZ supplies',
+  B2CS: '7  B2CS — other unregistered', NIL: '8  Nil rated / exempted / non-GST', CDNR: '9B  Credit / debit notes — registered', CDNUR: '9B  Credit / debit notes — unregistered',
+  RCM: '   of which reverse charge (tax paid by recipient)', B2BA: '9A  Amendments — B2BA (incl. SEZ)', B2CLA: '9A  Amendments — B2CLA', EXPA: '9A  Amendments — EXPA',
+  B2CSA: '10  Amendments — B2CSA', CDNRA: '9C  Amendments — CDNRA', CDNURA: '9C  Amendments — CDNURA', AT: '11A  Advances received', AT_ADJ: '11B  Advances adjusted' };
+
+function renderG1(o, { client: c, getRow, save }) {
+  const row = getRow(), key = c.id + '|' + row.period;
+  if (!g1Drafts[key]) { const g = row.g1 || {}; g1Drafts[key] = { sales: (g.sales || []).map(x => ({ ...x })), amend: (g.amend || []).map(x => ({ ...x })), adv: (g.adv || []).map(x => ({ ...x })), docs: (g.docs || []).map(x => ({ ...x })), dirty: false }; }
+  const D = g1Drafts[key];
+  const COLS = { sales: G1.SALES, amend: G1.AMEND, adv: G1.ADV };
+  const own = String(c.gstin || '').slice(0, 2);
+  const calc = () => ({ sales: G1.calcSales(D.sales, own, c.gstin), amend: G1.calcAmend(D.amend, own), adv: G1.calcAdv(D.adv, own) });
+  const fmt = x => x == null ? '' : Number(x).toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+  const sm = () => G1.summary(D, c);
+  o.innerHTML = `<div class="g1-bar"><div class="seg">${[['sales', 'Sales'], ['amend', 'Amendments'], ['adv', 'Advances'], ['docs', 'Documents'], ['sum', 'Summary']]
+      .map(([k, l]) => `<button data-g1t="${k}" class="${g1Tab === k ? 'on' : ''}">${l}${k !== 'sum' && k !== 'docs' ? ` <small data-g1n="${k}"></small>` : ''}</button>`).join('')}</div>
+      <span class="spacer"></span><span class="small" data-g1st></span>
+      <button class="btn sm" data-g1dl>Blank template</button><button class="btn sm" data-g1up>Upload filled template</button><button class="btn sm" data-g1xl>Download Excel</button>
+      <button class="btn sm primary" data-g1save>Save</button></div>
+    <div data-g1body></div>`;
+  const body = $('[data-g1body]', o), st = $('[data-g1st]', o);
+  const status = () => {
+    const s = sm();
+    st.innerHTML = (D.dirty ? '<b class="late">● Unsaved changes</b> · ' : row.g1 ? '<span class="ok-t">✓ Saved</span> · ' : '') + `${s.okCount} OK row${s.okCount === 1 ? '' : 's'}${s.errors ? ` · <b class="late">${s.errors} with errors</b>` : ''}`;
+    ['sales', 'amend', 'adv'].forEach(k => { const x = $(`[data-g1n="${k}"]`, o); if (x) x.textContent = D[k].filter(r => Object.keys(r).length).length || ''; });
+  };
+  const dirty = () => { D.dirty = true; status(); };
+
+  // ----- grid -----
+  function cellHtml(col, v, ri) {
+    const [k, , kind, w] = col, a = `data-r="${ri}" data-k="${k}" style="width:${w}px"`, val = v == null ? '' : v;
+    if (Array.isArray(kind)) return `<select ${a}><option value=""></option>${kind.map(x => `<option ${String(x) === String(val) ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select>`;
+    if (kind === 'state') return `<select ${a}><option value=""></option>${G1L.states.map(s => s[1].trim()).map(x => `<option ${x === String(val).trim().toUpperCase() ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select>`;
+    if (kind === 'uqc') return `<select ${a}><option value=""></option>${G1L.uqc.map(x => `<option ${x === val ? 'selected' : ''}>${x}</option>`).join('')}</select>`;
+    if (kind === 'date') return `<input type="date" ${a} value="${esc(val)}">`;
+    return `<input ${a} value="${esc(val)}" ${kind === 'num' ? 'inputmode="decimal" class="r"' : ''} ${kind === 'gstin' ? 'maxlength="15" class="up"' : ''} spellcheck="false" autocomplete="off">`;
+  }
+  const AUTO = { sales: [['sc', 'State', 'st'], ['io', 'Intra/Inter'], ['ig', 'IGST'], ['cg', 'CGST'], ['sg', 'SGST'], ['val', 'Value'], ['table', 'Table']],
+    amend: [['st', 'State'], ['ig', 'IGST'], ['cg', 'CGST'], ['sg', 'SGST'], ['val', 'Value'], ['table', 'Table']], adv: [['st', 'Place of supply'], ['ig', 'IGST'], ['cg', 'CGST'], ['sg', 'SGST']] };
+  function autoCells(tab, x) {
+    if (!x) return AUTO[tab].map(() => '<td class="g1-auto"></td>').join('') + '<td class="g1-auto"></td>';
+    const v = { sc: x.st, st: x.st, io: x.inter ? 'Inter' : 'Intra', ig: fmt(x.ig), cg: fmt(x.cg), sg: fmt(x.sg), val: fmt(x.val), table: x.table || '' };
+    return AUTO[tab].map(([k]) => `<td class="g1-auto ${['ig', 'cg', 'sg', 'val'].includes(k) ? 'r' : ''}">${esc(v[k])}</td>`).join('')
+      + `<td class="g1-auto g1-chk ${x.ok ? 'ok' : 'bad'}">${esc(x.check)}</td>`;
+  }
+  function drawGrid(tab) {
+    const cols = COLS[tab], rows = D[tab];
+    const nShow = Math.max(rows.length + 5, 12);
+    while (rows.length < nShow) rows.push({});
+    const C = calc()[tab];
+    body.innerHTML = `<p class="muted small">${tab === 'sales' ? 'One row per invoice — an invoice with two GST rates = two rows with the same invoice no. Leave GSTIN blank for unregistered customers.'
+        : tab === 'amend' ? 'Corrections to invoices / notes reported in an EARLIER month. Enter the full corrected values (not the difference).'
+        : 'Amount = advance EXCLUDING GST. 11A = received, invoice not yet issued · 11B = adjusted against an invoice this month.'}
+      <b>Tip:</b> copy rows from Excel and paste into the first cell — they fill across.</p>
+      <div class="table-wrap g1-wrap"><table class="g1-grid"><thead><tr><th>#</th>${cols.map(([, l, , w]) => `<th style="min-width:${w}px">${esc(l)}</th>`).join('')}
+        ${AUTO[tab].map(([, l]) => `<th class="g1-auto">${esc(l)}</th>`).join('')}<th class="g1-auto">Check</th><th></th></tr></thead>
+      <tbody>${rows.map((r, i) => `<tr data-row="${i}"><td class="muted small">${i + 1}</td>${cols.map(col => `<td>${cellHtml(col, r[col[0]], i)}</td>`).join('')}${autoCells(tab, C[i] && C[i].x)}
+        <td><button class="link small danger-t" data-g1del="${i}" title="Remove row" aria-label="Remove row">×</button></td></tr>`).join('')}</tbody></table></div>
+      <div class="toolbar" style="margin-top:8px"><button class="btn sm" data-g1add>+ 20 rows</button><span class="muted small">Blank rows are ignored.</span></div>`;
+  }
+  let t;
+  const refreshAuto = tab => {
+    clearTimeout(t); t = setTimeout(() => {
+      const C = calc()[tab];
+      $$('tbody tr', body).forEach(tr => { const i = +tr.dataset.row; const cells = $$('.g1-auto', tr); const tmp = document.createElement('tr'); tmp.innerHTML = autoCells(tab, C[i] && C[i].x);
+        $$('td', tmp).forEach((td, j) => { if (cells[j]) { cells[j].className = td.className; cells[j].textContent = td.textContent; } }); });
+      status();
+    }, 250);
+  };
+  const setVal = (tab, i, k, v) => {
+    const col = COLS[tab].find(c => c[0] === k); if (!col) return;
+    const kind = col[2]; let x = typeof v === 'string' ? v.trim() : v;
+    if (kind === 'num') x = x === '' ? '' : (isFinite(GR.amt(x)) ? GR.amt(x) : x);
+    if (kind === 'gstin') x = String(x).toUpperCase();
+    if (kind === 'date' && x) x = /^\d+(\.\d+)?$/.test(String(x)) && +x > 20000 ? new Date(Math.round((+x - 25569) * 864e5)).toISOString().slice(0, 10) : GR.toDate(x);
+    if (Array.isArray(kind) && x) { const m = kind.find(o => String(o).toLowerCase() === String(x).toLowerCase() || (typeof o === 'number' && +x === o)); x = m != null ? m : x; }
+    if (kind === 'state' && x) x = String(x).toUpperCase().replace(/^\d+-/, '');
+    if (kind === 'uqc' && x) x = String(x).toUpperCase().slice(0, 3);
+    while (D[tab].length <= i) D[tab].push({});
+    if (x === '' || x == null) delete D[tab][i][k]; else D[tab][i][k] = x;
+  };
+  body.addEventListener('input', e => { const el = e.target; if (!el.dataset.k) return; setVal(g1Tab, +el.dataset.r, el.dataset.k, el.value); dirty(); refreshAuto(g1Tab); });
+  body.addEventListener('change', e => { const el = e.target; if (!el.dataset.k) return; setVal(g1Tab, +el.dataset.r, el.dataset.k, el.value); if (el.classList.contains('up')) el.value = el.value.toUpperCase(); dirty(); refreshAuto(g1Tab); });
+  body.addEventListener('paste', e => {
+    const el = e.target; if (!el.dataset || !el.dataset.k || !COLS[g1Tab]) return;
+    const text = (e.clipboardData || window.clipboardData).getData('text');
+    if (!/[\t\n]/.test(text.trim())) return;
+    e.preventDefault();
+    const lines = text.replace(/\r/g, '').replace(/\n$/, '').split('\n').map(l => l.split('\t'));
+    const cols = COLS[g1Tab], c0 = cols.findIndex(c => c[0] === el.dataset.k), r0 = +el.dataset.r;
+    lines.forEach((cells, di) => cells.forEach((v, dj) => { const col = cols[c0 + dj]; if (col) setVal(g1Tab, r0 + di, col[0], v); }));
+    dirty(); drawGrid(g1Tab); toast(`${lines.length} row${lines.length > 1 ? 's' : ''} pasted`);
+  });
+
+  // ----- documents -----
+  function drawDocs() {
+    const s = sm();
+    body.innerHTML = `<p class="muted small">Table 13. Grey rows fill themselves from the entries (first and last number, count). Type the others. Enter cancelled numbers where needed.</p>
+      <div class="table-wrap"><table class="g1-docs"><thead><tr><th>Nature of document</th><th>From</th><th>To</th><th class="r">Total</th><th class="r">Cancelled</th><th class="r">Net issued</th></tr></thead><tbody>
+      ${s.docs.map((d, i) => `<tr class="${d.auto ? 'g1-autorow' : ''}"><td>${esc(d.nat)}</td>
+        ${d.auto ? `<td>${esc(d.from)}</td><td>${esc(d.to)}</td><td class="r">${d.total}</td>` : ['from', 'to', 'total'].map(k => `<td><input data-dn="${i}" data-dk="${k}" value="${esc(d[k] || '')}" ${k === 'total' ? 'inputmode="numeric" class="r"' : ''}></td>`).join('')}
+        <td><input data-dn="${i}" data-dk="cancelled" value="${esc(d.cancelled || '')}" inputmode="numeric" class="r" style="width:80px"></td><td class="r">${d.net || ''}</td></tr>`).join('')}</tbody></table></div>`;
+    body.oninput = null;
+  }
+  body.addEventListener('input', e => {
+    const el = e.target; if (el.dataset.dn == null) return;
+    const nat = G1L.docs[+el.dataset.dn]; let d = D.docs.find(x => x.nat === nat); if (!d) { d = { nat }; D.docs.push(d); }
+    d[el.dataset.dk] = el.dataset.dk === 'total' || el.dataset.dk === 'cancelled' ? GR.amt(el.value) : el.value.trim(); dirty();
+  });
+
+  // ----- summary -----
+  function drawSummary() {
+    const s = sm(), Z = { n: 0, t: 0, ig: 0, cg: 0, sg: 0, cs: 0 }, tx = x => (x.ig || 0) + (x.cg || 0) + (x.sg || 0) + (x.cs || 0);
+    const line = (l, x, cls = '') => `<tr class="${cls}"><td>${l}</td><td class="r">${x.n || 0}</td><td class="r">${fmt(x.t)}</td><td class="r">${fmt(x.ig)}</td><td class="r">${fmt(x.cg)}</td><td class="r">${fmt(x.sg)}</td><td class="r">${fmt(x.cs)}</td><td class="r"><b>${fmt(tx(x))}</b></td></tr>`;
+    const th = f => `<thead><tr><th>${f}</th><th class="r">Rows</th><th class="r">Taxable / value</th><th class="r">IGST</th><th class="r">CGST</th><th class="r">SGST</th><th class="r">Cess</th><th class="r">Total tax</th></tr></thead>`;
+    const errs = [];
+    [['Sales', s.S], ['Amendments', s.A], ['Advances', s.V]].forEach(([nm, L]) => L.forEach((o, i) => { if (o.x && !o.x.ok) errs.push(`${nm} row ${i + 1}: ${o.x.check}`); }));
+    const order = ['B2B', 'B2CL', 'EXP', 'SEZ', 'B2CS', 'NIL', 'CDNR', 'CDNUR', 'RCM', 'B2BA', 'B2CLA', 'EXPA', 'B2CSA', 'CDNRA', 'CDNURA', 'AT', 'AT_ADJ'];
+    const t8 = (io, rg, k) => fmt(s.t8[`${io}|${rg}|${k}`] || 0);
+    body.innerHTML = `${errs.length ? `<div class="note warn small"><b>${errs.length} row(s) have errors and are left out of the totals:</b><br>${errs.slice(0, 15).map(esc).join('<br>')}${errs.length > 15 ? '<br>…' : ''}</div>` : '<p class="ok-t small">✓ All rows passed the checks</p>'}
+      <h4>1. Table-wise</h4><div class="table-wrap"><table class="gr-t">${th('GSTR-1 table')}<tbody>
+        ${order.filter(k => s.tables[k] || ['B2B', 'B2CS', 'CDNR'].includes(k)).map(k => line(G1_LABEL[k], s.tables[k] || Z, k === 'RCM' ? 'sub' : '')).join('')}
+        ${line('<b>Tax payable this month</b> (excl. reverse charge, net of notes)', s.payable, 'tot')}</tbody></table></div>
+      <p class="muted small">On the portal, add 11A tax and deduct 11B tax for advances; amendments change only the difference.</p>
+      <h4>2. Rate-wise (net of credit notes)</h4><div class="table-wrap"><table class="gr-t">${th('GST rate %')}<tbody>
+        ${Object.keys(s.rateW).sort((a, b) => a - b).map(k => line(k + '%', s.rateW[k])).join('') || '<tr><td colspan="8" class="muted">—</td></tr>'}</tbody></table></div>
+      <h4>3. B2CS — state-wise and rate-wise (Table 7)</h4><div class="table-wrap"><table class="gr-t">${th('Place of supply · rate')}<tbody>
+        ${Object.entries(s.b2cs).map(([k, x]) => line(k.replace('|', ' · ') + '%', x)).join('') || '<tr><td colspan="8" class="muted">No B2CS supplies</td></tr>'}</tbody></table></div>
+      <h4>4. Nil rated, exempted and non-GST (Table 8)</h4><div class="table-wrap"><table class="gr-t"><thead><tr><th></th><th class="r">Nil rated</th><th class="r">Exempted</th><th class="r">Non-GST</th></tr></thead><tbody>
+        ${[['Inter-state to registered', 'Inter', 'Reg'], ['Intra-state to registered', 'Intra', 'Reg'], ['Inter-state to unregistered', 'Inter', 'Unreg'], ['Intra-state to unregistered', 'Intra', 'Unreg']]
+          .map(([l, io, rg]) => `<tr><td>${l}</td>${['Nil rated', 'Exempted', 'Non-GST'].map(k => `<td class="r">${t8(io, rg, k)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>
+      <h4>5. HSN summary (Table 12)</h4><div class="table-wrap"><table class="gr-t"><thead><tr><th>B2B / B2C</th><th>HSN / SAC</th><th class="r">Rate</th><th>UQC</th><th class="r">Qty</th><th class="r">Taxable</th><th class="r">IGST</th><th class="r">CGST</th><th class="r">SGST</th><th class="r">Cess</th></tr></thead><tbody>
+        ${Object.entries(s.hsn).sort().map(([k, x]) => { const [tb, h, r, u] = k.split('|'); return `<tr><td>${tb}</td><td>${esc(h)}</td><td class="r">${r}%</td><td>${esc(u)}</td><td class="r">${fmt(x.q)}</td><td class="r">${fmt(x.t)}</td><td class="r">${fmt(x.ig)}</td><td class="r">${fmt(x.cg)}</td><td class="r">${fmt(x.sg)}</td><td class="r">${fmt(x.cs)}</td></tr>`; }).join('') || '<tr><td colspan="10" class="muted">—</td></tr>'}</tbody></table></div>
+      <h4>6. Documents issued (Table 13)</h4><div class="table-wrap"><table class="gr-t"><thead><tr><th>Nature of document</th><th>From</th><th>To</th><th class="r">Total</th><th class="r">Cancelled</th><th class="r">Net</th></tr></thead><tbody>
+        ${s.docs.filter(d => d.total).map(d => `<tr><td>${esc(d.nat)}</td><td>${esc(d.from)}</td><td>${esc(d.to)}</td><td class="r">${d.total}</td><td class="r">${d.cancelled || 0}</td><td class="r">${d.net}</td></tr>`).join('') || '<tr><td colspan="6" class="muted">—</td></tr>'}</tbody></table></div>`;
+  }
+  const draw = () => { if (COLS[g1Tab]) drawGrid(g1Tab); else if (g1Tab === 'docs') drawDocs(); else drawSummary(); status(); };
+
+  // ----- toolbar -----
+  o.addEventListener('click', async e => {
+    const b = e.target.closest('button'); if (!b) return; const d = b.dataset;
+    if (d.g1t) { g1Tab = d.g1t; $$('[data-g1t]', o).forEach(x => x.classList.toggle('on', x === b)); draw(); }
+    if (d.g1add) { for (let i = 0; i < 20; i++) D[g1Tab].push({}); drawGrid(g1Tab); }
+    if (d.g1del != null) { D[g1Tab].splice(+d.g1del, 1); dirty(); drawGrid(g1Tab); }
+    if ('g1dl' in d) { const a = document.createElement('a'); a.href = 'gstr1-entry-template.xlsx'; a.download = `GSTR1-entry-${slug(c.name)}-${row.period.slice(0, 7)}.xlsx`; document.body.appendChild(a); a.click(); a.remove(); }
+    if ('g1up' in d) {
+      const f = await new Promise(res => { const i = document.createElement('input'); i.type = 'file'; i.accept = '.xlsx,.xls'; i.onchange = () => res(i.files[0]); i.click(); });
+      if (!f) return;
+      try {
+        const g = G1.fromWorkbook(await readSheets(f));
+        if (g.error) return toast(g.error, true);
+        if (g.gstin && g.gstin !== c.gstin && !confirm(`The template's Setup sheet has GSTIN ${g.gstin}, but this client is ${c.gstin}. Use it anyway?`)) return;
+        if ((D.sales.some(r => Object.keys(r).length) || D.amend.some(r => Object.keys(r).length)) && !confirm('Replace the rows already entered here with the rows from this file?')) return;
+        Object.assign(D, { sales: g.sales, amend: g.amend, adv: g.adv, docs: g.docs.length ? g.docs : D.docs }); dirty(); draw();
+        toast(`${g.sales.length} sales, ${g.amend.length} amendment, ${g.adv.length} advance rows loaded — check and Save`);
+      } catch (err) { toast('Could not read the file: ' + friendly(err), true); }
+    }
+    if ('g1xl' in d) {
+      const X = await loadXlsx(), s = sm(), C = calc(), wbk = X.utils.book_new();
+      const sheet = (tab, name) => { const cols = COLS[tab], au = AUTO[tab];
+        const aoa = [[...cols.map(x => x[1]), ...au.map(x => x[1]), 'Check']];
+        C[tab].forEach(({ row: r, x }) => { if (!x) return; const v = { sc: x.st, st: x.st, io: x.inter ? 'Inter' : 'Intra', ig: x.ig, cg: x.cg, sg: x.sg, val: x.val, table: x.table };
+          aoa.push([...cols.map(col => r[col[0]] ?? ''), ...au.map(([k]) => v[k] ?? ''), x.check]); });
+        X.utils.book_append_sheet(wbk, X.utils.aoa_to_sheet(aoa), name); };
+      sheet('sales', 'Sales'); sheet('amend', 'Amendments'); sheet('adv', 'Advances');
+      const sum = [['GSTR-1 table', 'Rows', 'Taxable / value', 'IGST', 'CGST', 'SGST', 'Cess']];
+      Object.entries(s.tables).forEach(([k, x]) => sum.push([G1_LABEL[k] || k, x.n, x.t, x.ig, x.cg, x.sg, x.cs]));
+      sum.push(['Tax payable this month', '', s.payable.t, s.payable.ig, s.payable.cg, s.payable.sg, s.payable.cs], [], ['HSN', 'B2B/B2C', 'Rate', 'UQC', 'Qty', 'Taxable', 'IGST', 'CGST', 'SGST', 'Cess']);
+      Object.entries(s.hsn).forEach(([k, x]) => { const [tb, h, r, u] = k.split('|'); sum.push([h, tb, +r, u, x.q, x.t, x.ig, x.cg, x.sg, x.cs]); });
+      sum.push([], ['Documents', 'From', 'To', 'Total', 'Cancelled', 'Net']); s.docs.filter(x => x.total).forEach(x => sum.push([x.nat, x.from, x.to, x.total, x.cancelled, x.net]));
+      X.utils.book_append_sheet(wbk, X.utils.aoa_to_sheet(sum), 'Summary');
+      X.writeFile(wbk, `GSTR1-${slug(c.name)}-${row.period.slice(0, 7)}.xlsx`);
+    }
+    if ('g1save' in d) {
+      const clean = list => list.filter(r => Object.keys(r).length);
+      const g1 = { sales: clean(D.sales), amend: clean(D.amend), adv: clean(D.adv), docs: D.docs.filter(x => x.from || x.to || x.total || x.cancelled), at: new Date().toISOString(), by: me.id };
+      const reg = G1.toRegister(G1.calcSales(g1.sales, own, c.gstin));
+      const cur = getRow().sales;
+      const patch = { g1 };
+      if (!cur || cur.source === 'g1' || confirm('Also use these entries as the sales register for the draft GSTR-3B? (This replaces the uploaded sales register.)'))
+        patch.sales = reg.length ? { rows: reg, file: 'GSTR-1 entry', source: 'g1', at: g1.at, by: me.id } : null;
+      b.disabled = true;
+      try { await save(patch); D.dirty = false; toast('GSTR-1 entry saved'); }
+      catch (err) { toast(friendly(err), true); }
+      finally { b.disabled = false; }
+    }
+  });
+  draw();
+}
+
 // expose pure helpers for testing
-window.__tracker = { GR, gstr3bFromApi, periodToMonth, strongPassword, periodFor, dueDateFor, parseCSV, toCSV, gstLateFee, gstInterest, tdsCalc, rocCalc, monthsSpan, tdsDepositDue };
+window.__tracker = { G1, GR, gstr3bFromApi, periodToMonth, strongPassword, periodFor, dueDateFor, parseCSV, toCSV, gstLateFee, gstInterest, tdsCalc, rocCalc, monthsSpan, tdsDepositDue };
 start();
 })();
