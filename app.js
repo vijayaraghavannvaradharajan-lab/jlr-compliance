@@ -3045,7 +3045,7 @@ const GR = (() => {
       if (Math.abs(r.v || 0) > Math.abs(x.v || 0)) x.v = r.v; x.na = x.na && r.na || undefined; });
     return out;
   }
-  function reconcile(books, b2, tol = 1) {
+  function reconcile(books, b2, tol = 10) {
     books = mergeDocs(books); b2 = mergeDocs(b2);
     const key = r => r.g + '|' + normInv(r.i), dkey = r => r.g + '|' + digits(r.i);
     const idx = new Map(), didx = new Map();
@@ -3090,6 +3090,123 @@ const GR = (() => {
 })();
 
 /* =====================================================================
+   GSTR-2B RECONCILIATION  - decisions, carry-forward, supplier follow-up, IMS
+   ===================================================================== */
+const RECO = (() => {
+  const { r2, tax, normInv, mergeDocs } = GR;
+  const TOL = 10;                                                               // ₹10 per document = rounding
+  const dig = s => String(s ?? '').replace(/\D/g, '').replace(/^0+(?=.)/, '');
+  const keyOf = d => `${(d && d.g) || ''}|${normInv(d && d.i)}`;
+  const MN = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const monthName = p => p ? `${MN[+p.slice(5, 7) - 1]} ${p.slice(0, 4)}` : '';
+  const DEC = {
+    mismatch: [['acc2b', 'Claim as per 2B'], ['accbooks', 'Supplier to amend — follow up'], ['reject', 'Wrong document — reject in IMS'], ['ignore', 'Known difference — claim as per 2B']],
+    books_only: [['follow', 'Follow up supplier'], ['later', 'Supplier filing late — claim when in 2B'], ['noclaim', 'Do not claim (ineligible / reversed)']],
+    '2b_only': [['addbooks', 'Missed in books — add & claim'], ['notours', 'Not our purchase — reject in IMS'], ['hold', 'Keep pending — check with client']]
+  };
+  const decLabel = (st, a) => ((DEC[st] || []).find(o => o[0] === a) || [])[1] || '';
+  // last date to claim ITC (Sec 16(4)): 30 November after the end of the financial year
+  const deadline = p => { const y = +p.slice(0, 4), m = +p.slice(5, 7); return `${m >= 4 ? y + 1 : y}-11-30`; };
+
+  // suggested IMS action for a 2B document
+  function ims(it, d) {
+    const x = it.x, a = d && d.a; if (!x) return null;
+    if (x.rc) return { a: 'NA', why: 'Reverse charge — not in IMS' };
+    if (/IMP|ISD/.test(x.src || '')) return { a: 'NA', why: 'Import / ISD — not in IMS' };
+    if (it.st === 'matched') return { a: 'Accept', why: 'Matches books' };
+    if (it.st === 'not_avail') return { a: 'Accept', why: 'Matches books — ITC not available, do not claim' };
+    if (it.st === 'carried') return { a: 'Accept', why: `Booked in ${monthName(it.from)}` };
+    if (it.st === 'mismatch') return a === 'acc2b' || a === 'ignore' ? { a: 'Accept', why: 'Difference accepted' }
+      : a === 'reject' ? { a: 'Reject', why: 'Wrong document' } : { a: 'Pending', why: a === 'accbooks' ? 'Waiting for supplier to amend' : 'Decide on the difference first' };
+    if (it.st === '2b_only') return a === 'addbooks' ? { a: 'Accept', why: 'Missed in books' } : a === 'notours' ? { a: 'Reject', why: 'Not our purchase' }
+      : { a: 'Pending', why: a === 'hold' ? 'Checking with client' : 'Not in books — decide' };
+    return null;
+  }
+
+  // invoices in books but missing from 2B in earlier months: did they come in a later 2B?
+  function carry(hist, cur) {
+    // per month: the 2B documents that did not match that month's own books (only those can belong to an earlier month)
+    const seq = [...(hist || []), cur].map(m => { const P = (m.purchases || {}).rows || [], B = ((m.gstr2b || {}).rows || []).filter(x => !/IMP|ISD/.test(x.src || ''));
+      return { p: m.period, B: P.length ? GR.reconcile(P, B, TOL).items.filter(it => it.st === '2b_only').map(it => it.x) : mergeDocs(B) }; });
+    const last = seq.length - 1, usedNow = new Map(), out = { now: [], missing: [], cleared: [] };
+    (hist || []).forEach((m, hi) => {
+      const P = (m.purchases || {}).rows || [], B = (m.gstr2b || {}).rows || []; if (!P.length || !B.length) return;
+      const dec = (m.reco || {}).dec || {};
+      GR.reconcile(P, B, TOL).items.filter(it => it.st === 'books_only' && !it.b.rc).forEach(it => {
+        const k = keyOf(it.b), d = dec[k] || {}; if (d.a === 'noclaim') return;
+        let found = null;
+        for (let j = hi + 1; j <= last && !found; j++) {
+          const xi = seq[j].B.findIndex((x, n) => x.g === it.b.g && !!x.cn === !!it.b.cn && (normInv(x.i) === normInv(it.b.i) || (dig(x.i) && dig(x.i) === dig(it.b.i))) && !(j === last && usedNow.has(n)));
+          if (xi >= 0) found = { j, xi, x: seq[j].B[xi] };
+        }
+        const e = { b: it.b, from: m.period, k, note: d.note || '', a: d.a || '', deadline: deadline(m.period) };
+        if (!found) out.missing.push(e);
+        else if (found.j === last) { usedNow.set(found.xi, e); out.now.push({ ...e, x: found.x }); }
+        else out.cleared.push({ ...e, x: found.x, in: seq[found.j].p });
+      });
+    });
+    out.nowByKey = new Map([...usedNow].map(([n, e]) => [keyOf(seq[last].B[n]), e]));
+    return out;
+  }
+
+  // apply carry-forward to this month's items and add keys
+  function items(rec, cf) {
+    return rec.items.map(it => {
+      const k = keyOf(it.b || it.x);
+      if (it.st === '2b_only' && cf && cf.nowByKey.has(k)) { const e = cf.nowByKey.get(k); return { ...it, st: 'carried', k, from: e.from, eb: e.b }; }
+      return { ...it, k };
+    });
+  }
+  function groups(list) { const G = {}; list.forEach(it => { const g = G[it.st] = G[it.st] || { n: 0, tax: 0 }; g.n++; g.tax = r2(g.tax + tax(it.b || it.x)); }); return G; }
+
+  // ITC to claim this month after the decisions
+  function claim(list, dec, b2rows) {
+    const Z = () => ({ t: 0, ig: 0, cg: 0, sg: 0, cs: 0 }), add = (a, o) => { for (const f in a) a[f] = r2(a[f] + ((o && o[f]) || 0)); };
+    const c = Z(), held = Z(), carried = Z(), other = Z(), undecided = [];
+    list.forEach(it => {
+      const a = (dec[it.k] || {}).a, x = it.x, b = it.b;
+      if ((x && x.rc) || (b && b.rc)) return;                                  // reverse charge — cash, see draft 3B
+      if (it.st === 'matched') add(c, x);
+      else if (it.st === 'carried') { add(c, x); add(carried, x); }
+      else if (it.st === 'mismatch') {
+        if (!a) undecided.push(it);
+        if (a === 'reject') add(held, x);
+        else if (a === 'acc2b' || a === 'ignore') add(c, x);
+        else add(c, Math.abs(tax(b)) <= Math.abs(tax(x)) ? b : x);             // until decided: the lower of books and 2B
+      } else if (it.st === '2b_only') { if (!a) undecided.push(it); if (a === 'addbooks') add(c, x); else add(held, x); }
+      else if (it.st === 'books_only') add(held, b);
+    });
+    (b2rows || []).forEach(x => { if (/IMP|ISD/.test(x.src || '') && !x.na && !x.rc) add(other, x); });
+    add(c, other);
+    return { claim: c, held, carried, other, undecided };
+  }
+
+  // suppliers to chase, with their documents
+  function suppliers(list, dec, cf) {
+    const m = new Map();
+    const add = (b, why, extra = {}) => { const g = b.g || '—', s = m.get(g) || { g, n: '', docs: [], tax: 0 }; s.docs.push({ ...b, why, ...extra }); s.tax = r2(s.tax + tax(b)); if (!s.n && b.n) s.n = b.n; m.set(g, s); };
+    list.forEach(it => { const a = (dec[it.k] || {}).a;
+      if (it.st === 'books_only' && !it.b.rc && (!a || a === 'follow')) add(it.b, 'missing');
+      if (it.st === 'mismatch' && a === 'accbooks') add(it.b, 'differs', { x2: it.x }); });
+    ((cf && cf.missing) || []).forEach(e => { if (!e.a || e.a === 'follow' || e.a === 'later') add(e.b, 'missing', { from: e.from }); });
+    return [...m.values()].sort((a, b) => b.tax - a.tax);
+  }
+  function message(s, client, period) {
+    const inr = n => '₹' + Math.round(Math.abs(n || 0)).toLocaleString('en-IN');
+    const dmy = d => /^\d{4}-\d{2}-\d{2}$/.test(d || '') ? d.split('-').reverse().join('-') : (d || '');
+    const miss = s.docs.some(d => d.why === 'missing'), diff = s.docs.some(d => d.why === 'differs');
+    const lines = s.docs.map((d, i) => `${i + 1}. ${d.cn ? 'Credit note' : 'Invoice'} ${d.i}${d.d ? ' dated ' + dmy(d.d) : ''} – taxable ${inr(d.t)}, GST ${inr(tax(d))}`
+      + (d.why === 'differs' ? ` (your GSTR-1 shows GST ${inr(tax(d.x2))})` : d.from && d.from !== period ? ` (pending since ${monthName(d.from)})` : ''));
+    const head = miss && diff ? `The following documents need your attention (checked against our GSTR-2B for ${monthName(period)}):`
+      : miss ? `The following documents issued by you are not reflecting in our GSTR-2B up to ${monthName(period)}:`
+      : `The following documents appear in your GSTR-1 with a different amount from the invoice:`;
+    return `Dear ${s.n || 'Sir/Madam'},\n\nGreetings from ${client.name}${client.gstin ? ` (GSTIN ${client.gstin})` : ''}.\n\n${head}\n\n${lines.join('\n')}\n\nTotal GST: ${inr(s.tax)}\n\n`
+      + `Kindly ${diff ? 'file / amend' : 'file'} ${s.docs.length > 1 ? 'them' : 'it'} in your GSTR-1 / IFF at the earliest so that we can take the input tax credit.\n\nThank you,\n${client.name}`;
+  }
+  return { TOL, DEC, decLabel, keyOf, ims, carry, items, groups, claim, suppliers, message, monthName, deadline };
+})();
+
+/* =====================================================================
    GST REVIEW PAGE  (#/gst)  - data in, summary out, verify
    ===================================================================== */
 async function loadXlsxFull() {
@@ -3106,7 +3223,7 @@ const prevMonth = () => { const d = new Date(); d.setDate(1); d.setMonth(d.getMo
 const periodToMonth = p => { const m = String(p || '').match(/([A-Za-z]{3})[a-z]*[\s-]+(\d{4})/); if (!m) return ''; const i = MONTHS.findIndex(x => x.toLowerCase() === m[1].toLowerCase()); return i < 0 ? '' : `${m[2]}-${pad(i + 1)}`; };
 const gTax = o => GR.tax(o || {});
 const gst$ = n => inr(Math.round(n || 0));
-let grClient = '', grMonth = prevMonth(), grTab = 'g1', grRecFilter = 'books_only';
+let grClient = '', grMonth = prevMonth(), grTab = 'g1', grRecFilter = 'books_only', grRecView = 'inv', grImsF = 'all';
 
 VIEWS.gst = async v => {
   const gClients = clients.filter(c => c.active && c.gstin && (isManager() || c.default_staff === me.id || c.id === grClient));
@@ -3122,7 +3239,7 @@ VIEWS.gst = async v => {
   const c = clientById(grClient), period = grMonth + '-01';
   const r = await safe(sb.from('gst_months').select('*').eq('client_id', grClient).eq('period', period).maybeSingle());
   if (r.error) { body.innerHTML = '<div class="card"><p class="note">GST review is not set up yet — run <b>update-gst-review.sql</b> in Supabase.</p></div>'; return; }
-  let row = r.data || { client_id: grClient, period, status: 'Draft' };
+  let row = r.data || { client_id: grClient, period, status: 'Draft' }, recoHist = null;
   const save = async patch => {
     const next = { ...row, ...patch };
     const sm = GR.summarise(next);
@@ -3154,7 +3271,7 @@ VIEWS.gst = async v => {
         ${card('gstr1', 'GSTR-1 (filed)', G1, G1 ? `Taxable ${gst$(G1.t)} · tax ${gst$(gTax(G1))}` : 'Filed totals — type in from the GSTR-1 summary',
           `<button class="btn sm" data-ent="gstr1">${G1 ? 'Edit' : 'Enter'} totals</button>`)}
       </div>
-      <div class="seg gr-tabs">${[['g1', 'GSTR-1 entry'], ['draft', 'Draft GSTR-3B'], ['recon', `2B vs books${sm.rec ? ` · ${(sm.rec.groups.books_only || {}).n || 0} at risk` : ''}`], ['checks', `GSTR-1 vs 3B${sm.checks.some(x => !x.ok) ? ' ⚠' : ''}`], ['trend', 'Trend']].map(([k, l]) => `<button data-gt="${k}" class="${grTab === k ? 'on' : ''}">${l}</button>`).join('')}</div>
+      <div class="seg gr-tabs">${[['g1', 'GSTR-1 entry'], ['draft', 'Draft GSTR-3B'], ['recon', `GSTR-2B reco${sm.rec ? ` · ${(sm.rec.groups.books_only || {}).n || 0} missing` : ''}`], ['checks', `GSTR-1 vs 3B${sm.checks.some(x => !x.ok) ? ' ⚠' : ''}`], ['trend', 'Trend']].map(([k, l]) => `<button data-gt="${k}" class="${grTab === k ? 'on' : ''}">${l}</button>`).join('')}</div>
       <div class="card" id="grOut"></div>
       <div class="card gr-verify"><label class="full">Review notes<textarea id="grNotes" rows="2" placeholder="e.g. Reversed ITC on 2 invoices missing in 2B; client informed">${esc(row.notes || '')}</textarea></label>
         <div class="toolbar" style="margin:8px 0 0"><button class="btn sm" id="grSaveNotes">Save notes</button><span class="spacer"></span>
@@ -3188,25 +3305,7 @@ VIEWS.gst = async v => {
         </tbody></table></div>
         <p class="muted small">Set-off follows Sec 49/49A and Rule 88A: IGST credit is used first (IGST, then CGST/SGST), then CGST and SGST credit. Opening balances in the credit ledger are not included — add them on the portal.</p>`;
     }
-    if (grTab === 'recon') {
-      if (!sm.rec) { o.innerHTML = '<p class="muted">Add both the purchase register and GSTR-2B to match invoices.</p>'; return; }
-      const G = sm.rec.groups, L = { matched: ['Matched', 'green'], mismatch: ['Amount differs', 'amber'], books_only: ['In books, not in 2B — ITC at risk', 'red'], '2b_only': ['In 2B, not in books', 'blue'], not_avail: ['Matched but ITC not available', 'amber'] };
-      const items = sm.rec.items.filter(x => x.st === grRecFilter);
-      o.innerHTML = `<div class="gr-groups">${Object.entries(L).map(([k, [l, col]]) => `<button class="mini ${col} ${grRecFilter === k ? 'sel' : ''}" data-rf="${k}"><span>${l}</span><b>${(G[k] || {}).n || 0}</b><small>${gst$((G[k] || {}).tax || 0)} tax</small></button>`).join('')}</div>
-        <div class="toolbar" style="margin:12px 0 8px"><b>${L[grRecFilter][0]}</b><span class="spacer"></span><button class="btn sm" id="grXl">Download Excel (all)</button></div>
-        <div class="table-wrap">${items.length ? `<table><thead><tr><th>Supplier</th><th>Invoice</th><th>Date</th><th class="r">Taxable</th><th class="r">Tax (books)</th><th class="r">Tax (2B)</th><th class="r">Difference</th></tr></thead><tbody>
-          ${items.slice(0, 500).map(x => { const d = x.b || x.x; return `<tr><td class="wrap"><b>${esc(d.n || '')}</b><div class="muted small">${esc(d.g)}</div></td><td>${esc(x.b ? x.b.i : x.x.i)}${x.how === 'loose' ? `<div class="muted small">2B: ${esc(x.x.i)}</div>` : ''}${d.cn ? ' <span class="badge">Credit note</span>' : ''}</td><td class="small">${/^\d{4}-\d{2}-\d{2}$/.test(d.d || '') ? fmtDate(d.d) : esc(d.d || '')}</td>
-            <td class="r">${gst$(d.t)}</td><td class="r">${x.b ? gst$(gTax(x.b)) : '—'}</td><td class="r">${x.x ? gst$(gTax(x.x)) : '—'}</td><td class="r ${x.diff ? 'late' : ''}">${x.diff != null ? gst$(x.diff) : ''}</td></tr>`; }).join('')}
-          </tbody></table>${items.length > 500 ? '<p class="muted small">Showing first 500 — download Excel for all.</p>' : ''}` : '<div class="empty">Nothing in this group.</div>'}</div>`;
-      $$('[data-rf]', o).forEach(b => b.onclick = () => { grRecFilter = b.dataset.rf; renderOut(sm); });
-      $('#grXl', o).onclick = async () => {
-        const X = await loadXlsx(), lab = { matched: 'Matched', mismatch: 'Amount differs', books_only: 'In books not in 2B', '2b_only': 'In 2B not in books', not_avail: 'ITC not available' };
-        const aoa = [['Status', 'Supplier GSTIN', 'Supplier', 'Invoice (books)', 'Invoice (2B)', 'Date', 'Taxable (books)', 'Taxable (2B)', 'IGST (books)', 'CGST (books)', 'SGST (books)', 'IGST (2B)', 'CGST (2B)', 'SGST (2B)', 'Tax difference']];
-        sm.rec.items.forEach(x => { const b = x.b || {}, y = x.x || {}; aoa.push([lab[x.st], b.g || y.g, b.n || y.n, b.i || '', y.i || '', b.d || y.d, b.t ?? '', y.t ?? '', b.ig ?? '', b.cg ?? '', b.sg ?? '', y.ig ?? '', y.cg ?? '', y.sg ?? '', x.diff ?? '']); });
-        const wb = X.utils.book_new(); X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet(aoa), '2B vs books');
-        X.writeFile(wb, `2B-vs-books-${slug(c.name)}-${grMonth}.xlsx`);
-      };
-    }
+    if (grTab === 'recon') { renderReco(o, sm); return; }
     if (grTab === 'checks') {
       o.innerHTML = sm.checks.length ? `<div class="table-wrap"><table><thead><tr><th>Check</th><th class="r">Taxable (A)</th><th class="r">Taxable (B)</th><th class="r">Tax (A)</th><th class="r">Tax (B)</th><th class="r">Tax difference</th><th></th></tr></thead><tbody>
         ${sm.checks.map(x => `<tr class="${x.ok ? '' : 'warn-row'}"><td>${esc(x.label)}</td><td class="r">${gst$(x.a.t)}</td><td class="r">${gst$(x.b.t)}</td><td class="r">${gst$(x.a.tax)}</td><td class="r">${gst$(x.b.tax)}</td><td class="r"><b>${gst$(x.d)}</b></td><td>${x.ok ? '<span class="pill g">OK</span>' : '<span class="pill r">Check</span>'}</td></tr>`).join('')}
@@ -3214,6 +3313,131 @@ VIEWS.gst = async v => {
         : '<p class="muted">Add at least two of: sales register, GSTR-1 totals, GSTR-3B figures.</p>';
     }
     if (grTab === 'trend') renderTrend(o);
+  }
+  // ===== GSTR-2B reconciliation tab =====
+  async function renderReco(o, sm) {
+    if (!sm.rec) { o.innerHTML = '<p class="muted">Add both the purchase register and GSTR-2B to match invoices.</p>'; return; }
+    if (!recoHist) {
+      o.innerHTML = '<div class="loading">Checking earlier months…</div>';
+      const from = new Date(period + 'T00:00:00'); from.setMonth(from.getMonth() - 18);
+      const r = await safe(sb.from('gst_months').select('period,purchases,gstr2b,reco').eq('client_id', grClient).gte('period', iso(from)).lt('period', period).order('period'));
+      recoHist = r.error ? [] : (r.data || []);
+      if (grTab !== 'recon') return;
+    }
+    const dec = (row.reco && row.reco.dec) || {}, fu = (row.reco && row.reco.fu) || {};
+    const cf = RECO.carry(recoHist, row), list = RECO.items(sm.rec, cf), G = RECO.groups(list);
+    const cl = RECO.claim(list, dec, row.gstr2b.rows), sup = RECO.suppliers(list, dec, cf);
+    const imsRows = list.map(it => ({ it, s: RECO.ims(it, dec[it.k]) })).filter(z => z.s && z.s.a !== 'NA');
+    const imsN = a => imsRows.filter(z => z.s.a === a).length;
+    const L = { matched: ['Matched', 'green'], mismatch: ['Amount differs', 'amber'], books_only: ['In books, not in 2B', 'red'], '2b_only': ['In 2B, not in books', 'blue'],
+      not_avail: ['ITC not available', 'amber'], carried: ['Earlier month, now in 2B', 'green'], cf_missing: ['Earlier months, still missing', 'red'] };
+    G.cf_missing = { n: cf.missing.length, tax: GR.r2(cf.missing.reduce((a, e) => a + gTax(e.b), 0)) };
+    if (!L[grRecFilter]) grRecFilter = 'books_only';
+    const dt = d => /^\d{4}-\d{2}-\d{2}$/.test(d || '') ? fmtDate(d) : esc(d || '');
+    const pill = a => `<span class="ims ims-${a.toLowerCase()}">${a}</span>`;
+    const decCell = it => { const opts2 = RECO.DEC[it.st]; if (!opts2) return ''; const d = dec[it.k] || {};
+      return `<select data-dec="${esc(it.k)}" class="reco-dec ${d.a ? 'set' : ''}" aria-label="Decision"><option value="">— decide —</option>${opts2.map(([v, l]) => `<option value="${v}" ${d.a === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
+        <input data-note="${esc(it.k)}" class="reco-note" value="${esc(d.note || '')}" placeholder="Note" aria-label="Note">${d.by ? `<div class="muted tiny">${esc(profName(d.by) || '')} · ${new Date(d.at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}</div>` : ''}`; };
+    const box = (l, v, cls = '') => `<div class="rc-b ${cls}"><small>${l}</small><b>${gst$(v)}</b></div>`;
+
+    o.innerHTML = `
+      <div class="rc-sum">${box('ITC available in GSTR-2B', gTax(sm.itc2b))}${box('ITC to claim (after decisions)', gTax(cl.claim), 'ok')}${box('Not claimable this month', gTax(cl.held), 'bad')}
+        ${box('From earlier months, now in 2B', gTax(cl.carried), 'ok')}${box('Earlier months, still missing', G.cf_missing.tax, G.cf_missing.n ? 'bad' : '')}</div>
+      ${cl.undecided.length ? `<p class="note warn small" style="margin:10px 0 0">${cl.undecided.length} document${cl.undecided.length > 1 ? 's need' : ' needs'} a decision (amount differs / not in books). Until then the lower of books and 2B is counted, and 2B-only documents are held back.</p>` : ''}
+      <div class="toolbar" style="margin:14px 0 10px"><div class="seg">${[['inv', 'Invoices'], ['sup', `Supplier follow-up · ${sup.length}`], ['ims', `IMS actions · ${imsN('Pending')} pending`]].map(([k, l]) => `<button data-rv="${k}" class="${grRecView === k ? 'on' : ''}">${l}</button>`).join('')}</div>
+        <span class="spacer"></span><button class="btn sm" id="grXl">Download reco (Excel)</button></div>
+      <div id="rcBody"></div>
+      <p class="muted small">A difference of up to ₹${RECO.TOL} per document is treated as rounding and counted as matched.</p>`;
+    const rb = $('#rcBody', o);
+
+    if (grRecView === 'inv') {
+      const rows = grRecFilter === 'cf_missing' ? [] : list.filter(x => x.st === grRecFilter);
+      rb.innerHTML = `<div class="gr-groups">${Object.entries(L).map(([k, [l, col]]) => `<button class="mini ${col} ${grRecFilter === k ? 'sel' : ''}" data-rf="${k}"><span>${l}</span><b>${(G[k] || {}).n || 0}</b><small>${gst$((G[k] || {}).tax || 0)} tax</small></button>`).join('')}</div>
+        <h4 style="margin:14px 0 8px">${L[grRecFilter][0]}</h4>
+        <div class="table-wrap">${grRecFilter === 'cf_missing' ? (cf.missing.length ? `<table><thead><tr><th>Supplier</th><th>Invoice</th><th>Date</th><th class="r">Taxable</th><th class="r">Tax</th><th>Booked in</th><th>Last date to claim</th><th>Note</th></tr></thead><tbody>
+          ${cf.missing.map(e => `<tr><td class="wrap"><b>${esc(e.b.n || '')}</b><div class="muted small">${esc(e.b.g)}</div></td><td>${esc(e.b.i)}</td><td class="small">${dt(e.b.d)}</td><td class="r">${gst$(e.b.t)}</td><td class="r">${gst$(gTax(e.b))}</td>
+            <td>${RECO.monthName(e.from)}</td><td class="${e.deadline < iso(new Date(Date.now() + 60 * 864e5)) ? 'late' : ''}">${fmtDate(e.deadline)}</td><td class="small">${esc(e.note || RECO.decLabel('books_only', e.a))}</td></tr>`).join('')}</tbody></table>
+          <p class="muted small">To stop tracking one, open that month and choose “Do not claim”.</p>` : '<div class="empty">Nothing pending from earlier months.</div>')
+        : rows.length ? `<table class="reco-t"><thead><tr><th>Supplier</th><th>Invoice</th><th>Date</th><th class="r">Taxable</th><th class="r">Tax (books)</th><th class="r">Tax (2B)</th><th class="r">Difference</th><th>IMS</th>${RECO.DEC[grRecFilter] ? '<th>Decision</th>' : ''}</tr></thead><tbody>
+          ${rows.slice(0, 500).map(x => { const d = x.b || x.x, s = RECO.ims(x, dec[x.k]); return `<tr><td class="wrap"><b>${esc(d.n || (x.x && x.x.n) || '')}</b><div class="muted small">${esc(d.g)}</div></td>
+            <td>${esc(x.b ? x.b.i : x.x.i)}${x.how === 'loose' ? `<div class="muted small">2B: ${esc(x.x.i)}</div>` : ''}${x.st === 'carried' ? `<div class="muted small">Booked in ${RECO.monthName(x.from)}</div>` : ''}${d.cn ? ' <span class="badge">Credit note</span>' : ''}</td><td class="small">${dt(d.d)}</td>
+            <td class="r">${gst$(d.t)}</td><td class="r">${x.b ? gst$(gTax(x.b)) : x.eb ? gst$(gTax(x.eb)) : '—'}</td><td class="r">${x.x ? gst$(gTax(x.x)) : '—'}</td><td class="r ${x.diff ? 'late' : ''}">${x.diff != null ? gst$(x.diff) : ''}</td>
+            <td>${s ? (s.a === 'NA' ? '<span class="muted small">—</span>' : pill(s.a)) : ''}</td>${RECO.DEC[grRecFilter] ? `<td class="reco-dc">${decCell(x)}</td>` : ''}</tr>`; }).join('')}
+          </tbody></table>${rows.length > 500 ? '<p class="muted small">Showing first 500 — download Excel for all.</p>' : ''}` : '<div class="empty">Nothing in this group.</div>'}</div>`;
+      $$('[data-rf]', rb).forEach(b => b.onclick = () => { grRecFilter = b.dataset.rf; renderReco(o, sm); });
+      $$('[data-dec]', rb).forEach(s => s.onchange = () => saveDec(s.dataset.dec, { a: s.value }));
+      $$('[data-note]', rb).forEach(i => i.onchange = () => saveDec(i.dataset.note, { note: i.value.trim() }));
+    }
+
+    if (grRecView === 'sup') {
+      rb.innerHTML = sup.length ? `<p class="muted small" style="margin-top:0">Suppliers whose documents are missing from 2B (this month and earlier months), or who must amend an amount. Open the message, check it, and send it from your own WhatsApp or email.</p>
+        <div class="rc-sups">${sup.map((s, n) => { const f = fu[s.g]; return `<div class="rc-sup"><div class="rc-sup-h"><div><b>${esc(s.n || 'Supplier')}</b><div class="muted small">${esc(s.g)} · ${s.docs.length} document${s.docs.length > 1 ? 's' : ''} · GST ${gst$(s.tax)}</div></div><span class="spacer"></span>
+          ${f ? `<span class="pill g small">Followed up ${new Date(f.at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}${f.n > 1 ? ` · ${f.n} times` : ''}</span>` : '<span class="pill a small">Not followed up</span>'}</div>
+          <ul class="rc-docs">${s.docs.map(d => `<li>${esc(d.i)} · ${dt(d.d)} · GST ${gst$(gTax(d))}${d.why === 'differs' ? ' · <span class="late">amount differs</span>' : d.from && d.from !== period ? ` · <span class="muted">since ${RECO.monthName(d.from)}</span>` : ''}</li>`).join('')}</ul>
+          <div class="toolbar" style="margin:8px 0 0"><button class="btn sm" data-sm="${n}">View message</button><a class="btn sm" target="_blank" rel="noopener" href="${waShare(RECO.message(s, c, period))}">WhatsApp</a>
+          <a class="btn sm" href="mailto:?subject=${encodeURIComponent(`GST invoices not in GSTR-2B – ${c.name}`)}&body=${encodeURIComponent(RECO.message(s, c, period))}">Email</a>
+          <span class="spacer"></span><button class="btn sm primary" data-fu="${esc(s.g)}">✓ Mark followed up</button></div></div>`; }).join('')}</div>`
+        : '<div class="empty">No supplier follow-up needed — everything in books is in 2B.</div>';
+      $$('[data-sm]', rb).forEach(b => b.onclick = () => { const s = sup[+b.dataset.sm], txt = RECO.message(s, c, period);
+        const m = modal(`Message to ${s.n || s.g}`, `<textarea rows="16" style="width:100%" id="rcMsg">${esc(txt)}</textarea>`, { extra: '<button class="btn" id="rcCopy">Copy</button>', wide: true });
+        $('#rcCopy', m.el).onclick = () => copySecret($('#rcMsg', m.el).value, 'Message copied'); });
+      $$('[data-fu]', rb).forEach(b => b.onclick = async () => { const g = b.dataset.fu, prev = fu[g];
+        await saveReco(r => { r.fu = { ...(r.fu || {}), [g]: { at: new Date().toISOString(), by: me.id, n: ((prev && prev.n) || 0) + 1 } }; }); toast('Follow-up noted'); });
+    }
+
+    if (grRecView === 'ims') {
+      const shown = imsRows.filter(z => grImsF === 'all' || z.s.a === grImsF);
+      rb.innerHTML = `<div class="toolbar" style="margin:0 0 10px"><div class="seg">${[['all', `All · ${imsRows.length}`], ['Accept', `Accept · ${imsN('Accept')}`], ['Pending', `Pending · ${imsN('Pending')}`], ['Reject', `Reject · ${imsN('Reject')}`]].map(([k, l]) => `<button data-imf="${k}" class="${grImsF === k ? 'on' : ''}">${l}</button>`).join('')}</div></div>
+        <div class="table-wrap">${shown.length ? `<table><thead><tr><th>Supplier</th><th>Document</th><th>Date</th><th class="r">Taxable</th><th class="r">Tax</th><th>Suggested action</th><th>Why</th></tr></thead><tbody>
+          ${shown.map(({ it, s }) => `<tr><td class="wrap"><b>${esc(it.x.n || '')}</b><div class="muted small">${esc(it.x.g)}</div></td><td>${esc(it.x.i)}${it.x.cn ? ' <span class="badge">Credit note</span>' : ''}</td><td class="small">${dt(it.x.d)}</td>
+            <td class="r">${gst$(it.x.t)}</td><td class="r">${gst$(gTax(it.x))}</td><td>${pill(s.a)}</td><td class="small">${esc(s.why)}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">Nothing here.</div>'}</div>
+        <p class="muted small">Take these actions on the GST portal (Returns → Invoice Management System) before filing GSTR-3B. Documents left with no action are treated as accepted. Decide “Amount differs” and “In 2B, not in books” rows in the Invoices view to turn Pending into Accept or Reject.</p>`;
+      $$('[data-imf]', rb).forEach(b => b.onclick = () => { grImsF = b.dataset.imf; renderReco(o, sm); });
+    }
+
+    $$('[data-rv]', o).forEach(b => b.onclick = () => { grRecView = b.dataset.rv; renderReco(o, sm); });
+    $('#grXl', o).onclick = () => recoExcel({ list, dec, cf, cl, sup, sm, fu }).catch(e => toast(friendly(e), true));
+
+    async function saveReco(fn) {
+      const reco = JSON.parse(JSON.stringify(row.reco || {})); fn(reco);
+      const { error } = await safe(sb.from('gst_months').update({ reco }).eq('client_id', grClient).eq('period', period));
+      if (error) { toast(/reco/.test(error.message || '') ? 'Run update-gstr2b-reco.sql in Supabase first' : friendly(error), true); return false; }
+      row.reco = reco; renderReco(o, sm); return true;
+    }
+    function saveDec(k, patch) {
+      return saveReco(r => { r.dec = r.dec || {}; const cur = { ...(r.dec[k] || {}), ...patch, by: me.id, at: new Date().toISOString() };
+        if (!cur.a && !cur.note) delete r.dec[k]; else r.dec[k] = cur; });
+    }
+  }
+  async function recoExcel({ list, dec, cf, cl, sup, sm, fu }) {
+    const X = await loadXlsx(), wb = X.utils.book_new(), mLabel = RECO.monthName(period);
+    const lab = { matched: 'Matched', mismatch: 'Amount differs', books_only: 'In books, not in 2B', '2b_only': 'In 2B, not in books', not_avail: 'ITC not available', carried: 'Earlier month, now in 2B' };
+    const t4 = o => [o.ig, o.cg, o.sg, o.cs, gTax(o)];
+    const sheet = (name, aoa, widths) => { const ws = X.utils.aoa_to_sheet(aoa); if (widths) ws['!cols'] = widths.map(w => ({ wch: w })); X.utils.book_append_sheet(wb, ws, name); };
+    const G = RECO.groups(list);
+    sheet('Summary', [[`GSTR-2B reconciliation – ${c.name} (${c.gstin}) – ${mLabel}`], [`Prepared ${new Date().toLocaleDateString('en-IN')} by ${me.full_name || me.email}`], [],
+      ['', 'IGST', 'CGST', 'SGST', 'Cess', 'Total'],
+      ['ITC available in GSTR-2B', ...t4(sm.itc2b)], ['ITC to claim (after decisions)', ...t4(cl.claim)], ['  incl. earlier months now in 2B', ...t4(cl.carried)], ['  incl. imports / ISD', ...t4(cl.other)],
+      ['Not claimable this month', ...t4(cl.held)], [],
+      ['Group', 'Documents', 'Tax'], ...Object.keys(lab).map(k => [lab[k], (G[k] || {}).n || 0, (G[k] || {}).tax || 0]),
+      ['Earlier months, still missing', cf.missing.length, GR.r2(cf.missing.reduce((a, e) => a + gTax(e.b), 0))], [],
+      [`Tolerance: ₹${RECO.TOL} per document. Undecided differences are counted at the lower of books and 2B.`]], [40, 14, 14, 14, 12, 14]);
+    const rec = [['Status', 'Supplier GSTIN', 'Supplier', 'Invoice (books)', 'Invoice (2B)', 'Date', 'Taxable (books)', 'Taxable (2B)', 'Tax (books)', 'Tax (2B)', 'Difference', 'IGST (2B)', 'CGST (2B)', 'SGST (2B)', 'Decision', 'Note', 'IMS action']];
+    list.forEach(x => { const b = x.b || x.eb || {}, y = x.x || {}, d = dec[x.k] || {}, s = RECO.ims(x, d);
+      rec.push([lab[x.st] + (x.st === 'carried' ? ` (${RECO.monthName(x.from)})` : ''), b.g || y.g, b.n || y.n, b.i || '', y.i || '', b.d || y.d, b.t ?? '', y.t ?? '', x.b || x.eb ? gTax(b) : '', x.x ? gTax(y) : '', x.diff ?? '', y.ig ?? '', y.cg ?? '', y.sg ?? '',
+        RECO.decLabel(x.st, d.a), d.note || '', s ? (s.a === 'NA' ? 'Not in IMS' : s.a) : '']); });
+    sheet('Reconciliation', rec, [22, 17, 28, 16, 16, 11, 13, 13, 11, 11, 10, 10, 10, 10, 30, 24, 10]);
+    sheet('Earlier months', [['Status', 'Booked in', 'Supplier GSTIN', 'Supplier', 'Invoice', 'Date', 'Taxable', 'Tax', 'Now in 2B of', 'Last date to claim', 'Note'],
+      ...cf.missing.map(e => ['Still missing', RECO.monthName(e.from), e.b.g, e.b.n, e.b.i, e.b.d, e.b.t, gTax(e.b), '', e.deadline.split('-').reverse().join('-'), e.note]),
+      ...cf.now.map(e => ['Now in 2B – claim', RECO.monthName(e.from), e.b.g, e.b.n, e.b.i, e.b.d, e.b.t, gTax(e.x), mLabel, '', e.note]),
+      ...cf.cleared.map(e => ['Came in a later 2B', RECO.monthName(e.from), e.b.g, e.b.n, e.b.i, e.b.d, e.b.t, gTax(e.x), RECO.monthName(e.in), '', e.note])], [20, 11, 17, 28, 16, 11, 13, 11, 13, 16, 24]);
+    sheet('Supplier follow-up', [['Supplier GSTIN', 'Supplier', 'Document', 'Date', 'Taxable', 'GST', 'Issue', 'Since', 'Last follow-up'],
+      ...sup.flatMap(s => s.docs.map(d => [s.g, s.n, d.i, d.d, d.t, gTax(d), d.why === 'differs' ? 'Amount differs' : 'Not in 2B', RECO.monthName(d.from || period),
+        fu[s.g] ? new Date(fu[s.g].at).toLocaleDateString('en-IN') : '']))], [17, 28, 16, 11, 13, 11, 14, 10, 13]);
+    sheet('IMS actions', [['Supplier GSTIN', 'Supplier', 'Document', 'Type', 'Date', 'Taxable', 'Tax', 'Suggested action', 'Why'],
+      ...list.filter(x => x.x).map(x => ({ x, s: RECO.ims(x, dec[x.k]) })).filter(z => z.s && z.s.a !== 'NA')
+        .map(({ x, s }) => [x.x.g, x.x.n, x.x.i, x.x.cn ? 'Credit note' : 'Invoice', x.x.d, x.x.t, gTax(x.x), s.a, s.why])], [17, 28, 16, 11, 11, 13, 11, 14, 36]);
+    X.writeFile(wb, `GSTR-2B-reco-${slug(c.name)}-${grMonth}.xlsx`);
   }
   async function renderTrend(o) {
     o.innerHTML = '<div class="loading">Loading…</div>';
@@ -3840,6 +4064,6 @@ async function downloadGstWorkings(c, period) {
 }
 
 // expose pure helpers for testing
-window.__tracker = { fillGstWorkings, G1, GR, gstr3bFromApi, periodToMonth, strongPassword, periodFor, dueDateFor, parseCSV, toCSV, gstLateFee, gstInterest, tdsCalc, rocCalc, monthsSpan, tdsDepositDue };
+window.__tracker = { fillGstWorkings, G1, GR, RECO, gstr3bFromApi, periodToMonth, strongPassword, periodFor, dueDateFor, parseCSV, toCSV, gstLateFee, gstInterest, tdsCalc, rocCalc, monthsSpan, tdsDepositDue };
 start();
 })();
