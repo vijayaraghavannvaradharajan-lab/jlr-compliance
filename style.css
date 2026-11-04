@@ -491,3 +491,25 @@ tr.fu-due-row td:first-child{box-shadow:inset 3px 0 0 var(--amber)}
 .ok-t{color:var(--green);font-weight:600}
 .badge.lg-act{background:var(--amber-soft);color:var(--amber)}
 @media (max-width:560px){.lg-row{grid-template-columns:80px 1fr}.lg-row .btn{grid-column:2;justify-self:start}}
+
+/* ---------- GST review (v10) ---------- */
+.gr-status{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:14px 18px}
+.gr-srcs{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;margin:0 0 16px}
+.gr-src{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:12px 14px;display:flex;flex-direction:column;gap:6px}
+.gr-src.ok{border-color:color-mix(in srgb,var(--green) 45%,var(--line))}
+.gr-src-h{display:flex;align-items:center;gap:8px}
+.gr-dot{width:10px;height:10px;border-radius:50%;background:var(--line);flex:none}.gr-src.ok .gr-dot{background:var(--green)}
+.gr-src-b{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:auto;padding-top:4px}
+.gr-tabs{margin-bottom:12px;flex-wrap:wrap}
+table.gr-t td.r,table.gr-t th.r{text-align:right;white-space:nowrap}
+tr.sub td{color:var(--muted);font-size:.85rem}
+tr.tot td{border-top:2px solid var(--line);font-size:1rem}
+tr.warn-row td{background:var(--amber-soft)}
+.gr-groups{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px}
+.gr-groups .mini{border:0;cursor:pointer;text-align:left;font:inherit}
+.gr-groups .mini b{font-size:1.6rem}.gr-groups .mini small{font-weight:600;opacity:.85}
+.gr-groups .mini.sel{outline:3px solid currentColor;outline-offset:-3px}
+.gr-bar{height:6px;background:var(--line);border-radius:99px;overflow:hidden;margin-bottom:3px;max-width:160px}.gr-bar i{display:block;height:100%;background:var(--blue);border-radius:99px}
+.form-grid.g5{grid-template-columns:repeat(5,minmax(0,1fr))}
+@media (max-width:700px){.form-grid.g5{grid-template-columns:1fr 1fr}}
+.gr-verify textarea{width:100%}
