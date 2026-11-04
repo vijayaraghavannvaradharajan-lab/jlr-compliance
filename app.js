@@ -237,21 +237,61 @@ async function start() {
   session ? boot() : showLogin();
 }
 
+// ---------- sign-in screen: themed panel with animation + theme picker ----------
+function authShell(formHtml) {
+  const T = window.TrackerTheme, cur = T ? T.get() : { skin: 'original', anim: 'full' };
+  const chips = [['GSTR-1', 'Filed', 'ok'], ['GSTR-3B', 'Due 20th', 'due'], ['TDS 26Q', 'In progress', 'wip'], ['AOC-4', 'Data received', 'ok'], ['MGT-7', 'Due 29th', 'due'], ['GSTR-2B', 'Reconciled', 'ok']];
+  return `<div class="login">
+    <section class="lg-art" aria-hidden="true">
+      <div class="lg-fx"><i></i><i></i><i></i><i></i><i></i></div>
+      <div class="lg-art-in">
+        <div class="lg-brand">${esc(cfg.FIRM_NAME || 'Office Work Tracker')}</div>
+        <h1 class="lg-head">Every GST, TDS &amp; MCA deadline <span>on track.</span></h1>
+        <p class="lg-sub">Returns, reconciliations, notices and client follow-ups — one place for the whole team.</p>
+        <div class="lg-board">
+          <svg class="lg-ring" viewBox="0 0 42 42"><circle cx="21" cy="21" r="15.9" pathLength="100"/><circle cx="21" cy="21" r="15.9" pathLength="100" stroke-dasharray="78 100"/></svg>
+          <div class="lg-ring-t"><b>78%</b><small>filed this month</small></div>
+          <div class="lg-chips">${chips.map(([n, s, k], i) => `<span class="lg-chip ${k}" style="--i:${i}"><b>${n}</b>${s}</span>`).join('')}</div>
+        </div>
+      </div>
+    </section>
+    <section class="lg-side">
+      ${formHtml}
+      <div class="lg-theme">
+        <span class="muted small">Theme</span>
+        <div class="lg-dots">${(T ? T.SKINS : []).map(([k, l, c]) => `<button type="button" class="lg-dot ${cur.skin === k ? 'on' : ''}" data-lsk="${k}" title="${l}" aria-label="${l} theme" aria-pressed="${cur.skin === k}" style="--c:${c}"></button>`).join('')}</div>
+        <button type="button" class="lg-anim link small" data-lanim title="Animation: Full / Subtle / Off">${{ full: '✦ Animation on', subtle: '✧ Subtle', off: '○ Animation off' }[cur.anim] || '✦ Animation on'}</button>
+      </div>
+    </section></div>`;
+}
+function wireAuthShell() {
+  const T = window.TrackerTheme; if (!T) return;
+  $$('[data-lsk]').forEach(b => b.onclick = () => { T.setSkin(b.dataset.lsk);
+    $$('[data-lsk]').forEach(x => { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', x === b); }); });
+  const ab = $('[data-lanim]');
+  if (ab) ab.onclick = () => { const order = ['full', 'subtle', 'off'], n = order[(order.indexOf(T.get().anim) + 1) % 3]; T.setAnim(n);
+    ab.textContent = { full: '✦ Animation on', subtle: '✧ Subtle', off: '○ Animation off' }[n]; };
+  $$('[data-eye]').forEach(b => b.onclick = () => { const i = b.previousElementSibling, show = i.type === 'password'; i.type = show ? 'text' : 'password';
+    b.textContent = show ? 'Hide' : 'Show'; b.setAttribute('aria-label', show ? 'Hide password' : 'Show password'); });
+}
+const pwField = (label, name, extra) => `<label>${label}<span class="pw-wrap"><input name="${name}" type="password" ${extra}><button type="button" class="pw-eye" data-eye aria-label="Show password">Show</button></span></label>`;
+
 function showLogin(msg) {
-  root.innerHTML = `<div class="auth-wrap"><form class="card auth" id="loginForm">
-    <div class="brand">${esc(cfg.FIRM_NAME || 'Office Work Tracker')}</div>
+  root.innerHTML = authShell(`<form class="card auth" id="loginForm">
+    <div class="auth-k">Welcome back</div>
     <h2>Sign in</h2>${msg ? `<p class="note warn">${esc(msg)}</p>` : ''}
-    <label>Email<input name="email" type="email" required autocomplete="username"></label>
-    <label>Password<input name="password" type="password" required autocomplete="current-password"></label>
+    <label>Email<input name="email" type="email" required autocomplete="username" placeholder="you@firm.in"></label>
+    ${pwField('Password', 'password', 'required autocomplete="current-password"')}
     <button class="btn primary full" type="submit">Sign in</button>
-    <button class="link small" type="button" id="forgot">Forgot password?</button></form></div>`;
+    <button class="link small" type="button" id="forgot">Forgot password?</button></form>`);
+  wireAuthShell();
   const f = $('#loginForm');
   f.onsubmit = async e => {
     e.preventDefault();
     const b = $('button[type=submit]', f); b.disabled = true; b.textContent = 'Signing in…';
     const { error } = await sb.auth.signInWithPassword({ email: f.email.value.trim(), password: f.password.value });
-    if (error) { toast(error.message, true); b.disabled = false; b.textContent = 'Sign in'; }
-    else boot();
+    if (error) { toast(error.message, true); b.disabled = false; b.textContent = 'Sign in'; f.classList.remove('shake'); void f.offsetWidth; f.classList.add('shake'); }
+    else { f.classList.add('done'); boot(); }
   };
   $('#forgot').onclick = async () => {
     const email = f.email.value.trim();
@@ -262,11 +302,12 @@ function showLogin(msg) {
 }
 
 function showSetPassword() {
-  root.innerHTML = `<div class="auth-wrap"><form class="card auth" id="pwForm">
-    <div class="brand">${esc(cfg.FIRM_NAME || 'Office Work Tracker')}</div><h2>Set a new password</h2>
-    <label>New password<input name="p1" type="password" minlength="8" required autocomplete="new-password"></label>
-    <label>Repeat password<input name="p2" type="password" minlength="8" required autocomplete="new-password"></label>
-    <button class="btn primary full">Save password</button></form></div>`;
+  root.innerHTML = authShell(`<form class="card auth" id="pwForm">
+    <div class="auth-k">Account</div><h2>Set a new password</h2>
+    ${pwField('New password', 'p1', 'minlength="8" required autocomplete="new-password"')}
+    ${pwField('Repeat password', 'p2', 'minlength="8" required autocomplete="new-password"')}
+    <button class="btn primary full">Save password</button></form>`);
+  wireAuthShell();
   $('#pwForm').onsubmit = async e => {
     e.preventDefault();
     const f = e.target;
