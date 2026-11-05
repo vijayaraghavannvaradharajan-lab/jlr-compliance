@@ -3443,7 +3443,7 @@ VIEWS.gst = async v => {
   const save = async patch => {
     const next = { ...row, ...patch };
     const sm = GR.summarise(next);
-    patch.summary = { ...sm.trend, sales_n: sm.counts.sales, b2b_n: sm.counts.b2b, cash_draft: sm.cashTotal, cash: sm.cash, at: new Date().toISOString() };
+    patch.summary = { ...sm.trend, sales_n: sm.counts.sales, b2b_n: sm.counts.b2b, cash_draft: sm.cashTotal, cash: sm.cash, cash_total: sm.trend.cash, at: new Date().toISOString() };
     const { data } = await must(sb.from('gst_months').upsert({ client_id: grClient, period, ...patch }, { onConflict: 'client_id,period' }).select().single());
     row = data || { ...next, ...patch }; render();
   };
@@ -3645,7 +3645,8 @@ VIEWS.gst = async v => {
     const d = new Date(period + 'T00:00:00'); d.setMonth(d.getMonth() - 5);
     const { data } = await must(sb.from('gst_months').select('period,summary,status').eq('client_id', grClient).gte('period', iso(d)).lte('period', period).order('period'));
     const months = []; for (let k = 0; k < 6; k++) { const x = new Date(d); x.setMonth(d.getMonth() + k); months.push(iso(x)); }
-    const get = p => ((data || []).find(r => r.period === p) || {}).summary || null;
+    const get = p => { const x = ((data || []).find(r => r.period === p) || {}).summary || null; if (!x) return null;
+      return { ...x, cash: typeof x.cash === 'number' ? x.cash : (x.cash_total ?? x.cash_draft ?? 0) }; };   // v17+ keeps per-head cash in summary.cash
     const cols = [['sales', 'Sales (taxable)'], ['outTax', 'Output tax'], ['itc', 'ITC'], ['cash', 'Cash paid / payable']];
     const max = k => Math.max(1, ...months.map(p => (get(p) || {})[k] || 0));
     o.innerHTML = `<h3 style="margin-top:0">Last 6 months</h3><div class="table-wrap"><table class="gr-t"><thead><tr><th>Month</th>${cols.map(([, l]) => `<th>${l}</th>`).join('')}<th>Status</th></tr></thead><tbody>
@@ -4752,14 +4753,15 @@ VIEWS.taxpay = async v => {
     const list = mine.filter(c => c.gstin && c.gst_scheme !== 'Not registered' && (c.services || []).includes('GST'));
     const gm = await safe(sb.from('gst_months').select('client_id,status,summary').eq('period', tpMonth + '-01').limit(5000));
     const gmap = new Map((gm.error ? [] : gm.data || []).map(r => [r.client_id, r]));
-    const need = list.filter(c => gmap.has(c.id) && !(gmap.get(c.id).summary || {}).cash).map(c => c.id);
+    const cashObj = g => g && g.summary && g.summary.cash && typeof g.summary.cash === 'object' ? g.summary.cash : null;   // months saved before v17 hold a single number
+    const need = list.filter(c => gmap.has(c.id) && !cashObj(gmap.get(c.id))).map(c => c.id);
     if (need.length) {
       const full = await safe(sb.from('gst_months').select('client_id,status,sales,purchases,gstr2b,gstr3b,gstr1').eq('period', tpMonth + '-01').in('client_id', need));
       (full.error ? [] : full.data || []).forEach(r => { const sm = GR.summarise(r); gmap.set(r.client_id, { ...gmap.get(r.client_id), summary: { cash: sm.cash, cash_draft: sm.cashTotal, has: sm.counts.sales + sm.counts.b2b + sm.counts.purchases } }); });
     }
     rows = list.map(c => {
       const d = gstPayDue(c, tpMonth); if (!d) return null;
-      const x = sent.get(c.id), g = gmap.get(c.id), cash = g && g.summary && g.summary.cash;
+      const x = sent.get(c.id), g = gmap.get(c.id), cash = cashObj(g);
       const a = x ? x.amounts : cash ? { ig: Math.round(cash.ig), cg: Math.round(cash.cg), sg: Math.round(cash.sg), cs: Math.round(cash.cs) } : { ig: 0, cg: 0, sg: 0, cs: 0 };
       const src = x ? 'Saved' : cash ? (g.status === 'Verified' ? 'Draft 3B ✓ verified' : 'Draft 3B (not verified)') : 'No GST review data';
       return { c, x, a, src, form: d.form, due: x && x.due_date || d.due, warn: !x && !cash };
