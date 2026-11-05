@@ -365,7 +365,7 @@ function renderShell() {
       <div class="user"><button class="btn ghost sm" id="userBtn">${esc(me.full_name || me.email)} ▾</button>
         <div class="menu" id="userMenu" hidden>
           <div class="menu-info">${esc(me.email)}<br><span class="badge">${esc(ROLE_LABEL[me.role] || me.role)}</span></div>
-          ${isAdmin() ? '<a href="#/team" data-act="nav">Team</a><a href="#/settings" data-act="nav">Settings</a>' : ''}<a href="#/inbox" data-act="nav">Client mail</a><a href="#/checklists" data-act="nav">Checklists</a><a href="#/calc" data-act="nav">Late fee calculator</a><button data-act="install">Install app on this device</button><button data-act="theme">Theme</button><button data-act="pw">Change password</button><button data-act="out">Sign out</button></div></div>
+          ${isAdmin() ? '<a href="#/team" data-act="nav">Team</a><a href="#/settings" data-act="nav">Settings</a>' : ''}<a href="#/renewals" data-act="nav">Renewals</a><a href="#/taxpay" data-act="nav">Tax payment intimation</a><a href="#/onboarding" data-act="nav">Client onboarding</a><a href="#/inbox" data-act="nav">Client mail</a><a href="#/checklists" data-act="nav">Checklists</a><a href="#/calc" data-act="nav">Late fee calculator</a><button data-act="install">Install app on this device</button><button data-act="theme">Theme</button><button data-act="pw">Change password</button><button data-act="out">Sign out</button></div></div>
     </header><main id="view"></main>`;
   const menu = $('#userMenu');
   $('#userBtn').onclick = e => { e.stopPropagation(); menu.hidden = !menu.hidden; };
@@ -1041,6 +1041,14 @@ VIEWS.dashboard = async v => {
     isManager() ? safe(sb.from('followups').select('client_id,on_date,next_on,created_at').eq('kind', 'payment').order('on_date', { ascending: false }).order('created_at', { ascending: false }).limit(5000)) : Promise.resolve({ data: [] })
   ]).then(r => { notRows = r[3].error ? [] : r[3].data || []; luNew = r[4].error ? 0 : (r[4].data || []).length; invRows = r[5].error ? null : r[5].data; payFu = r[6].error ? [] : r[6].data || []; return r; });
   const rows = open.data || [];
+  const [rnR, obR, tiR] = await Promise.all([
+    safe(sb.from('renewals').select('id,expires_on,status,reminders').not('expires_on', 'is', null).lte('expires_on', iso(addDays(now, 30))).limit(3000)),
+    safe(sb.from('onboarding').select('client_id').eq('status', 'In progress').limit(1000)),
+    safe(sb.from('tax_intimations').select('id').in('kind', ['GST', 'TDS']).eq('period', monthLabel(prevMonth())).not('sent_on', 'is', null).limit(5000))
+  ]);
+  const rnRows = rnR.error ? null : (rnR.data || []).filter(rnLive), rnSt = (rnRows || []).map(x => rnStage(x, t));
+  const rnExp = rnSt.filter(s => s.days < 0).length, rnDue = rnSt.filter(s => s.days >= 0).length, rnRem = rnSt.filter(s => s.due).length;
+  const obN = obR.error ? null : (obR.data || []).length, tiSent = tiR.error ? null : (tiR.data || []).length;
   const mrows = (month.data || []).filter(r => r.status !== 'Not applicable');
   const overdue = rows.filter(r => r.due_date && r.due_date < t);
   const soon = rows.filter(r => r.due_date && r.due_date >= t && r.due_date <= in7);
@@ -1104,6 +1112,8 @@ VIEWS.dashboard = async v => {
     const seen = new Set(), dueP = payFu.filter(f => !seen.has(f.client_id) && seen.add(f.client_id)).filter(f => f.next_on && f.next_on <= t && (bal[f.client_id] || 0) > 0.009).length;
     if (dueP) chips.push(`<a class="chip amber" href="#/billing" data-billdue>${dueP} payment follow-up${dueP > 1 ? 's' : ''} due</a>`);
   }
+  if (rnExp) chips.push(`<a class="chip red" href="#/renewals" data-rnw="expired">${rnExp} renewal${rnExp > 1 ? 's' : ''} expired</a>`);
+  if (rnRem) chips.push(`<a class="chip amber" href="#/renewals" data-rnw="remind">${rnRem} renewal reminder${rnRem > 1 ? 's' : ''} to send</a>`);
   if (waitingClients) chips.push(`<span class="chip amber">${waitingClients} client${waitingClients > 1 ? 's haven’t' : ' hasn’t'} sent data</span>`);
   if (isManager()) {
     const cnt = {}; rows.forEach(r => { if (r.assigned_to) cnt[r.assigned_to] = (cnt[r.assigned_to] || 0) + 1; });
@@ -1148,6 +1158,9 @@ VIEWS.dashboard = async v => {
       <div class="portals">${PORTALS.map(([w, name, url]) => `<a href="${url}" target="_blank" rel="noopener"><span style="color:${WT_TONE[w][1]}">${wtIcon(w, 20)}</span><b>${esc(name)}</b></a>`).join('')}</div>
     </section>
   </div>
+  ${rnRows || obN != null ? `<section class="card desk"><a class="desk-tile" href="#/renewals" data-rnw="30"><span>Renewals</span><b>${rnDue + rnExp}</b><small>${rnExp ? `${rnExp} expired · ` : ''}due in 30 days${rnRem ? ` · ${rnRem} reminder${rnRem > 1 ? 's' : ''} to send` : ''}</small></a>
+    <a class="desk-tile" href="#/taxpay" data-tpgo><span>Tax payment intimation</span><b>${tiSent ?? 0}</b><small>GST / TDS messages sent for ${monthLabel(prevMonth())}</small></a>
+    <a class="desk-tile" href="#/onboarding"><span>Client onboarding</span><b>${obN ?? 0}</b><small>new client${obN === 1 ? '' : 's'} in progress</small></a></section>` : ''}
   ${isManager() ? shareCard() : ''}
   ${fuDue.length ? '<div class="card" style="margin-top:16px"><h3>Client follow-ups due today</h3><div data-t="fu"></div></div>' : ''}
   <div class="card" style="margin-top:16px"><h3>Overdue</h3><div data-t="late"></div></div>
@@ -1167,6 +1180,8 @@ VIEWS.dashboard = async v => {
   countUp(v);
   bindShareCard(v);
   $$('[data-billdue]', v).forEach(x => x.onclick = () => { billTab = 'due'; });
+  $$('[data-rnw]', v).forEach(x => x.onclick = () => { rnf = { ...rnf, win: x.dataset.rnw }; });
+  $$('[data-tpgo]', v).forEach(x => x.onclick = () => { tpTab = 'GST'; tpMonth = prevMonth(); });
   const wa = $('[data-wa-send]', v);
   if (wa) wa.onclick = async () => {
     if (!confirm("Send today's pending-work reminders to staff on WhatsApp now?")) return;
@@ -1277,7 +1292,7 @@ VIEWS.calendar = async v => {
       <button class="btn sm" id="nextM" aria-label="Next month">›</button>
       <button class="btn sm" id="thisM">This month</button>
       <span class="spacer"></span>
-      <a class="btn" href="#/calc">Late fee calculator</a>
+      <a class="btn" href="#/calc">Late fee calculator</a><a class="btn" href="#/taxpay">Tax payment intimation</a><a class="btn" href="#/renewals">Renewals</a>
       ${isManager() ? '<button class="btn" id="addDue">+ Add due date</button>' : ''}</div>
     <p class="note warn small">These are the standard statutory dates. When the government extends a date or changes a form, ${isManager() ? 'click <b>Edit</b> on that row to update it.' : 'ask the admin to update it.'}</p>
     <div class="card" style="padding:0">${items.length ? items.map((d, i) => {
@@ -1343,6 +1358,8 @@ function editDue(d) {
 let clientQ = '', showInactive = false;
 VIEWS.clients = async v => {
   await loadRefs();
+  const obR = await safe(sb.from('onboarding').select('client_id,status,items').limit(5000));
+  const obMap = Object.fromEntries((obR.error ? [] : obR.data || []).map(o => [o.client_id, o]));
   v.innerHTML = `<div class="page-head"><h2>Clients</h2><span class="muted">${clients.filter(c => c.active).length} active</span><span class="spacer"></span>
       ${isAdmin() ? '<button class="btn ghost" id="lgLog">Login access log</button>' : ''}<button class="btn" id="tplBtn">CSV template</button><button class="btn" id="impBtn">Import CSV</button>
       <button class="btn primary" id="addC">+ Add client</button><input type="file" id="impFile" accept=".csv,text/csv" hidden></div>
@@ -1359,7 +1376,7 @@ VIEWS.clients = async v => {
         <td>${esc(c.gst_scheme)}</td><td class="wrap">${(c.services || []).map(wtBadge).join(' ')}</td>
         <td>${esc(profName(c.default_staff) || '—')}</td>
         <td class="row-btns"><button class="btn sm" data-copy="${c.id}">Copy link</button><a class="btn sm" href="${esc(waShare(clientMsg(c), c.phone))}" target="_blank" rel="noopener" title="Send on WhatsApp">WhatsApp</a><a class="btn sm ghost" href="${esc(statusUrl(c.status_token))}" target="_blank" rel="noopener">Open</a></td>
-        <td class="row-btns"><button class="btn sm" data-lgc="${c.id}" title="GST / TDS / MCA portal logins">🔑 Logins</button><button class="btn sm" data-ed="${c.id}">Edit</button></td></tr>`).join('')}
+        <td class="row-btns"><button class="btn sm" data-lgc="${c.id}" title="GST / TDS / MCA portal logins">🔑 Logins</button><button class="btn sm" data-obc="${c.id}" title="KYC, engagement letter, fees, recurring work">${obMap[c.id] ? (obMap[c.id].status === 'Completed' ? '✓ Onboarded' : `Onboarding ${obProgress(obMap[c.id]).done}/${obProgress(obMap[c.id]).total}`) : 'Onboard'}</button><button class="btn sm" data-ed="${c.id}">Edit</button></td></tr>`).join('')}
       </tbody></table></div>` : `<div class="table-wrap"><div class="empty">${clients.length ? 'No match.' : 'No clients yet. Add one, or import your list from a CSV file.'}</div></div>`;
   };
   render();
@@ -1370,6 +1387,7 @@ VIEWS.clients = async v => {
     if (e.target.dataset.copy) copy(statusUrl(clientById(e.target.dataset.copy).status_token));
     if (e.target.dataset.ed) editClient(clientById(e.target.dataset.ed));
     if (e.target.dataset.lgc) openLogins(clientById(e.target.dataset.lgc));
+    if (e.target.dataset.obc) openOnboarding(clientById(e.target.dataset.obc));
   };
   if ($('#lgLog')) $('#lgLog').onclick = () => loginLog(null);
   $('#tplBtn').onclick = () => download('clients-template.csv', toCSV([
@@ -1443,7 +1461,15 @@ function editClient(c) {
       if (!rec.name) { toast('Name is required', true); return false; }
       if (rec.gstin && !/^[0-9]{2}[A-Z0-9]{13}$/.test(rec.gstin)) { toast('GSTIN should be 15 characters', true); return false; }
       if (rec.pan && !/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(rec.pan)) { toast('PAN format looks wrong (e.g. ABCDE1234F)', true); return false; }
-      if (isNew) await must(sb.from('clients').insert(rec));
+      if (isNew) {
+        const { data: nc } = await must(sb.from('clients').insert(rec).select().single());
+        toast('Saved');
+        if (nc && isManager() && confirm(`Start onboarding for ${nc.name}?\n(KYC documents, engagement letter, fee agreement and recurring work)`)) {
+          clients.push(nc);
+          try { await startOnboarding(nc); openOnboarding(nc); } catch (e) { toast(friendly(e), true); }
+        }
+        route(); return;
+      }
       else await must(sb.from('clients').update(rec).eq('id', c.id));
       toast('Saved'); route();
     }
@@ -3417,7 +3443,7 @@ VIEWS.gst = async v => {
   const save = async patch => {
     const next = { ...row, ...patch };
     const sm = GR.summarise(next);
-    patch.summary = { ...sm.trend, sales_n: sm.counts.sales, b2b_n: sm.counts.b2b, cash_draft: sm.cashTotal, at: new Date().toISOString() };
+    patch.summary = { ...sm.trend, sales_n: sm.counts.sales, b2b_n: sm.counts.b2b, cash_draft: sm.cashTotal, cash: sm.cash, at: new Date().toISOString() };
     const { data } = await must(sb.from('gst_months').upsert({ client_id: grClient, period, ...patch }, { onConflict: 'client_id,period' }).select().single());
     row = data || { ...next, ...patch }; render();
   };
@@ -3469,7 +3495,7 @@ VIEWS.gst = async v => {
           ${row4(`4(A)(5) ITC available ${sm.has2b ? '(GSTR-2B)' : '(books)'}`, sm.itcBase)}
           ${gTax(sm.blocked) ? row4('ITC not available in 2B (do not claim)', sm.blocked, 'warn-row') : ''}
         </tbody></table></div>
-        <h4>Set-off &amp; cash payable</h4>
+        <h4 class="gr-payh">Set-off &amp; cash payable <a class="btn sm" href="#/taxpay" data-tpfrom>Send payment intimation →</a></h4>
         <div class="table-wrap"><table class="gr-t"><thead><tr><th></th><th class="r">IGST</th><th class="r">CGST</th><th class="r">SGST</th><th class="r">Cess</th><th class="r">Total</th></tr></thead><tbody>
           <tr><td>Output tax</td>${['ig', 'cg', 'sg', 'cs'].map(k => `<td class="r">${gst$(sm.out[k])}</td>`).join('')}<td class="r">${gst$(gTax(sm.out))}</td></tr>
           <tr><td>Paid from ITC</td>${['ig', 'cg', 'sg', 'cs'].map(k => `<td class="r">${gst$(so.used.ig[k] + so.used.cg[k] + so.used.sg[k] + so.used.cs[k])}</td>`).join('')}<td class="r">${gst$(['ig', 'cg', 'sg', 'cs'].reduce((a, k) => a + so.used.ig[k] + so.used.cg[k] + so.used.sg[k] + so.used.cs[k], 0))}</td></tr>
@@ -4360,7 +4386,697 @@ async function downloadGstWorkings(c, period) {
   toast(`GST workings downloaded — ${months.length} month${months.length > 1 ? 's' : ''} of FY ${fy}`);
 }
 
+/* =====================================================================
+   v17 · SESSION 1: RENEWALS · TAX PAYMENT INTIMATION · CLIENT ONBOARDING
+   ===================================================================== */
+const firstEmail = c => ((c && c.email) || '').split(/[,;\s]+/).filter(Boolean)[0] || '';
+const mailUrl = (to, subject, body) => `mailto:${encodeURIComponent(to || '')}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+const notReady = (v, title, sql) => { v.innerHTML = `<div class="card"><h3>${esc(title)}</h3><p class="note">Not set up yet — run <b>${esc(sql)}</b> in Supabase → SQL Editor, then reload.</p></div>`; };
+const myClients = () => clients.filter(c => c.active && (isManager() || c.default_staff === me.id));
+// any date from Excel / CSV: serial number, yyyy-mm-dd, dd/mm/yyyy, dd-mm-yy, 31 Mar 2027
+function anyDate(v) {
+  if (v === '' || v == null) return null;
+  const ok = (y, m, d) => (m >= 1 && m <= 12 && d >= 1 && d <= lastDay(y, m) && y > 1990 && y < 2200) ? `${y}-${pad(m)}-${pad(d)}` : undefined;
+  if (typeof v === 'number') { if (v < 20000 || v > 90000) return undefined; const d = new Date(Math.round((v - 25569) * 864e5)); return ok(d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate()); }
+  if (v instanceof Date) return ok(v.getFullYear(), v.getMonth() + 1, v.getDate());
+  const s = String(v).trim();
+  let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/); if (m) return ok(+m[1], +m[2], +m[3]);
+  m = s.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2}|\d{4})$/); if (m) return ok(m[3].length === 2 ? 2000 + +m[3] : +m[3], +m[2], +m[1]);
+  m = s.match(/^(\d{1,2})[\s\-]+([A-Za-z]{3})[a-z]*[\s\-,]+(\d{2}|\d{4})$/);
+  if (m) { const i = MONTHS.findIndex(x => x.toLowerCase() === m[2].toLowerCase()); return i < 0 ? undefined : ok(m[3].length === 2 ? 2000 + +m[3] : +m[3], i + 1, +m[1]); }
+  return undefined;
+}
+const addMonths = (s, n) => { const [y, m, d] = s.split('-').map(Number); const t = new Date(y, m - 1 + n, 1); return iso(new Date(t.getFullYear(), t.getMonth(), Math.min(d, lastDay(t.getFullYear(), t.getMonth() + 1)))); };
+const fyEndOf = s => { const [y, m] = s.split('-').map(Number); return `${m >= 4 ? y + 1 : y}-03-31`; };
+
+/* ---------------- 1. RENEWALS & EXPIRY ---------------- */
+const RN_KINDS = {
+  'DSC': { months: 24, hint: 'Class 3 DSC — valid 1, 2 or 3 years (12 / 24 / 36 months). Enter the holder name (director / partner / proprietor).',
+    ask: 'For the new DSC, please share the holder\'s PAN, Aadhaar, a photo, email ID and mobile number. Video / OTP verification is needed at the time of issue.' },
+  'GST LUT': { months: 12, fy: true, hint: 'LUT (RFD-11) is valid for one financial year (to 31 March). File the next year\'s LUT before 1 April.',
+    ask: 'We will file the Letter of Undertaking (LUT) for the next financial year so that exports / SEZ supplies continue without IGST. Please confirm.' },
+  'Udyam': { months: 0, hint: 'Udyam registration has no expiry. Leave the expiry blank, or set a yearly review date to update turnover / investment.',
+    ask: 'Please confirm whether there is any change in your business details, so that we can update the Udyam registration.' },
+  'IEC': { months: 12, hint: 'IEC must be updated on DGFT every year between April and June, or it is de-activated. Use 30 June as the date.',
+    ask: 'Your IEC has to be updated on the DGFT portal (yearly, April–June) to keep it active. Please confirm, or share any change in details.' },
+  'FSSAI': { months: 12, hint: 'FSSAI licence / registration is issued for 1 to 5 years. Apply for renewal at least 30 days before expiry.',
+    ask: 'Please share the documents for the FSSAI renewal (latest premises / product details and any changes), so that we can apply before it expires.' },
+  'Trade licence': { months: 12, hint: 'Local body (Corporation / Municipality) trade licence — usually renewed every year.',
+    ask: 'Please share last year\'s licence copy and the property tax receipt, so that we can renew the trade licence.' },
+  'Professional tax': { months: 6, hint: 'Tamil Nadu professional tax is paid half-yearly (by 30 September and 31 March).',
+    ask: 'Please share the employee list / salary details for the half-year, so that we can pay the professional tax on time.' }
+};
+const RN_STATUSES = ['Active', 'Renewal in progress', 'Not renewing', 'Closed'];
+const rnLive = r => r.status === 'Active' || r.status === 'Renewal in progress';
+function rnStage(r, t = today()) {
+  if (!r.expires_on || !rnLive(r)) return { days: null, stage: null, due: false };
+  const days = daysFrom(t, r.expires_on);
+  const stage = days < 0 ? 0 : days <= 7 ? 7 : days <= 15 ? 15 : days <= 30 ? 30 : null;
+  const sent = stage != null ? (r.reminders || {})[String(stage)] : null;
+  return { days, stage, due: stage != null && !sent, sent };
+}
+const rnWhat = r => r.kind + (r.holder ? ` (${r.holder})` : '') + (r.ref_no ? ` – ${r.ref_no}` : '');
+function rnMsg(r, c) {
+  const d = r.expires_on ? daysFrom(today(), r.expires_on) : null;
+  const when = d == null ? 'is due for review' : d < 0 ? `expired on ${fmtDate(r.expires_on)}` : `is due for renewal on ${fmtDate(r.expires_on)} (${d} day${d === 1 ? '' : 's'} left)`;
+  return `Dear ${c.contact_person || c.name},\nYour ${rnWhat(r)} ${when}.\n${(RN_KINDS[r.kind] || {}).ask || 'Please confirm, and share the documents needed, so that we can renew it on time.'}\n- ${firmName()}`;
+}
+function rnKind(s) {
+  const x = lc(s);
+  if (!x) return '';
+  if (/^dsc|digital sign/.test(x)) return 'DSC';
+  if (/\blut\b|rfd-?11|undertaking/.test(x)) return 'GST LUT';
+  if (/udyam|msme|udyog/.test(x)) return 'Udyam';
+  if (/^iec|import.*export/.test(x)) return 'IEC';
+  if (/fssai|food/.test(x)) return 'FSSAI';
+  if (/trade/.test(x)) return 'Trade licence';
+  if (/^pt$|profession/.test(x)) return 'Professional tax';
+  return String(s).trim();
+}
+let rnf = { win: 'due', kind: '', staff: '', q: '' };
+VIEWS.renewals = async v => {
+  const r = await safe(sb.from('renewals').select('*').order('expires_on', { ascending: true, nullsFirst: false }).limit(5000));
+  if (r.error) return notReady(v, 'Renewals', 'update-session1.sql');
+  const all = r.data || [], t = today();
+  const st = all.map(x => ({ x, s: rnStage(x, t) }));
+  const nExp = st.filter(o => o.s.days != null && o.s.days < 0).length, n7 = st.filter(o => o.s.days != null && o.s.days >= 0 && o.s.days <= 7).length;
+  const n30 = st.filter(o => o.s.days != null && o.s.days >= 0 && o.s.days <= 30).length, nRem = st.filter(o => o.s.due).length;
+  v.innerHTML = `<div class="page-head"><h2>Renewals</h2><span class="muted">DSC · LUT · Udyam · IEC · FSSAI · licences · PT</span><span class="spacer"></span>
+      <button class="btn" id="rnTpl">Excel template</button><button class="btn" id="rnImp">Import Excel</button><button class="btn" id="rnCsv">Export CSV</button>
+      <button class="btn primary" id="rnAdd">+ Add renewal</button><input type="file" id="rnFile" accept=".xlsx,.xls,.csv" hidden></div>
+    <div class="bento-stats card stats4" style="margin-bottom:14px">
+      <button class="mini red" data-w="expired"><span>Expired</span><b>${nExp}</b></button>
+      <button class="mini amber" data-w="7"><span>Due in 7 days</span><b>${n7}</b></button>
+      <button class="mini blue" data-w="30"><span>Due in 30 days</span><b>${n30}</b></button>
+      <button class="mini green" data-w="remind"><span>Client reminders to send</span><b>${nRem}</b></button></div>
+    <p class="muted small" style="margin:-4px 2px 12px">Reminders fall due 30, 15 and 7 days before expiry (and once after it expires). Sending one on WhatsApp or email ticks it off.</p>
+    <div class="toolbar"><select id="rnW" aria-label="Show">
+        <option value="due">Expired or due in 90 days</option><option value="remind">Reminder due now</option><option value="30">Due in 30 days</option><option value="7">Due in 7 days</option><option value="expired">Expired</option>
+        <option value="live">All active</option><option value="all">All, including closed</option></select>
+      <select id="rnK" aria-label="Type"><option value="">All types</option>${opts([...new Set([...Object.keys(RN_KINDS), ...all.map(x => x.kind)])], rnf.kind)}</select>
+      ${isManager() ? `<select id="rnS" aria-label="Staff"><option value="">All staff</option>${opts(activeStaff(), rnf.staff, p => p.full_name || p.email, p => p.id)}</select>` : ''}
+      <input type="search" id="rnQ" placeholder="Search client / holder / number" value="${esc(rnf.q)}"></div>
+    <div id="rnList"></div>`;
+  $('#rnW').value = rnf.win;
+  const shown = () => {
+    const q = lc(rnf.q);
+    return st.filter(({ x, s }) => {
+      const w = rnf.win, d = s.days;
+      const okW = w === 'all' ? true : w === 'live' ? rnLive(x) : !rnLive(x) ? false
+        : w === 'due' ? d != null && d <= 90 : w === 'remind' ? s.due : w === 'expired' ? d != null && d < 0 : d != null && d >= 0 && d <= +w;
+      return okW && (!rnf.kind || x.kind === rnf.kind) && (!rnf.staff || x.assigned_to === rnf.staff)
+        && (!q || lc([clientName(x.client_id), x.kind, x.holder, x.ref_no, x.remarks].join(' ')).includes(q));
+    });
+  };
+  const render = () => {
+    const list = shown();
+    $('#rnList').innerHTML = list.length ? `<div class="count">${list.length} item${list.length > 1 ? 's' : ''}</div><div class="table-wrap"><table><thead><tr>
+        <th>Client</th><th>Type</th><th>Holder / number</th><th>Expires</th><th>Reminders 30 · 15 · 7</th><th>Assigned</th><th>Status</th><th></th></tr></thead><tbody>
+      ${list.map(({ x, s }) => { const c = clientById(x.client_id) || {}, d = s.days;
+        const cls = d == null ? '' : d < 0 ? 'late' : d <= 15 ? 'soon' : '';
+        const dots = [30, 15, 7].map(k => { const on = (x.reminders || {})[k]; return `<span class="rn-dot ${on ? 'on' : s.stage === k ? 'due' : ''}" title="${on ? 'Sent ' + fmtDate(on) : s.stage === k ? 'Due now' : 'Not yet'}">${k}</span>`; }).join('')
+          + ((x.reminders || {})['0'] ? `<span class="rn-dot on" title="Sent ${fmtDate(x.reminders['0'])}">!</span>` : '');
+        return `<tr class="${d != null && d < 0 && rnLive(x) ? 'overdue' : ''}"><td class="wrap"><b>${esc(c.name || '(deleted client)')}</b><div class="muted small">${esc(c.phone || '')}</div></td>
+          <td><span class="badge">${esc(x.kind)}</span></td><td class="wrap">${esc(x.holder || '')}<div class="muted small">${esc(x.ref_no || '')}</div></td>
+          <td class="${cls}">${x.expires_on ? fmtDate(x.expires_on) : '<span class="muted">No expiry</span>'}${d != null && rnLive(x) ? `<div class="small">${d < 0 ? `${-d} day${d === -1 ? '' : 's'} ago` : d === 0 ? 'today' : `${d} day${d === 1 ? '' : 's'} left`}</div>` : ''}</td>
+          <td class="nowrap">${dots}</td><td>${esc(profName(x.assigned_to) || '—')}</td>
+          <td><span class="st st-${slug(x.status === 'Active' ? 'In progress' : x.status === 'Renewal in progress' ? 'Ready to file' : 'Not applicable')}">${esc(x.status)}</span></td>
+          <td class="row-btns">${rnLive(x) && x.expires_on ? `<a class="btn sm ${s.due ? 'primary' : ''}" data-rs="wa" data-id="${x.id}" href="#" target="_blank" rel="noopener">WhatsApp</a><a class="btn sm" data-rs="mail" data-id="${x.id}" href="#">Email</a>` : ''}
+            ${rnLive(x) ? `<button class="btn sm" data-rr="${x.id}">Renewed</button>` : ''}<button class="btn sm ghost" data-re="${x.id}">Edit</button></td></tr>`; }).join('')}
+      </tbody></table></div>` : `<div class="table-wrap"><div class="empty">${all.length ? 'Nothing in this view. Try "All active".' : 'No renewals yet. Add one, or import your list from Excel (download the template first).'}</div></div>`;
+  };
+  render();
+  $$('[data-w]', v).forEach(b => b.onclick = () => { rnf.win = b.dataset.w; $('#rnW').value = rnf.win; render(); });
+  $('#rnW').onchange = e => { rnf.win = e.target.value; render(); };
+  $('#rnK').onchange = e => { rnf.kind = e.target.value; render(); };
+  if ($('#rnS')) $('#rnS').onchange = e => { rnf.staff = e.target.value; render(); };
+  $('#rnQ').oninput = e => { rnf.q = e.target.value; render(); };
+  $('#rnAdd').onclick = () => editRenewal(null);
+  $('#rnTpl').onclick = () => renewalTemplate().catch(e => toast(friendly(e), true));
+  $('#rnImp').onclick = () => $('#rnFile').click();
+  $('#rnFile').onchange = e => { const f = e.target.files[0]; e.target.value = ''; if (f) importRenewals(f, all).catch(err => toast(friendly(err), true)); };
+  $('#rnCsv').onclick = () => download(`renewals-${t}.csv`, toCSV([['Client', 'GSTIN', 'Type', 'Holder', 'Ref no', 'Issued on', 'Expires on', 'Days left', 'Status', 'Assigned', 'Reminders sent', 'Remarks'],
+    ...shown().map(({ x, s }) => [clientName(x.client_id), (clientById(x.client_id) || {}).gstin || '', x.kind, x.holder || '', x.ref_no || '', x.issued_on || '', x.expires_on || '', s.days ?? '', x.status,
+      profName(x.assigned_to), Object.entries(x.reminders || {}).map(([k, d]) => `${k === '0' ? 'expired' : k + 'd'}: ${d}`).join('; '), x.remarks || ''])]));
+  $('#rnList').addEventListener('click', e => {
+    const a = e.target.closest('[data-rs]'), rr = e.target.dataset.rr, re = e.target.dataset.re;
+    if (a) {
+      const x = all.find(y => y.id === a.dataset.id), c = clientById(x.client_id) || {};
+      const msg = rnMsg(x, c);
+      if (a.dataset.rs === 'wa') a.href = waShare(msg, c.phone);
+      else { const to = firstEmail(c); if (!to) { e.preventDefault(); toast('No email saved for this client (Clients → Edit)', true); return; } a.href = mailUrl(c.email, `${x.kind} renewal – ${c.name}`, msg); }
+      if (a.dataset.rs === 'wa' && !c.phone) toast('No phone saved for this client — pick the contact in WhatsApp');
+      rnMarkSent(x, a.dataset.rs === 'wa' ? 'WhatsApp' : 'Email').then(render);
+    }
+    if (rr) renewedDone(all.find(y => y.id === rr));
+    if (re) editRenewal(all.find(y => y.id === re));
+  });
+};
+async function rnMarkSent(x) {
+  const s = rnStage(x); if (s.stage == null) return;
+  const rem = { ...(x.reminders || {}), [String(s.stage)]: today() };
+  try { await must(sb.from('renewals').update({ reminders: rem }).eq('id', x.id)); x.reminders = rem; } catch (e) { toast(friendly(e), true); }
+}
+function editRenewal(x, preset = {}) {
+  const isNew = !x;
+  x = x || { kind: 'DSC', status: 'Active', repeat_months: 24, assigned_to: null, ...preset };
+  const cl = clients.filter(c => (c.active && (isManager() || c.default_staff === me.id)) || c.id === x.client_id);
+  const body = `<div class="form-grid">
+    <label class="full">Client<select name="client_id">${isNew && !x.client_id ? '<option value="">Select client…</option>' : ''}${opts(cl, x.client_id, c => c.name, c => c.id)}</select></label>
+    <label>Type<input name="kind" list="dl-rnk" value="${esc(x.kind || '')}" placeholder="Pick or type"></label>
+    <datalist id="dl-rnk">${Object.keys(RN_KINDS).map(k => `<option value="${esc(k)}"></option>`).join('')}</datalist>
+    <label>Holder name<input name="holder" value="${esc(x.holder || '')}" placeholder="e.g. DSC holder (director)"></label>
+    <label>Licence / registration no.<input name="ref_no" value="${esc(x.ref_no || '')}"></label>
+    <label>Validity (months)<input name="repeat_months" type="number" min="0" max="120" value="${esc(x.repeat_months ?? 12)}"></label>
+    <label>Issued / valid from<input name="issued_on" type="date" value="${esc(x.issued_on || '')}"></label>
+    <label>Expires on<span class="pw-wrap"><input name="expires_on" type="date" value="${esc(x.expires_on || '')}"><button type="button" class="pw-eye" data-fill title="Work out from issue date and validity">Fill</button></span></label>
+    <label>Assigned to<select name="assigned_to">${staffOpts(x.assigned_to || (clientById(x.client_id) || {}).default_staff || '')}</select></label>
+    <label>Status<select name="status">${opts(RN_STATUSES, x.status)}</select></label>
+    <p class="note small full" data-hint></p>
+    <label class="full">Remarks<textarea name="remarks" rows="2">${esc(x.remarks || '')}</textarea></label>
+    ${!isNew && (x.history || []).length ? `<div class="full small"><b>Earlier periods</b>${x.history.map(h => `<div class="muted">${fmtDate(h.issued_on)} → ${fmtDate(h.expires_on)}${h.ref_no ? ' · ' + esc(h.ref_no) : ''} · renewed ${fmtDate(h.renewed_on)}${h.by ? ' by ' + esc(profName(h.by)) : ''}</div>`).join('')}</div>` : ''}
+  </div>`;
+  const m = modal(isNew ? 'Add renewal' : 'Renewal details', body, {
+    extra: !isNew && isManager() ? '<button class="btn danger" data-rdel>Delete</button>' + (rnLive(x) ? ' <button class="btn" data-rtask>+ Work item</button>' : '') : '',
+    onSave: async el => {
+      const rec = { client_id: fv(el, 'client_id'), kind: rnKind(fv(el, 'kind')), holder: fv(el, 'holder') || null, ref_no: fv(el, 'ref_no') || null,
+        repeat_months: Math.max(0, Math.round(num(fv(el, 'repeat_months')))), issued_on: fv(el, 'issued_on') || null, expires_on: fv(el, 'expires_on') || null,
+        assigned_to: fv(el, 'assigned_to') || null, status: fv(el, 'status'), remarks: fv(el, 'remarks') || null };
+      if (!rec.client_id || !rec.kind) { toast('Client and type are required', true); return false; }
+      if (rec.issued_on && rec.expires_on && rec.expires_on < rec.issued_on) { toast('Expiry is before the issue date', true); return false; }
+      if (!isNew && rec.expires_on !== x.expires_on) rec.reminders = {};
+      if (isNew) await must(sb.from('renewals').insert(rec)); else await must(sb.from('renewals').update(rec).eq('id', x.id));
+      toast('Saved'); if (preset.onDone) preset.onDone(); else route();
+    }
+  });
+  const el = m.el, hint = () => { const k = RN_KINDS[rnKind(fv(el, 'kind'))]; $('[data-hint]', el).textContent = k ? k.hint : 'Any other licence or registration with an expiry date.'; $('[data-hint]', el).hidden = false; };
+  hint();
+  $('[name=kind]', el).addEventListener('change', () => {
+    const k = RN_KINDS[rnKind(fv(el, 'kind'))]; hint();
+    if (k && isNew) { $('[name=repeat_months]', el).value = k.months; if (k.fy && !fv(el, 'expires_on')) $('[name=expires_on]', el).value = fyEndOf(fv(el, 'issued_on') || today()); }
+  });
+  $('[name=client_id]', el).addEventListener('change', () => { const c = clientById(fv(el, 'client_id')); if (c && c.default_staff && !fv(el, 'assigned_to')) $('[name=assigned_to]', el).value = c.default_staff; });
+  $('[data-fill]', el).onclick = () => {
+    const from = fv(el, 'issued_on'), mo = num(fv(el, 'repeat_months')), k = RN_KINDS[rnKind(fv(el, 'kind'))];
+    if (!from) return toast('Enter the issue date first', true);
+    $('[name=expires_on]', el).value = k && k.fy ? fyEndOf(from) : mo ? iso(addDays(new Date(addMonths(from, mo) + 'T00:00:00'), -1)) : '';
+  };
+  const del = $('[data-rdel]', el);
+  if (del) del.onclick = async () => { if (!confirm('Delete this renewal and its history?')) return; try { await must(sb.from('renewals').delete().eq('id', x.id)); m.close(); toast('Deleted'); route(); } catch (e) { toast(friendly(e), true); } };
+  const tk = $('[data-rtask]', el);
+  if (tk) tk.onclick = async () => {
+    try {
+      const c = clientById(x.client_id) || {};
+      const { data } = await must(sb.from('tasks').upsert([{ client_id: x.client_id, work_type: 'Other', return_name: `${x.kind} renewal`, period: x.expires_on ? 'Expiry ' + fmtDate(x.expires_on) : 'Renewal',
+        due_date: x.expires_on || null, assigned_to: x.assigned_to || c.default_staff || null, remarks: rnWhat(x) }], { onConflict: 'client_id,return_name,period', ignoreDuplicates: true }).select('id'));
+      if ((data || []).length && x.status === 'Active') await must(sb.from('renewals').update({ status: 'Renewal in progress' }).eq('id', x.id));
+      toast((data || []).length ? 'Work item created (Other → All work)' : 'A work item for this renewal already exists'); m.close(); route();
+    } catch (e) { toast(friendly(e), true); }
+  };
+}
+function renewedDone(x) {
+  const k = RN_KINDS[x.kind] || {}, base = x.expires_on || today();
+  const from = x.expires_on && x.expires_on >= today() ? iso(addDays(new Date(x.expires_on + 'T00:00:00'), 1)) : today();
+  const next = k.fy ? fyEndOf(from) : x.repeat_months ? iso(addDays(new Date(addMonths(from, x.repeat_months) + 'T00:00:00'), -1)) : '';
+  modal(`Renewed: ${rnWhat(x)}`, `<p class="muted small">The current period (${x.issued_on ? fmtDate(x.issued_on) : '—'} → ${fmtDate(base)}) is kept in the history. Reminders start again for the new expiry.</p>
+    <div class="form-grid"><label>Renewed on<input type="date" name="on" value="${today()}"></label><label>New licence / ref. no.<input name="ref" value="${esc(x.ref_no || '')}"></label>
+    <label>New valid from<input type="date" name="from" value="${from}"></label><label>New expiry<input type="date" name="exp" value="${next}"></label></div>`, {
+    saveText: 'Save renewal',
+    onSave: async el => {
+      const exp = fv(el, 'exp') || null, fr = fv(el, 'from') || null;
+      if (exp && fr && exp < fr) { toast('New expiry is before the start date', true); return false; }
+      const history = [...(x.history || []), { issued_on: x.issued_on, expires_on: x.expires_on, ref_no: x.ref_no, renewed_on: fv(el, 'on') || today(), by: me.id }];
+      await must(sb.from('renewals').update({ issued_on: fr, expires_on: exp, ref_no: fv(el, 'ref') || null, history, reminders: {}, status: 'Active' }).eq('id', x.id));
+      toast('Renewal saved'); route();
+    }
+  });
+}
+const RN_HEAD = ['Client (name, GSTIN or PAN)', 'Type', 'Holder name', 'Licence / ref no', 'Issued on', 'Expires on', 'Validity (months)', 'Assigned to (email)', 'Remarks'];
+async function renewalTemplate() {
+  const X = await loadXlsxFull();
+  const wb = X.utils.book_new();
+  const ws = X.utils.aoa_to_sheet([RN_HEAD,
+    ['ABC Traders', 'DSC', 'R. Kumar (Director)', '', '15/01/2025', '14/01/2027', 24, me.email, 'Class 3 – signing'],
+    ['33AAAAA0000A1Z5', 'GST LUT', '', 'AD330325012345X', '01/04/2026', '31/03/2027', 12, '', ''],
+    ['ABC Traders', 'FSSAI', '', '12421999000123', '10/06/2022', '09/06/2027', 60, '', 'State licence'],
+    ['ABC Traders', 'IEC', '', 'AAAAA0000A', '', '30/06/2027', 12, '', 'Yearly DGFT update']]);
+  ws['!cols'] = RN_HEAD.map((h, i) => ({ wch: [30, 16, 22, 20, 12, 12, 10, 26, 24][i] }));
+  X.utils.book_append_sheet(wb, ws, 'Renewals');
+  const help = X.utils.aoa_to_sheet([['How to fill'], ['One row per DSC / licence. Delete the sample rows first.'], ['Client: the exact client name, or its GSTIN or PAN.'],
+    ['Type: DSC, GST LUT, Udyam, IEC, FSSAI, Trade licence, Professional tax — or any other name.'], ['Dates: dd/mm/yyyy (e.g. 31/03/2027). Leave Expires on blank if there is no expiry (Udyam).'],
+    ['Assigned to: staff login email (optional — the client\'s default staff is used otherwise).']]);
+  help['!cols'] = [{ wch: 90 }];
+  X.utils.book_append_sheet(wb, help, 'Help');
+  X.writeFile(wb, 'renewals-template.xlsx');
+}
+function findClient(s) {
+  const k = String(s ?? '').trim(); if (!k) return null;
+  const u = k.toUpperCase(), norm = z => lc(z).replace(/[^a-z0-9]/g, '');
+  return clients.find(c => c.gstin && c.gstin === u) || clients.find(c => c.pan && c.pan === u)
+    || clients.find(c => lc(c.name) === lc(k)) || clients.find(c => norm(c.name) === norm(k)) || null;
+}
+function parseRenewalRows(rows, existing = []) {
+  const hi = rows.findIndex(r => r.some(x => /client/i.test(String(x))) && r.some(x => /expir/i.test(String(x))));
+  if (hi < 0) throw new Error('Could not find the header row (it needs "Client" and "Expires on" columns). Use the Excel template.');
+  const head = rows[hi].map(h => lc(String(h)));
+  const col = re => head.findIndex(h => re.test(h));
+  const C = { client: col(/client/), kind: col(/^type|kind|licen[cs]e type/), holder: col(/holder/), ref: col(/ref|number|no\b|licen[cs]e \/|reg/), issued: col(/issue|from/), exp: col(/expir/),
+    months: col(/validity|months/), staff: col(/assign|staff/), remarks: col(/remark|note/) };
+  const get = (r, k) => (C[k] >= 0 ? r[C[k]] : '');
+  const seen = new Set(existing.map(e => [e.client_id, lc(e.kind), lc(e.holder), e.expires_on].join('|')));
+  const ok = [], bad = [];
+  rows.slice(hi + 1).forEach((r, i) => {
+    if (!r.some(x => String(x).trim() !== '')) return;
+    const n = hi + i + 2, c = findClient(get(r, 'client')), kind = rnKind(get(r, 'kind')), iss = anyDate(get(r, 'issued')), exp = anyDate(get(r, 'exp'));
+    const why = !c ? `client "${get(r, 'client')}" not found` : !kind ? 'type missing' : iss === undefined ? `issue date "${get(r, 'issued')}" not understood` : exp === undefined ? `expiry "${get(r, 'exp')}" not understood` : '';
+    if (why) { bad.push(`Row ${n}: ${why}`); return; }
+    const sEmail = lc(String(get(r, 'staff'))), staff = sEmail ? profiles.find(p => lc(p.email) === sEmail) : null;
+    const rec = { client_id: c.id, kind, holder: String(get(r, 'holder') || '').trim() || null, ref_no: String(get(r, 'ref') || '').trim() || null, issued_on: iss, expires_on: exp,
+      repeat_months: get(r, 'months') !== '' ? Math.round(num(get(r, 'months'))) : (RN_KINDS[kind] || { months: 12 }).months,
+      assigned_to: staff ? staff.id : c.default_staff || null, remarks: String(get(r, 'remarks') || '').trim() || null, status: 'Active' };
+    const key = [rec.client_id, lc(rec.kind), lc(rec.holder), rec.expires_on].join('|');
+    if (seen.has(key)) { bad.push(`Row ${n}: already in the list — skipped`); return; }
+    seen.add(key); ok.push(rec);
+  });
+  return { ok, bad };
+}
+async function importRenewals(file, existing) {
+  const sheets = await readSheets(file);
+  const sh = sheets.find(s => s.rows.some(r => r.some(x => /expir/i.test(String(x))))) || sheets[0];
+  const { ok, bad } = parseRenewalRows(sh.rows, existing);
+  modal('Import renewals', `<p><b>${ok.length}</b> row${ok.length === 1 ? '' : 's'} ready to import from <b>${esc(file.name)}</b>${bad.length ? `, <b>${bad.length}</b> left out` : ''}.</p>
+    ${ok.length ? `<div class="table-wrap" style="max-height:260px"><table><thead><tr><th>Client</th><th>Type</th><th>Holder</th><th>Expires</th></tr></thead><tbody>${ok.slice(0, 200).map(r => `<tr><td>${esc(clientName(r.client_id))}</td><td>${esc(r.kind)}</td><td>${esc(r.holder || '')}</td><td>${r.expires_on ? fmtDate(r.expires_on) : 'No expiry'}</td></tr>`).join('')}</tbody></table></div>` : ''}
+    ${bad.length ? `<p class="note warn small" style="margin-top:10px">${bad.slice(0, 30).map(esc).join('<br>')}${bad.length > 30 ? `<br>… and ${bad.length - 30} more` : ''}</p>` : ''}`, {
+    saveText: `Import ${ok.length}`,
+    onSave: ok.length ? async () => { await must(sb.from('renewals').insert(ok)); toast(`${ok.length} renewal${ok.length > 1 ? 's' : ''} imported`); route(); } : null
+  });
+}
+
+/* ---------------- 2. TAX PAYMENT INTIMATION ---------------- */
+const GST_22 = ['22', '23', '24', '25', '26', '27', '29', '30', '31', '32', '33', '34', '35', '36', '37'];   // GSTR-3B (QRMP) due 22nd; others 24th
+const monthLabel = ym => { const [y, m] = ym.split('-').map(Number); return `${MONTHS[m - 1]} ${y}`; };
+const nextMonthDay = (ym, day) => { const [y, m] = ym.split('-').map(Number); const ny = m === 12 ? y + 1 : y, nm = m === 12 ? 1 : m + 1; return dueDateFor(day, ny, nm); };
+function gstPayDue(c, ym) {                                // { form, due } or null when nothing is payable this month
+  const m = +ym.split('-')[1], qEnd = m % 3 === 0;
+  if (c.gst_scheme === 'Composition') return qEnd ? { form: 'CMP-08', due: nextMonthDay(ym, 18) } : null;
+  if (c.gst_scheme === 'QRMP') return qEnd ? { form: 'GSTR-3B (quarterly)', due: nextMonthDay(ym, GST_22.includes((c.gstin || '').slice(0, 2)) ? 22 : 24) } : { form: 'PMT-06', due: nextMonthDay(ym, 25) };
+  return { form: 'GSTR-3B', due: nextMonthDay(ym, 20) };
+}
+const tdsPayDue = ym => ym.endsWith('-03') ? `${ym.slice(0, 4)}-04-30` : nextMonthDay(ym, 7);
+const ADV_INST = [['06-15', 15, '15 Jun'], ['09-15', 45, '15 Sep'], ['12-15', 75, '15 Dec'], ['03-15', 100, '15 Mar']];
+const tyLabel = y => `TY ${y}-${String(y + 1).slice(2)}`;
+const advDue = (y, i) => (i === 3 ? `${y + 1}-` : `${y}-`) + ADV_INST[i][0];
+function advCurrent(t = today()) {                        // next instalment on or after today
+  const [y, m] = t.split('-').map(Number), fy0 = m >= 4 ? y : y - 1;
+  for (let i = 0; i < 4; i++) if (advDue(fy0, i) >= t) return { y: fy0, i };
+  return { y: fy0 + 1, i: 0 };
+}
+function advInstalment({ est, paidBefore, pct, presumptive }) {
+  const p = presumptive ? (pct === 100 ? 100 : 0) : pct;
+  return Math.max(0, Math.round(num(est) * p / 100 - num(paidBefore)));
+}
+function taxMsg(kind, c, o) {
+  const hi = `Dear ${c.contact_person || c.name},\n`, by = `- ${firmName()}`;
+  if (kind === 'GST') {
+    if (!(o.total > 0)) return `${hi}GST for ${o.period}: no cash payment is needed — the tax is fully covered by input tax credit. We will file ${o.form} by ${fmtDate(o.due)}.\n${by}`;
+    const L = [['IGST', o.a.ig], ['CGST', o.a.cg], ['SGST', o.a.sg], ['Cess', o.a.cs]].filter(([, x]) => num(x) > 0).map(([k, x]) => `${k}: ${inr(Math.round(x))}`).join('\n');
+    return `${hi}GST payable for ${o.period} (${o.form}):\n${L}\nTotal: ${inr(Math.round(o.total))}\n\nPlease pay by ${fmtDate(o.due)} — GST portal → Payments → Create challan (PMT-06), then net banking / UPI — and send us the paid challan (CIN). If you would like us to generate the challan, please tell us.\n${by}`;
+  }
+  if (kind === 'TDS') {
+    const L = [['TDS', o.a.tds], ['TCS', o.a.tcs], ['Interest', o.a.int]].filter(([, x]) => num(x) > 0).map(([k, x]) => `${k}: ${inr(Math.round(x))}`).join('\n');
+    return `${hi}TDS / TCS to be deposited for ${o.period}:\n${L}\nTotal: ${inr(Math.round(o.total))}\n\nPlease deposit by ${fmtDate(o.due)} through e-Pay Tax on the income-tax portal (TDS/TCS payable by taxpayer) and send us the challan (BSR code, date and challan no.). Late deposit attracts interest of 1.5% a month.\n${by}`;
+  }
+  return `${hi}Advance tax for ${o.period.replace(' · ', ', instalment due ')} (${o.a.pct}% of the estimated tax for the year):\nEstimated tax for the year: ${inr(o.a.est)}\nAlready paid: ${inr(o.a.paid_before || 0)}\nPayable now: ${inr(o.total)}\n\nPlease pay by ${fmtDate(o.due)} through e-Pay Tax on the income-tax portal (advance tax) and send us the challan. Short payment attracts interest.\n${by}`;
+}
+let tpTab = 'GST', tpMonth = prevMonth(), tpAdv = null, tpQ = '', tpHide = false;
+VIEWS.taxpay = async v => {
+  const probe = await safe(sb.from('tax_intimations').select('id').limit(1));
+  if (probe.error) return notReady(v, 'Tax payment intimation', 'update-session1.sql');
+  if (!tpAdv) tpAdv = advCurrent();
+  const isAdv = tpTab === 'ADV';
+  const period = isAdv ? `${tyLabel(tpAdv.y)} · ${ADV_INST[tpAdv.i][2]}` : monthLabel(tpMonth);
+  v.innerHTML = `<div class="page-head"><h2>Tax payment intimation</h2><span class="spacer"></span>
+      ${isAdv ? `<select id="tpY" aria-label="Tax year">${[-1, 0, 1].map(k => tpAdv.y + k).map(y => `<option value="${y}" ${y === tpAdv.y ? 'selected' : ''}>${tyLabel(y)}</option>`).join('')}</select>
+        <select id="tpI" aria-label="Instalment">${ADV_INST.map((x, i) => `<option value="${i}" ${i === tpAdv.i ? 'selected' : ''}>${x[2]} · ${x[1]}%</option>`).join('')}</select>`
+      : `<label class="small muted" for="tpM">Tax month</label><input type="month" id="tpM" value="${esc(tpMonth)}">`}</div>
+    <div class="toolbar"><div class="seg">${[['GST', 'GST cash payable'], ['TDS', 'TDS / TCS (by 7th)'], ['ADV', 'Advance tax']].map(([k, l]) => `<button data-tp="${k}" class="${tpTab === k ? 'on' : ''}">${l}</button>`).join('')}</div>
+      <input type="search" id="tpQ" placeholder="Search client" value="${esc(tpQ)}"><label class="check"><input type="checkbox" id="tpH" ${tpHide ? 'checked' : ''}> Hide sent & paid</label>
+      <button class="btn sm" id="tpCsv">Export CSV</button></div>
+    <div id="tpBody"><div class="loading">Loading…</div></div>`;
+  $$('[data-tp]', v).forEach(b => b.onclick = () => { tpTab = b.dataset.tp; route(); });
+  if ($('#tpM')) $('#tpM').onchange = e => { tpMonth = e.target.value || prevMonth(); route(); };
+  if ($('#tpY')) $('#tpY').onchange = e => { tpAdv = { ...tpAdv, y: +e.target.value }; route(); };
+  if ($('#tpI')) $('#tpI').onchange = e => { tpAdv = { ...tpAdv, i: +e.target.value }; route(); };
+  const body = $('#tpBody', v);
+  const mine = myClients();
+  let rows = [];
+  const ex = await must(sb.from('tax_intimations').select('*').eq('kind', tpTab).eq('period', period).limit(5000));
+  const sent = new Map((ex.data || []).map(x => [x.client_id, x]));
+  if (tpTab === 'GST') {
+    const list = mine.filter(c => c.gstin && c.gst_scheme !== 'Not registered' && (c.services || []).includes('GST'));
+    const gm = await safe(sb.from('gst_months').select('client_id,status,summary').eq('period', tpMonth + '-01').limit(5000));
+    const gmap = new Map((gm.error ? [] : gm.data || []).map(r => [r.client_id, r]));
+    const need = list.filter(c => gmap.has(c.id) && !(gmap.get(c.id).summary || {}).cash).map(c => c.id);
+    if (need.length) {
+      const full = await safe(sb.from('gst_months').select('client_id,status,sales,purchases,gstr2b,gstr3b,gstr1').eq('period', tpMonth + '-01').in('client_id', need));
+      (full.error ? [] : full.data || []).forEach(r => { const sm = GR.summarise(r); gmap.set(r.client_id, { ...gmap.get(r.client_id), summary: { cash: sm.cash, cash_draft: sm.cashTotal, has: sm.counts.sales + sm.counts.b2b + sm.counts.purchases } }); });
+    }
+    rows = list.map(c => {
+      const d = gstPayDue(c, tpMonth); if (!d) return null;
+      const x = sent.get(c.id), g = gmap.get(c.id), cash = g && g.summary && g.summary.cash;
+      const a = x ? x.amounts : cash ? { ig: Math.round(cash.ig), cg: Math.round(cash.cg), sg: Math.round(cash.sg), cs: Math.round(cash.cs) } : { ig: 0, cg: 0, sg: 0, cs: 0 };
+      const src = x ? 'Saved' : cash ? (g.status === 'Verified' ? 'Draft 3B ✓ verified' : 'Draft 3B (not verified)') : 'No GST review data';
+      return { c, x, a, src, form: d.form, due: x && x.due_date || d.due, warn: !x && !cash };
+    }).filter(Boolean);
+  } else if (tpTab === 'TDS') {
+    rows = mine.filter(c => (c.services || []).includes('TDS') || c.tan).map(c => { const x = sent.get(c.id); return { c, x, a: x ? x.amounts : { tds: 0, tcs: 0, int: 0 }, src: x ? 'Saved' : 'Type the amount', due: x && x.due_date || tdsPayDue(tpMonth), warn: !x }; });
+  } else {
+    const earlier = await must(sb.from('tax_intimations').select('client_id,period,amounts,paid_amount,total').eq('kind', 'ADV').like('period', tyLabel(tpAdv.y) + ' ·%').limit(5000));
+    const before = ADV_INST.slice(0, tpAdv.i).map(x => `${tyLabel(tpAdv.y)} · ${x[2]}`);
+    rows = mine.filter(c => c.pan).map(c => {
+      const x = sent.get(c.id), prev = (earlier.data || []).filter(e => e.client_id === c.id && before.includes(e.period));
+      const last = prev.sort((p, q) => before.indexOf(q.period) - before.indexOf(p.period))[0];
+      const paid = prev.reduce((s, e) => s + num(e.paid_amount ?? 0), 0);
+      const a = x ? x.amounts : { est: last ? num(last.amounts.est) : 0, paid_before: paid, pct: ADV_INST[tpAdv.i][1], presumptive: last ? !!last.amounts.presumptive : false };
+      return { c, x, a, src: x ? 'Saved' : last ? 'From earlier instalment' : 'Type the estimate', due: advDue(tpAdv.y, tpAdv.i), warn: !x && !last };
+    });
+  }
+  const totalOf = a => tpTab === 'GST' ? num(a.ig) + num(a.cg) + num(a.sg) + num(a.cs) : tpTab === 'TDS' ? num(a.tds) + num(a.tcs) + num(a.int) : advInstalment({ est: a.est, paidBefore: a.paid_before, pct: num(a.pct) || ADV_INST[tpAdv.i][1], presumptive: a.presumptive });
+  const amtCols = tpTab === 'GST' ? [['ig', 'IGST'], ['cg', 'CGST'], ['sg', 'SGST'], ['cs', 'Cess']] : tpTab === 'TDS' ? [['tds', 'TDS'], ['tcs', 'TCS'], ['int', 'Interest']] : [['est', 'Estimated tax (year)'], ['paid_before', 'Paid so far']];
+  const ctx = r => ({ period, form: r.form, due: r.due, a: r.a, total: totalOf(r.a) });
+  const render = () => {
+    const q = lc(tpQ);
+    const list = rows.filter(r => (!q || lc(r.c.name).includes(q)) && !(tpHide && r.x && r.x.sent_on && r.x.paid_on));
+    const nSent = rows.filter(r => r.x && r.x.sent_on).length, nPaid = rows.filter(r => r.x && r.x.paid_on).length, tot = rows.reduce((s, r) => s + totalOf(r.a), 0);
+    body.innerHTML = `<div class="bento-stats card stats4" style="margin-bottom:14px">
+        <div class="mini blue"><span>Clients</span><b>${rows.length}</b></div><div class="mini amber"><span>Not sent yet</span><b>${rows.length - nSent}</b></div>
+        <div class="mini green"><span>Paid</span><b>${nPaid}</b></div><div class="mini"><span>Total payable</span><b class="tp-amt">${inr(Math.round(tot))}</b></div></div>
+      <p class="muted small" style="margin:-4px 2px 10px">${tpTab === 'GST' ? `Amounts come from each client's Draft GSTR-3B (GST review → ${esc(period)}). Monthly: GSTR-3B by the 20th · QRMP: PMT-06 by the 25th, quarter-end 3B by the 22nd/24th · Composition: CMP-08 by the 18th after the quarter. Change any amount before sending.`
+        : tpTab === 'TDS' ? 'TDS / TCS deducted in the month is due by the 7th of the next month (30 April for March). Type the amounts; section-wise TDS working comes in a later update.'
+        : `Instalments: 15% by 15 Jun, 45% by 15 Sep, 75% by 15 Dec, 100% by 15 Mar. "Paid so far" adds up the amounts marked paid for earlier instalments. Tick "Presumptive" for clients who pay the whole advance tax by 15 March.`}</p>
+      ${list.length ? `<div class="table-wrap"><table class="tp-t"><thead><tr><th>Client</th>${tpTab === 'GST' ? '<th>Form</th>' : ''}${amtCols.map(([, l]) => `<th class="r">${l}</th>`).join('')}${tpTab === 'ADV' ? '<th>Presumptive</th>' : ''}<th class="r">Payable</th><th>Due</th><th>Sent</th><th>Paid</th><th></th></tr></thead><tbody>
+        ${list.map(r => { const i = rows.indexOf(r), x = r.x || {}, late = !x.paid_on && r.due < today();
+          return `<tr data-i="${i}" class="${late && totalOf(r.a) > 0 ? 'overdue' : ''}"><td class="wrap"><b>${esc(r.c.name)}</b><div class="muted small ${r.warn ? 'late' : ''}">${esc(r.src)}</div></td>
+            ${tpTab === 'GST' ? `<td class="small">${esc(r.form)}<div class="muted">${esc(r.c.gst_scheme)}</div></td>` : ''}
+            ${amtCols.map(([k]) => `<td class="r"><input class="tp-in" type="number" min="0" step="1" data-k="${k}" value="${esc(Math.round(num(r.a[k])) || '')}" placeholder="0" aria-label="${k}"></td>`).join('')}
+            ${tpTab === 'ADV' ? `<td><label class="check"><input type="checkbox" data-k="presumptive" ${r.a.presumptive ? 'checked' : ''}> All by 15 Mar</label></td>` : ''}
+            <td class="r"><b data-tot>${inr(totalOf(r.a))}</b></td><td class="${late ? 'late' : ''}">${fmtDate(r.due)}</td>
+            <td class="small">${x.sent_on ? `${fmtDate(x.sent_on)}<div class="muted">${esc(x.sent_via || '')}${x.sent_count > 1 ? ' · ' + x.sent_count + '×' : ''}</div>` : '<span class="muted">—</span>'}</td>
+            <td class="small">${x.paid_on ? `<span class="st st-filed">Paid ${fmtDate(x.paid_on)}</span>${x.challan ? `<div class="muted">${esc(x.challan)}</div>` : ''}` : '<span class="muted">—</span>'}</td>
+            <td class="row-btns"><a class="btn sm ${x.sent_on ? '' : 'primary'}" data-send="wa" href="#" target="_blank" rel="noopener">WhatsApp</a><a class="btn sm" data-send="mail" href="#">Email</a><button class="btn sm ghost" data-paid>${x.paid_on ? 'Edit paid' : 'Mark paid'}</button></td></tr>`; }).join('')}
+        </tbody></table></div>` : `<div class="table-wrap"><div class="empty">${rows.length ? 'Nothing to show.' : tpTab === 'GST' ? 'No GST clients with a payment due for this month (needs GSTIN and the GST service ticked).' : tpTab === 'TDS' ? 'No TDS clients — tick the TDS service or add a TAN on the client.' : 'No clients with a PAN.'}</div></div>`}`;
+  };
+  render();
+  const readRow = tr => { const r = rows[+tr.dataset.i]; $$('[data-k]', tr).forEach(inp => { r.a[inp.dataset.k] = inp.type === 'checkbox' ? inp.checked : num(inp.value); }); if (tpTab === 'ADV') r.a.pct = ADV_INST[tpAdv.i][1]; return r; };
+  body.addEventListener('input', e => { const tr = e.target.closest('tr[data-i]'); if (!tr) return; const r = readRow(tr); $('[data-tot]', tr).textContent = inr(totalOf(r.a)); });
+  body.addEventListener('change', e => { const tr = e.target.closest('tr[data-i]'); if (tr && e.target.type === 'checkbox') { const r = readRow(tr); $('[data-tot]', tr).textContent = inr(totalOf(r.a)); } });
+  const save = async (r, patch) => {
+    const rec = { client_id: r.c.id, kind: tpTab, period, due_date: r.due, amounts: r.a, total: totalOf(r.a), ...patch };
+    const { data } = await must(sb.from('tax_intimations').upsert(rec, { onConflict: 'client_id,kind,period' }).select().single());
+    r.x = data; r.src = 'Saved'; r.warn = false;
+  };
+  body.addEventListener('click', e => {
+    const a = e.target.closest('[data-send]'), p = e.target.closest('[data-paid]');
+    const tr = e.target.closest('tr[data-i]'); if (!tr || (!a && !p)) return;
+    const r = readRow(tr), c = r.c;
+    if (a) {
+      const msg = taxMsg(tpTab, c, ctx(r)), wa = a.dataset.send === 'wa';
+      if (wa) { a.href = waShare(msg, c.phone); if (!c.phone) toast('No phone saved for this client — pick the contact in WhatsApp'); }
+      else { if (!firstEmail(c)) { e.preventDefault(); toast('No email saved for this client (Clients → Edit)', true); return; } a.href = mailUrl(c.email, `${tpTab === 'GST' ? 'GST' : tpTab === 'TDS' ? 'TDS' : 'Advance tax'} payment – ${period} – ${c.name}`, msg); }
+      save(r, { sent_on: today(), sent_via: wa ? 'WhatsApp' : 'Email', sent_by: me.id, sent_count: ((r.x && r.x.sent_count) || 0) + 1 }).then(render).catch(err => toast(friendly(err), true));
+    }
+    if (p) {
+      const x = r.x || {};
+      modal(`Payment made – ${c.name}`, `<div class="form-grid"><label>Paid on<input type="date" name="on" value="${esc(x.paid_on || today())}"></label>
+        <label>Amount paid (₹)<input type="number" name="amt" value="${esc(x.paid_amount ?? totalOf(r.a))}"></label>
+        <label class="full">${tpTab === 'GST' ? 'CPIN / CIN' : 'BSR code · date · challan no.'}<input name="ch" value="${esc(x.challan || '')}"></label>
+        <label class="full">Remarks<input name="rm" value="${esc(x.remarks || '')}"></label></div>`, {
+        extra: x.paid_on ? '<button class="btn danger" data-unpay>Not paid</button>' : '',
+        onSave: async el => { await save(r, { paid_on: fv(el, 'on') || today(), paid_amount: num(fv(el, 'amt')), challan: fv(el, 'ch') || null, remarks: fv(el, 'rm') || null }); toast('Saved'); render(); }
+      });
+      const un = $('[data-unpay]'); if (un) un.onclick = async () => { try { await save(r, { paid_on: null, paid_amount: null }); un.closest('.modal-back').remove(); render(); } catch (err) { toast(friendly(err), true); } };
+    }
+  });
+  $('#tpQ', v).oninput = e => { tpQ = e.target.value; render(); };
+  $('#tpH', v).onchange = e => { tpHide = e.target.checked; render(); };
+  $('#tpCsv', v).onclick = () => download(`tax-intimation-${tpTab}-${slug(period)}.csv`, toCSV([['Client', 'GSTIN / PAN', ...(tpTab === 'GST' ? ['Form'] : []), ...amtCols.map(x => x[1]), 'Payable', 'Due', 'Sent on', 'Sent via', 'Paid on', 'Amount paid', 'Challan'],
+    ...rows.map(r => [r.c.name, tpTab === 'GST' ? r.c.gstin : r.c.pan || '', ...(tpTab === 'GST' ? [r.form] : []), ...amtCols.map(([k]) => Math.round(num(r.a[k]))), totalOf(r.a), r.due,
+      (r.x || {}).sent_on || '', (r.x || {}).sent_via || '', (r.x || {}).paid_on || '', (r.x || {}).paid_amount ?? '', (r.x || {}).challan || ''])]));
+};
+
+/* ---------------- 3. NEW CLIENT ONBOARDING ---------------- */
+const OB_DEFAULT = [
+  ['KYC documents', 'PAN'], ['KYC documents', 'Aadhaar of directors / partners'], ['KYC documents', 'GST certificate'],
+  ['KYC documents', 'Incorporation certificate / partnership deed'], ['KYC documents', 'Address proof'], ['KYC documents', 'Bank statement / cancelled cheque'],
+  ['Engagement', 'Engagement letter signed'], ['Engagement', 'Fee agreement signed'],
+  ['Set-up', 'Client details, services & default staff set'], ['Set-up', 'Portal logins saved (GST / TDS / MCA)'], ['Set-up', 'Recurring work created'],
+  ['Set-up', 'Renewal dates added (DSC, LUT …)'], ['Set-up', 'Status link / client portal shared']
+];
+const OB_GROUPS = ['KYC documents', 'Engagement', 'Set-up'];
+const obList = () => (Array.isArray(settings.onboard_items) && settings.onboard_items.length ? settings.onboard_items.map(x => [x.grp, x.label]) : OB_DEFAULT);
+const obKey = s => slug(s).slice(0, 40);
+const obFresh = () => obList().map(([grp, label]) => ({ k: obKey(label), label, grp, done: false }));
+const obProgress = ob => { const it = (ob.items || []).filter(i => !i.na); return { done: it.filter(i => i.done).length, total: it.length }; };
+const FEE_FREQ = ['Monthly', 'Quarterly', 'Half-yearly', 'Yearly', 'One-time', 'Per filing'];
+const OB_FEE_START = { 'GST': [['GSTR-1', 'Monthly'], ['GSTR-3B', 'Monthly'], ['GSTR-9', 'Yearly']], 'TDS': [['TDS deposit', 'Monthly'], ['26Q (other than salary)', 'Quarterly'], ['24Q (salary)', 'Quarterly']],
+  'ROC/MCA': [['AOC-4', 'Yearly'], ['MGT-7', 'Yearly'], ['DIR-3 KYC', 'Yearly']], 'Other': [['Accounting / bookkeeping', 'Monthly']] };
+const OB_TERMS = `1. You will send complete and correct data (sales, purchases, bank statements, salary and TDS details) by the 5th of every month, or by any earlier date we ask for.
+2. You are responsible for the accuracy of your books and documents. We prepare and file returns on the basis of the information you give us.
+3. Fees are exclusive of GST and of government fees, taxes, late fees, interest and penalties. Our invoices are payable within 15 days.
+4. Late fees or interest caused by delay in sending data or making payment will be borne by you.
+5. Portal logins and OTPs you share will be kept confidential and used only for this engagement.
+6. Notices, assessments, appeals, registrations and other work outside the scope above will be charged separately, after telling you.
+7. Either of us may end this engagement with 30 days' written notice. Fees for work already done remain payable.
+8. Fees will be reviewed once a year.`;
+async function obGet(clientId) {
+  const r = await safe(sb.from('onboarding').select('*').eq('client_id', clientId).maybeSingle());
+  if (r.error) throw new Error('Onboarding is not set up yet — run update-session1.sql in Supabase.');
+  return r.data;
+}
+async function startOnboarding(c) {
+  const ob = { client_id: c.id, items: obFresh(), fees: obFeeStart(c), letter: { date: today(), terms: OB_TERMS }, status: 'In progress', started_on: today() };
+  const { data } = await must(sb.from('onboarding').insert(ob).select().single());
+  return data;
+}
+function obFeeStart(c) {
+  const out = [];
+  (c.services || []).forEach(w => (OB_FEE_START[w] || []).forEach(([work, freq]) => out.push({ work, freq, amount: 0 })));
+  return out.length ? out : [{ work: '', freq: 'Monthly', amount: 0 }];
+}
+async function openOnboarding(c, after = () => route()) {
+  let ob;
+  try { ob = await obGet(c.id); } catch (e) { return toast(friendly(e), true); }
+  if (!ob) {
+    if (!isManager()) return toast('Onboarding has not been started for this client. Ask a manager.', true);
+    try { ob = await startOnboarding(c); } catch (e) { return toast(friendly(e), true); }
+  }
+  // fill standard fees from the fee list where the agreement has none yet
+  const fr = await safe(sb.from('fee_rates').select('client_id,return_name,amount').or(`client_id.is.null,client_id.eq.${c.id}`));
+  const rates = fr.error ? [] : fr.data || [];
+  const rateFor = w => { const own = rates.find(f => f.client_id === c.id && lc(f.return_name) === lc(w)), std = rates.find(f => !f.client_id && lc(f.return_name) === lc(w)); return (own || std || {}).amount || 0; };
+  (ob.fees || []).forEach(f => { if (!num(f.amount) && f.work) f.amount = rateFor(f.work); });
+  const items = ob.items || [], fees = ob.fees || [], letter = { date: today(), terms: OB_TERMS, ...(ob.letter || {}) };
+  const allRet = [].concat(...WORK_TYPES.map(w => WORK_ITEMS[w] || []));
+  const itemRow = (it, i) => `<div class="ob-item ${it.done ? 'done' : ''} ${it.na ? 'na' : ''}"><label class="check"><input type="checkbox" data-ob="${i}" ${it.done ? 'checked' : ''} ${it.na ? 'disabled' : ''}> ${esc(it.label)}</label>
+      <span class="muted small">${it.done && it.on ? `${fmtDate(it.on)}${it.by ? ' · ' + esc(profName(it.by)) : ''}` : ''}</span><span class="spacer"></span>
+      <input class="ob-note" data-obn="${i}" value="${esc(it.note || '')}" placeholder="Note"><button type="button" class="link small" data-obna="${i}">${it.na ? 'Needed' : 'N/A'}</button></div>`;
+  const feeRows = () => fees.map((f, i) => `<tr data-fi="${i}"><td><input data-f="work" list="dl-obfee" value="${esc(f.work)}" placeholder="e.g. GSTR-3B"></td><td><select data-f="freq">${opts(FEE_FREQ, f.freq)}</select></td>
+      <td class="r"><input data-f="amount" type="number" min="0" step="1" value="${esc(f.amount || '')}" style="max-width:120px"></td><td><button type="button" class="link small danger-t" data-fdel="${i}">Remove</button></td></tr>`).join('');
+  const body = `<div class="ob-head"><div><b>${esc(c.name)}</b> <span class="muted small">· started ${fmtDate(ob.started_on)}</span></div><span class="spacer"></span><span class="badge ${ob.status === 'Completed' ? 'ok' : ''}" data-obp></span></div>
+    ${OB_GROUPS.map(g => `<h4 class="ob-g">${esc(g)}</h4>${items.map((it, i) => [it, i]).filter(([it]) => (it.grp || 'Set-up') === g || (g === 'Set-up' && !OB_GROUPS.includes(it.grp))).map(([it, i]) => itemRow(it, i)).join('')}
+      ${g === 'KYC documents' ? `<div class="toolbar" style="margin:6px 0 0"><input data-obadd placeholder="Add another document (e.g. MOA / AOA, LLP agreement)"><button type="button" class="btn sm" data-obaddb>Add</button><span class="spacer"></span>
+        <a class="btn sm" href="#" data-obask="wa" target="_blank" rel="noopener">Ask client on WhatsApp</a><a class="btn sm" href="#" data-obask="mail">Email</a></div>` : ''}
+      ${g === 'Engagement' ? `<div class="ob-eng"><div class="form-grid"><label>Letter date<input type="date" data-l="date" value="${esc(letter.date || today())}"></label>
+          <label>Signed copy received on<input type="date" data-l="signed_on" value="${esc(letter.signed_on || '')}"></label></div>
+        <div class="small muted" style="margin:10px 0 4px;font-weight:600">Fee agreement</div>
+        <div class="table-wrap"><table class="ob-fees"><thead><tr><th>Work</th><th>Frequency</th><th class="r">Fee (₹, excl. GST)</th><th></th></tr></thead><tbody data-fees>${feeRows()}</tbody></table></div>
+        <datalist id="dl-obfee">${allRet.map(x => `<option value="${esc(x)}"></option>`).join('')}</datalist>
+        <div class="toolbar" style="margin:8px 0 0"><button type="button" class="btn sm" data-fadd>+ Fee line</button>${isManager() ? '<button type="button" class="btn sm" data-fsave>Save fees to Billing</button>' : ''}<span class="spacer"></span>
+          <button type="button" class="btn sm primary" data-print>Engagement letter & fee agreement (print / PDF)</button></div>
+        <details style="margin-top:8px"><summary class="small">Terms printed in the letter (edit for this client)</summary><textarea data-l="terms" rows="9" style="width:100%;margin-top:6px">${esc(letter.terms || OB_TERMS)}</textarea></details></div>` : ''}
+      ${g === 'Set-up' ? `<div class="toolbar" style="margin:6px 0 0"><button type="button" class="btn sm" data-oba="edit">Edit client</button><button type="button" class="btn sm" data-oba="logins">🔑 Portal logins</button>
+        ${isManager() ? '<button type="button" class="btn sm primary" data-oba="work">Create recurring work</button>' : ''}<button type="button" class="btn sm" data-oba="renew">+ Renewal date</button>
+        <a class="btn sm" href="${esc(waShare(clientMsg(c), c.phone))}" target="_blank" rel="noopener" data-oba="link">Send status link</a></div>` : ''}`).join('')}`;
+  let dirty = false;
+  const m = modal('Client onboarding', body, {
+    wide: true, saveText: 'Save',
+    extra: isManager() ? `<button class="btn" data-obdone>${ob.status === 'Completed' ? 'Re-open' : 'Mark complete'}</button>` : '',
+    onSave: async () => { await persist(); toast('Onboarding saved'); after(); }
+  });
+  const el = m.el;
+  const prog = () => { const p = obProgress({ items }); $('[data-obp]', el).textContent = ob.status === 'Completed' ? `Completed ${fmtDate(ob.completed_on)}` : `${p.done} / ${p.total} done`; };
+  prog();
+  const readFees = () => $$('[data-fi]', el).forEach(tr => { const f = fees[+tr.dataset.fi]; f.work = $('[data-f=work]', tr).value.trim(); f.freq = $('[data-f=freq]', tr).value; f.amount = num($('[data-f=amount]', tr).value); });
+  const readLetter = () => $$('[data-l]', el).forEach(i => { letter[i.dataset.l] = i.value; });
+  const persist = async (extra = {}) => {
+    readFees(); readLetter();
+    const rec = { items, fees: fees.filter(f => f.work), letter, ...extra };
+    if (letter.signed_on) { const t = items.find(i => /engagement letter/i.test(i.label)); if (t && !t.done) Object.assign(t, { done: true, on: letter.signed_on, by: me.id }); }
+    await must(sb.from('onboarding').update(rec).eq('client_id', c.id)); Object.assign(ob, rec); dirty = false;
+  };
+  const tick = (re, on = true) => { const it = items.find(i => re.test(i.label)); if (it && !it.done && on) { Object.assign(it, { done: true, on: today(), by: me.id }); refreshItems(); persist().catch(() => {}); } };
+  const refreshItems = () => { $$('[data-ob]', el).forEach(cb => { const it = items[+cb.dataset.ob]; cb.checked = !!it.done; cb.disabled = !!it.na; cb.closest('.ob-item').className = `ob-item ${it.done ? 'done' : ''} ${it.na ? 'na' : ''}`; }); prog(); };
+  el.addEventListener('change', e => {
+    const i = e.target.dataset.ob; dirty = true;
+    if (i !== undefined) { const it = items[+i]; Object.assign(it, e.target.checked ? { done: true, on: today(), by: me.id } : { done: false, on: null, by: null }); refreshItems(); }
+  });
+  el.addEventListener('input', e => { const n = e.target.dataset.obn; dirty = true; if (n !== undefined) items[+n].note = e.target.value; });
+  el.addEventListener('click', async e => {
+    const t = e.target, na = t.dataset.obna;
+    if (na !== undefined) { const it = items[+na]; it.na = !it.na; if (it.na) it.done = false; t.textContent = it.na ? 'Needed' : 'N/A'; refreshItems(); dirty = true; }
+    if (t.dataset.obaddb !== undefined) {
+      const inp = $('[data-obadd]', el), label = inp.value.trim(); if (!label) return;
+      items.push({ k: obKey(label) + '-' + items.length, label, grp: 'KYC documents', done: false });
+      await persist().catch(err => toast(friendly(err), true)); m.close(); openOnboarding(c, after);
+    }
+    const ask = t.closest('[data-obask]');
+    if (ask) {
+      const miss = items.filter(i => i.grp === 'KYC documents' && !i.done && !i.na).map(i => i.label);
+      if (!miss.length) { e.preventDefault(); return toast('All KYC documents are already received'); }
+      const msg = `Dear ${c.contact_person || c.name},\nWelcome to ${firmName()}. To complete your registration with us, please send copies of:\n${miss.map(x => '- ' + x).join('\n')}\nYou can reply to this message with photos / PDFs, or email them to us.\n- ${firmName()}`;
+      if (ask.dataset.obask === 'wa') ask.href = waShare(msg, c.phone);
+      else { if (!firstEmail(c)) { e.preventDefault(); return toast('No email saved for this client (Edit client)', true); } ask.href = mailUrl(c.email, `KYC documents – ${firmName()}`, msg); }
+    }
+    if (t.dataset.fadd !== undefined) { readFees(); fees.push({ work: '', freq: 'Monthly', amount: 0 }); $('[data-fees]', el).innerHTML = feeRows(); dirty = true; }
+    if (t.dataset.fdel !== undefined) { readFees(); fees.splice(+t.dataset.fdel, 1); $('[data-fees]', el).innerHTML = feeRows(); dirty = true; }
+    if (t.dataset.fsave !== undefined) {
+      readFees();
+      const ok = fees.filter(f => f.work && num(f.amount) > 0);
+      if (!ok.length) return toast('Enter at least one fee', true);
+      try {
+        for (const f of ok) {
+          const ex = rates.find(r => r.client_id === c.id && lc(r.return_name) === lc(f.work));
+          if (ex) await must(sb.from('fee_rates').update({ amount: num(f.amount) }).eq('client_id', c.id).eq('return_name', ex.return_name));
+          else { await must(sb.from('fee_rates').insert({ client_id: c.id, return_name: f.work, amount: num(f.amount) })); rates.push({ client_id: c.id, return_name: f.work, amount: num(f.amount) }); }
+        }
+        await persist(); toast(`${ok.length} client fee${ok.length > 1 ? 's' : ''} saved — new work items will carry these fees`);
+      } catch (err) { toast(friendly(err), true); }
+    }
+    if (t.dataset.print !== undefined) { readFees(); readLetter(); printEngagement(c, fees.filter(f => f.work), letter); }
+    const act = t.closest('[data-oba]') && t.closest('[data-oba]').dataset.oba;
+    if (act === 'edit') { await persist().catch(() => {}); m.close(); editClient(c); }
+    if (act === 'logins') { openLogins(c); tick(/portal logins/i, false); }
+    if (act === 'work') createRecurringWork(c, n => { if (n) tick(/recurring work/i); });
+    if (act === 'renew') editRenewal(null, { client_id: c.id, onDone: () => tick(/renewal dates/i) });
+    if (act === 'link') tick(/status link/i);
+    if (t.dataset.obdone !== undefined) {
+      const p = obProgress({ items });
+      if (ob.status !== 'Completed' && p.done < p.total && !confirm(`${p.total - p.done} item(s) are still open. Mark onboarding complete anyway?`)) return;
+      try { await persist(ob.status === 'Completed' ? { status: 'In progress', completed_on: null } : { status: 'Completed', completed_on: today() }); m.close(); toast(ob.status === 'Completed' ? 'Onboarding complete' : 'Re-opened'); after(); } catch (err) { toast(friendly(err), true); }
+    }
+  });
+  $$('[data-x]', el).forEach(b => b.addEventListener('click', () => { if (dirty) persist().catch(() => {}); }, { capture: true }));
+}
+function printEngagement(c, fees, letter) {
+  const svc = [...new Set(fees.map(f => (Object.entries(WORK_ITEMS).find(([, l]) => l.some(x => lc(x) === lc(f.work))) || ['Other'])[0]))];
+  const svcName = { 'GST': 'GST — returns, payment working, reconciliation', 'TDS': 'TDS / TCS — deposits, quarterly returns, certificates', 'ROC/MCA': 'Company / LLP (MCA) annual filings and event-based forms', 'Other': 'Accounting and other services listed below' };
+  const scope = (svc.length ? svc : c.services || []).map(w => `<li>${esc(svcName[w] || w)}</li>`).join('');
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Engagement letter – ${esc(c.name)}</title><style>
+    body{font-family:Arial,Helvetica,sans-serif;color:#111;margin:36px;font-size:13px;line-height:1.5}h1{font-size:19px;margin:0}.muted{color:#555}.pre{white-space:pre-line}
+    .top{border-bottom:2px solid #2667d1;padding-bottom:10px;margin-bottom:18px}table{width:100%;border-collapse:collapse;margin:8px 0}th,td{border:1px solid #ccc;padding:6px 8px;text-align:left}
+    th{background:#eef3fb}.r{text-align:right}.sig{display:flex;justify-content:space-between;margin-top:46px}.pb{page-break-before:always}
+    @media print{body{margin:14mm}.noprint{display:none}}</style></head><body>
+    <div class="noprint" style="text-align:right;margin-bottom:10px"><button onclick="print()">Print / Save as PDF</button></div>
+    <div class="top"><h1>${esc(firmName())}</h1><div class="muted pre">${esc(settings.firm_address || '')}</div><div class="muted">${[esc(settings.firm_phone || ''), esc(settings.firm_email || '')].filter(Boolean).join(' · ')}</div></div>
+    <p>Date: ${fmtDate(letter.date || today())}</p>
+    <p>To<br><b>${esc(c.name)}</b><span class="pre">${c.address ? '<br>' + esc(c.address) : ''}</span>${c.gstin ? '<br>GSTIN: ' + esc(c.gstin) : c.pan ? '<br>PAN: ' + esc(c.pan) : ''}</p>
+    <p><b>Sub: Engagement letter for professional services</b></p>
+    <p>Dear ${esc(c.contact_person || 'Sir / Madam')},</p>
+    <p>Thank you for choosing ${esc(firmName())}. This letter confirms the work we will do for you and the terms on which we will do it.</p>
+    <p><b>Scope of work</b></p><ul>${scope || '<li>As listed in the fee agreement below</li>'}</ul>
+    <p><b>Fees</b> — as per the fee agreement attached.</p>
+    <p><b>Terms</b></p><div class="pre">${esc(letter.terms || OB_TERMS)}</div>
+    <p>Please sign and return a copy of this letter and the fee agreement as your acceptance.</p>
+    <div class="sig"><div>For ${esc(firmName())}<br><br><br>Authorised signatory</div><div>Accepted for ${esc(c.name)}<br><br><br>Signature, name &amp; date</div></div>
+    <div class="pb"></div><h1 style="margin-top:10px">Fee agreement</h1><p class="muted">${esc(c.name)} · effective ${fmtDate(letter.date || today())}</p>
+    <table><thead><tr><th style="width:36px">#</th><th>Work</th><th>Frequency</th><th class="r">Fee (₹)</th></tr></thead><tbody>
+      ${fees.map((f, i) => `<tr><td>${i + 1}</td><td>${esc(f.work)}</td><td>${esc(f.freq)}</td><td class="r">${num(f.amount) ? num(f.amount).toLocaleString('en-IN') : 'As agreed'}</td></tr>`).join('') || '<tr><td colspan="4">—</td></tr>'}</tbody></table>
+    <p class="small">Fees are exclusive of GST${settings.gst_rate ? ` (currently ${esc(settings.gst_rate)}%)` : ''} and of government fees, late fees, interest and penalties. Invoices are payable within 15 days.${settings.bank_details ? '<br><b>Bank details:</b> <span class="pre">' + esc(settings.bank_details) + '</span>' : ''}</p>
+    <div class="sig"><div>For ${esc(firmName())}<br><br><br>Authorised signatory</div><div>Accepted for ${esc(c.name)}<br><br><br>Signature, name &amp; date</div></div>
+    </body></html>`;
+  const w = window.open('', '_blank');
+  if (!w) return toast('Allow pop-ups for this site to print the letter', true);
+  w.document.open(); w.document.write(html); w.document.close();
+}
+// due dates for one client over the next months (same matching rule as "Create work")
+function recurringPlan(c, dues, fromYm, months) {
+  const out = [];
+  for (let k = 0; k < months; k++) {
+    const d0 = new Date(+fromYm.slice(0, 4), +fromYm.slice(5, 7) - 1 + k, 1), y = d0.getFullYear(), m = d0.getMonth() + 1;
+    dues.filter(d => (d.months || []).includes(m) && d.work_type !== 'Income Tax' && clientMatches(c, { work_type: d.work_type, applies_to: d.applies_to }))
+      .forEach(d => out.push({ work_type: d.work_type, return_name: d.return_name, period: periodFor(d.period_rule, y, m), due_date: dueDateFor(d.due_day, y, m) }));
+  }
+  return out.filter(x => x.period).sort((a, b) => a.due_date.localeCompare(b.due_date));
+}
+async function createRecurringWork(c, done = () => {}) {
+  const [dd, tk] = await Promise.all([must(sb.from('due_dates').select('*').order('sort')), must(sb.from('tasks').select('return_name,period').eq('client_id', c.id).limit(5000))]);
+  const have = new Set((tk.data || []).map(t => t.return_name + '|' + t.period));
+  let fromYm = today().slice(0, 7), months = 3;
+  const m = modal(`Create recurring work – ${c.name}`, `<div class="toolbar" style="margin:0 0 10px"><label class="small">From <input type="month" data-rf value="${fromYm}"></label>
+      <label class="small">for <select data-rm>${[1, 2, 3, 6, 12].map(n => `<option value="${n}" ${n === months ? 'selected' : ''}>${n} month${n > 1 ? 's' : ''}</option>`).join('')}</select></label>
+      <span class="spacer"></span><span class="muted small" data-rc></span></div>
+    <p class="muted small" style="margin-top:0">From the Due dates list, for this client's services (${esc((c.services || []).join(', ') || 'none ticked')}) and GST scheme (${esc(c.gst_scheme || '—')}). Assigned to ${esc(profName(c.default_staff) || 'nobody (no default staff)')}. Work that already exists is skipped.</p>
+    <div class="client-list" data-rl style="max-height:340px"></div>`, {
+    wide: true, saveText: 'Create work',
+    onSave: async el => {
+      const pick = $$('[data-rl] input:checked', el).map(i => plan[+i.value]);
+      if (!pick.length) { toast('Nothing ticked', true); return false; }
+      const rows = pick.map(p => ({ client_id: c.id, ...p, assigned_to: c.default_staff || null }));
+      const { data } = await must(sb.from('tasks').upsert(rows, { onConflict: 'client_id,return_name,period', ignoreDuplicates: true }).select('id'));
+      const n = (data || []).length; toast(`${n} work item${n === 1 ? '' : 's'} created`); done(n);
+    }
+  });
+  let plan = [];
+  const draw = () => {
+    plan = recurringPlan(c, dd.data || [], fromYm, months);
+    $('[data-rl]', m.el).innerHTML = plan.length ? plan.map((p, i) => { const ex = have.has(p.return_name + '|' + p.period);
+      return `<label class="check"><input type="checkbox" value="${i}" ${ex ? 'disabled' : 'checked'}> ${wtBadge(p.work_type)} <b>${esc(p.return_name)}</b> · ${esc(p.period)} <span class="muted small">due ${fmtDate(p.due_date)}${ex ? ' · already exists' : ''}</span></label>`; }).join('')
+      : '<div class="empty">No due dates match. Tick the services on the client (Edit client) first.</div>';
+    $('[data-rc]', m.el).textContent = `${plan.filter(p => !have.has(p.return_name + '|' + p.period)).length} new`;
+  };
+  draw();
+  $('[data-rf]', m.el).onchange = e => { fromYm = e.target.value || today().slice(0, 7); draw(); };
+  $('[data-rm]', m.el).onchange = e => { months = +e.target.value; draw(); };
+}
+let obShow = 'In progress';
+VIEWS.onboarding = async v => {
+  const r = await safe(sb.from('onboarding').select('*').order('started_on', { ascending: false }).limit(2000));
+  if (r.error) return notReady(v, 'Client onboarding', 'update-session1.sql');
+  const all = r.data || [];
+  const notStarted = clients.filter(c => c.active && !all.some(o => o.client_id === c.id));
+  v.innerHTML = `<div class="page-head"><h2>Client onboarding</h2><span class="spacer"></span>
+      ${isAdmin() ? '<button class="btn" id="obStd">Edit standard checklist</button>' : ''}
+      ${isManager() ? `<select id="obNew" aria-label="Start onboarding"><option value="">+ Start for a client…</option>${opts(notStarted, '', c => c.name, c => c.id)}</select>` : ''}</div>
+    <div class="toolbar"><div class="seg">${['In progress', 'Completed', 'All'].map(k => `<button data-obs="${k}" class="${obShow === k ? 'on' : ''}">${k} (${k === 'All' ? all.length : all.filter(o => o.status === k).length})</button>`).join('')}</div></div>
+    <div class="table-wrap">${(() => { const list = all.filter(o => obShow === 'All' || o.status === obShow).filter(o => clientById(o.client_id));
+      return list.length ? `<table><thead><tr><th>Client</th><th>Started</th><th>KYC</th><th>Engagement</th><th>Set-up</th><th>Progress</th><th></th></tr></thead><tbody>${list.map(o => {
+        const p = obProgress(o), grp = g => { const it = (o.items || []).filter(i => i.grp === g && !i.na); return it.length ? `${it.filter(i => i.done).length}/${it.length}` : '—'; };
+        return `<tr><td><b>${esc(clientName(o.client_id))}</b><div class="muted small">${esc(profName((clientById(o.client_id) || {}).default_staff) || '')}</div></td><td>${fmtDate(o.started_on)}</td>
+          <td>${grp('KYC documents')}</td><td>${grp('Engagement')}</td><td>${grp('Set-up')}</td>
+          <td style="min-width:140px">${o.status === 'Completed' ? `<span class="st st-filed">Completed ${fmtDate(o.completed_on)}</span>` : `<div class="small">${p.done} / ${p.total}</div><div class="progress"><i style="width:${p.total ? Math.round(100 * p.done / p.total) : 0}%"></i></div>`}</td>
+          <td><button class="btn sm" data-obo="${o.client_id}">Open</button></td></tr>`; }).join('')}</tbody></table>`
+        : `<div class="empty">${obShow === 'In progress' ? 'No client is being onboarded right now.' : 'Nothing here.'}${isManager() ? ' Pick a client above, or add a new client — you will be asked to start onboarding.' : ''}</div>`; })()}</div>`;
+  $$('[data-obs]', v).forEach(b => b.onclick = () => { obShow = b.dataset.obs; route(); });
+  v.addEventListener('click', e => { const id = e.target.dataset.obo; if (id) openOnboarding(clientById(id)); });
+  if ($('#obNew')) $('#obNew').onchange = e => { const c = clientById(e.target.value); if (c) openOnboarding(c); };
+  if ($('#obStd')) $('#obStd').onclick = () => {
+    modal('Standard onboarding checklist', `<p class="muted small">One item per line as <b>Group | Item</b>. Groups: ${OB_GROUPS.join(', ')}. Used for clients you start from now on; existing clients keep their own list.</p>
+      <textarea name="list" rows="16" style="width:100%">${esc(obList().map(([g, l]) => `${g} | ${l}`).join('\n'))}</textarea>`, {
+      extra: '<button class="btn ghost" data-obreset>Built-in list</button>',
+      onSave: async el => {
+        const list = fv(el, 'list').split('\n').map(s => s.split('|').map(x => x.trim())).filter(p => p[0])
+          .map(p => p.length > 1 ? { grp: OB_GROUPS.find(g => lc(g) === lc(p[0])) || 'Set-up', label: p.slice(1).join(' | ') } : { grp: 'KYC documents', label: p[0] });
+        await must(sb.from('settings').update({ onboard_items: list }).eq('id', 1)); settings.onboard_items = list; toast('Standard checklist saved');
+      }
+    });
+    const rs = $('[data-obreset]'); if (rs) rs.onclick = () => { $('[name=list]').value = OB_DEFAULT.map(([g, l]) => `${g} | ${l}`).join('\n'); };
+  };
+};
+
+// GST review → Tax payment intimation for the same month
+document.addEventListener('click', e => { if (e.target.closest && e.target.closest('[data-tpfrom]')) { tpTab = 'GST'; tpMonth = grMonth; } }, true);
+
 // expose pure helpers for testing
-window.__tracker = { fillGstWorkings, G1, GR, RECO, gstr3bFromApi, periodToMonth, strongPassword, periodFor, dueDateFor, parseCSV, toCSV, gstLateFee, gstInterest, tdsCalc, rocCalc, monthsSpan, tdsDepositDue };
+window.__tracker = { fillGstWorkings, G1, GR, RECO, gstr3bFromApi, periodToMonth, strongPassword, periodFor, dueDateFor, parseCSV, toCSV, gstLateFee, gstInterest, tdsCalc, rocCalc, monthsSpan, tdsDepositDue, rnStage, anyDate, parseRenewalRows, gstPayDue, tdsPayDue, advInstalment, advCurrent, advDue, recurringPlan, taxMsg, addMonths, fyEndOf, obProgress, rnKind };
 start();
 })();

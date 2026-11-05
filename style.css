@@ -680,3 +680,29 @@ tr.g1-autorow td{background:var(--grey-soft,#f2f2f2)}
 textarea.code{width:100%;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.75rem;line-height:1.45;white-space:pre}
 .steps{line-height:1.7;padding-left:20px;margin-top:0}
 @media (max-width:640px){.mail-meta{align-items:flex-start}.mail-badge{padding:5px 9px;margin-right:4px}}
+
+/* ---------- v17: renewals · tax payment intimation · onboarding ---------- */
+button.mini{border:0;font:inherit;text-align:left;cursor:pointer}
+.mini:not(.red):not(.amber):not(.blue):not(.green){background:var(--grey-soft);color:var(--ink)}
+.mini b.tp-amt{font-size:1.35rem}
+.rn-dot{display:inline-flex;align-items:center;justify-content:center;min-width:26px;height:22px;padding:0 5px;margin-right:4px;border-radius:999px;font-size:.72rem;font-weight:700;background:var(--grey-soft);color:var(--muted)}
+.rn-dot.on{background:var(--green-soft);color:var(--green)}
+.rn-dot.due{background:var(--amber-soft);color:var(--amber);box-shadow:inset 0 0 0 1.5px currentColor}
+td.nowrap{white-space:nowrap}
+.tp-t input.tp-in{width:78px;text-align:right;padding:6px 7px}
+.tp-t th,.tp-t td{padding-left:8px;padding-right:8px}
+.tp-t td{vertical-align:middle}
+.desk{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:16px;padding:14px}
+.desk-tile{display:flex;flex-direction:column;gap:4px;padding:14px 16px;border-radius:16px;background:var(--brand-soft);color:var(--ink);text-decoration:none;transition:transform .15s}
+.desk-tile:hover{transform:translateY(-2px)}
+.desk-tile span{font-size:.82rem;font-weight:700;color:var(--brand)}.desk-tile b{font-size:1.9rem;font-weight:800;line-height:1.1}.desk-tile small{color:var(--muted);font-size:.8rem}
+@media (max-width:700px){.desk{grid-template-columns:1fr}}
+.ob-head{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+.ob-g{margin:16px 0 6px;font-size:.92rem;color:var(--brand)}
+.ob-item{display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:10px;background:var(--grey-soft);margin-bottom:5px;flex-wrap:wrap}
+.ob-item.done{background:var(--green-soft)}.ob-item.done label{color:var(--green);font-weight:600}
+.ob-item.na{opacity:.55}.ob-item.na label{text-decoration:line-through}
+.ob-item .ob-note{max-width:220px;padding:5px 8px;font-size:.85rem}
+.ob-eng{border:1px dashed var(--line);border-radius:12px;padding:10px 12px;margin-top:6px}
+.ob-fees input,.ob-fees select{padding:6px 8px;width:100%}
+.gr-payh{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
