@@ -62,7 +62,10 @@
     if (recovering) return showSetPassword();
     const { data: me, error } = await sb.rpc('portal_me');
     if (error || !me) { await sb.auth.signOut({ scope: 'local' }); return showLogin('This login is not linked to a client. Staff should use the main tracker page instead.'); }
-    data = me; render();
+    data = me;
+    const rp = await sb.rpc('portal_reports');
+    data.reports = rp.error ? null : (rp.data || []);
+    render();
   }
 
   function render() {
@@ -78,7 +81,7 @@
         <div class="stat blue"><div class="n">${cnt('In progress') + cnt('Ready to file')}</div><div class="l">In progress</div></div>
         <div class="stat green"><div class="n">${cnt('Filed')}</div><div class="l">Filed</div></div>
         <div class="stat ${due > 0.009 ? 'red' : 'green'}"><div class="n">${inr(due)}</div><div class="l">Balance due</div></div></div>
-      <div class="toolbar"><div class="tabs"><button data-tab="work" class="${tab === 'work' ? 'on' : ''}">Work status</button><button data-tab="inv" class="${tab === 'inv' ? 'on' : ''}">Invoices (${invs.length})</button></div></div>
+      <div class="toolbar"><div class="tabs"><button data-tab="work" class="${tab === 'work' ? 'on' : ''}">Work status</button><button data-tab="inv" class="${tab === 'inv' ? 'on' : ''}">Invoices (${invs.length})</button>${data.reports && data.reports.length ? `<button data-tab="rep" class="${tab === 'rep' ? 'on' : ''}">Monthly reports (${data.reports.length})</button>` : ''}</div></div>
       <div id="pv"></div>`;
     $$('[data-tab]').forEach(b => b.onclick = () => { tab = b.dataset.tab; render(); });
     const pv = $('#pv');
@@ -94,6 +97,11 @@
       }).join('') + '<p class="muted small">○ = still needed, ✓ = received. Upload files here or share them with your consultant.</p>'
         : '<div class="table-wrap"><div class="empty">No work items yet.</div></div>';
       $$('[data-up]', pv).forEach(b => b.onclick = () => upload(tasks.find(t => t.id === b.dataset.up)));
+    } else if (tab === 'rep' && data.reports) {
+      pv.innerHTML = `<div class="table-wrap"><table><thead><tr><th>Month</th><th>Published</th><th></th></tr></thead><tbody>${data.reports.map((r, k) => { const [y, m] = r.period.split('-');
+        return `<tr><td><b>${MONTHS[+m - 1]} ${y}</b></td><td class="muted small">${fmt(r.published_at)}</td><td><button class="btn sm primary" data-rep="${k}">Open / PDF</button></td></tr>`; }).join('')}</tbody></table></div>
+        <p class="muted small">Each report shows returns filed (with ARN), tax paid, ITC, invoices missing in GSTR-2B and pending items.</p>`;
+      $$('[data-rep]', pv).forEach(b => b.onclick = () => { const w = window.open('', '_blank'); if (!w) return toast('Allow pop-ups to open the report', true); w.document.write(data.reports[+b.dataset.rep].html || '<p>Report not available</p>'); w.document.close(); });
     } else {
       pv.innerHTML = invs.length ? `<div class="table-wrap"><table><thead><tr><th>Invoice</th><th>Date</th><th class="r">Amount</th><th class="r">Paid</th><th class="r">Balance</th><th></th></tr></thead><tbody>
         ${invs.map(i => `<tr><td><b>${esc(i.inv_no)}</b></td><td>${fmt(i.inv_date)}</td><td class="r">${inr(i.total)}</td><td class="r">${inr(i.paid)}</td>

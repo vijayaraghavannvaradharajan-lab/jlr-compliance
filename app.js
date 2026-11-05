@@ -365,7 +365,7 @@ function renderShell() {
       <div class="user"><button class="btn ghost sm" id="userBtn">${esc(me.full_name || me.email)} ▾</button>
         <div class="menu" id="userMenu" hidden>
           <div class="menu-info">${esc(me.email)}<br><span class="badge">${esc(ROLE_LABEL[me.role] || me.role)}</span></div>
-          ${isAdmin() ? '<a href="#/team" data-act="nav">Team</a><a href="#/settings" data-act="nav">Settings</a>' : ''}<a href="#/renewals" data-act="nav">Renewals</a><a href="#/taxpay" data-act="nav">Tax payment intimation</a><a href="#/onboarding" data-act="nav">Client onboarding</a><a href="#/inbox" data-act="nav">Client mail</a><a href="#/checklists" data-act="nav">Checklists</a><a href="#/calc" data-act="nav">Late fee calculator</a><button data-act="install">Install app on this device</button><button data-act="theme">Theme</button><button data-act="pw">Change password</button><button data-act="out">Sign out</button></div></div>
+          ${isAdmin() ? '<a href="#/team" data-act="nav">Team</a><a href="#/settings" data-act="nav">Settings</a>' : ''}<a href="#/renewals" data-act="nav">Renewals</a><a href="#/taxpay" data-act="nav">Tax payment intimation</a><a href="#/onboarding" data-act="nav">Client onboarding</a><a href="#/clientreport" data-act="nav">Monthly client report</a><a href="#/inbox" data-act="nav">Client mail</a><a href="#/checklists" data-act="nav">Checklists</a><a href="#/calc" data-act="nav">Late fee calculator</a><button data-act="install">Install app on this device</button><button data-act="theme">Theme</button><button data-act="pw">Change password</button><button data-act="out">Sign out</button></div></div>
     </header><main id="view"></main>`;
   const menu = $('#userMenu');
   $('#userBtn').onclick = e => { e.stopPropagation(); menu.hidden = !menu.hidden; };
@@ -3458,7 +3458,7 @@ VIEWS.gst = async v => {
     body.innerHTML = `
       <div class="gr-status card"><div><b>${esc(c.name)}</b> · ${esc(c.gstin)} · <b>${mLabel}</b></div><span class="spacer"></span>
         ${row.status === 'Verified' ? `<span class="st st-filed">✓ Verified by ${esc(profName(row.verified_by) || '')} · ${row.verified_at ? new Date(row.verified_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) : ''}</span>` : '<span class="st st-pending-data">Draft — not verified</span>'}
-        <button class="btn sm" data-portal-api>Fetch from GST portal</button></div>
+        <a class="btn sm" href="#/clientreport" data-crgo>Client report</a><button class="btn sm" data-portal-api>Fetch from GST portal</button></div>
       <div class="gr-srcs">
         ${card('sales', 'Sales register', S, S ? `${S.rows.length} documents · taxable ${gst$(sm.out.t)} · tax ${gst$(gTax(sm.out))}` : 'Type in the GSTR-1 entry tab, or upload an Excel / CSV / Tally export',
           `<button class="btn sm" data-up="sales">Upload</button><button class="link small" data-tpl="sales">Template</button>`)}
@@ -4054,7 +4054,7 @@ function renderG1(o, { client: c, getRow, save }) {
   o.innerHTML = `<div class="g1-bar"><div class="seg">${[['sales', 'Sales'], ['amend', 'Amendments'], ['adv', 'Advances'], ['docs', 'Documents'], ['sum', 'Summary']]
       .map(([k, l]) => `<button data-g1t="${k}" class="${g1Tab === k ? 'on' : ''}">${l}${k !== 'sum' && k !== 'docs' ? ` <small data-g1n="${k}"></small>` : ''}</button>`).join('')}</div>
       <span class="spacer"></span><span class="small" data-g1st></span>
-      <button class="btn sm" data-g1dl>Blank template</button><button class="btn sm" data-g1up>Upload filled template</button><button class="btn sm" data-g1xl>Download Excel</button><button class="btn sm" data-g1wb title="Your GST Workings master template, filled for the whole financial year">GST workings (master)</button>
+      <button class="btn sm" data-g1dl>Blank template</button><button class="btn sm" data-g1up>Upload filled template</button><button class="btn sm" data-g1xl>Download Excel</button><button class="btn sm" data-g1json title="JSON for GST portal → GSTR-1 → Prepare offline → Upload">GSTR-1 JSON</button><button class="btn sm" data-g1wb title="Your GST Workings master template, filled for the whole financial year">GST workings (master)</button>
       <button class="btn sm primary" data-g1save>Save</button></div>
     <div data-g1body></div>`;
   const body = $('[data-g1body]', o), st = $('[data-g1st]', o);
@@ -4213,6 +4213,22 @@ function renderG1(o, { client: c, getRow, save }) {
       sum.push([], ['Documents', 'From', 'To', 'Total', 'Cancelled', 'Net']); s.docs.filter(x => x.total).forEach(x => sum.push([x.nat, x.from, x.to, x.total, x.cancelled, x.net]));
       X.utils.book_append_sheet(wbk, X.utils.aoa_to_sheet(sum), 'Summary');
       X.writeFile(wbk, `GSTR1-${slug(c.name)}-${row.period.slice(0, 7)}.xlsx`);
+    }
+    if ('g1json' in d) {
+      const R = g1json.build(D, c, row.period);
+      const fname = `GSTR1_${c.gstin}_${R.json.fp}.json`;
+      if (R.errors.length) { modal('GSTR-1 JSON – fix these first', `<p>${R.errors.length} row${R.errors.length > 1 ? 's have' : ' has'} errors. The portal would reject the file, so fix them in the grid (Check column) and try again.</p><p class="note warn small">${R.errors.slice(0, 25).map(esc).join('<br>')}${R.errors.length > 25 ? '<br>…' : ''}</p>`); return; }
+      if (!R.count && !R.json.nil && !R.json.at) return toast('Nothing to export — add sales rows first', true);
+      const J = R.json, n = k => (J[k] || []).reduce((s, x) => s + ((x.inv || x.nt || [x]).length), 0);
+      modal('GSTR-1 JSON for the GST portal', `<p><b>${esc(c.name)}</b> · ${esc(c.gstin)} · return period <b>${esc(J.fp.slice(0, 2) + '/' + J.fp.slice(2))}</b></p>
+        <div class="table-wrap"><table><thead><tr><th>Table</th><th class="r">Documents / rows</th></tr></thead><tbody>
+        ${[['4A B2B (incl. SEZ 6B)', n('b2b')], ['5 B2CL', n('b2cl')], ['6A Exports', n('exp')], ['7 B2CS', (J.b2cs || []).length], ['9B Credit / debit notes (registered)', n('cdnr')], ['9B Credit / debit notes (unregistered)', (J.cdnur || []).length],
+          ['8 Nil / exempt / non-GST', ((J.nil || {}).inv || []).length], ['11A / 11B Advances', (J.at || []).length + (J.txpd || []).length], ['12 HSN (B2B + B2C)', ((J.hsn || {}).hsn_b2b || []).length + ((J.hsn || {}).hsn_b2c || []).length], ['13 Documents issued', ((J.doc_issue || {}).doc_det || []).length]]
+          .filter(x => x[1]).map(([l, v]) => `<tr><td>${l}</td><td class="r">${v}</td></tr>`).join('')}</tbody></table></div>
+        ${D.dirty ? '<p class="note warn small">You have unsaved changes — the file uses what is on screen now. Save as well.</p>' : ''}
+        ${R.notes.length ? `<p class="note small">${R.notes.map(esc).join('<br>')}</p>` : ''}
+        <p class="muted small">Upload: GST portal → Returns → GSTR-1 → <b>Prepare offline</b> → Upload → choose this file. Wait for "processed", then check the summary against the tracker before filing.</p>`, {
+        saveText: 'Download JSON', onSave: () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify(J)], { type: 'application/json' })); a.download = fname; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000); toast('Saved ' + fname); } });   // no BOM: the portal rejects it
     }
     if ('g1save' in d) {
       const clean = list => list.filter(r => Object.keys(r).length);
@@ -5073,10 +5089,233 @@ VIEWS.onboarding = async v => {
   };
 };
 
+/* =====================================================================
+   v18 · SESSION 2: MONTHLY CLIENT REPORT · GSTR-1 JSON EXPORT
+   ===================================================================== */
+const ymLabelFull = ym => { const [y, m] = ym.split('-').map(Number); return `${MONTHS_FULL[m - 1]} ${y}`; };
+const ymEnd = ym => { const [y, m] = ym.split('-').map(Number); return iso(new Date(y, m, 0)); };
+const ymShift = (ym, n) => { const [y, m] = ym.split('-').map(Number); const d = new Date(y, m - 1 + n, 1); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`; };
+const TI_KIND = { GST: 'GST', TDS: 'TDS / TCS', ADV: 'Advance tax' };
+
+/* ---------- 1. gather one client's month ---------- */
+async function buildClientReport(c, ym) {
+  const start = ym + '-01', end = ymEnd(ym), nextEnd = ymEnd(ymShift(ym, 1)), label = monthLabel(ym);
+  const [tk, ti, gm, rn] = await Promise.all([
+    must(sb.from('tasks').select('*').eq('client_id', c.id).limit(3000)),
+    safe(sb.from('tax_intimations').select('*').eq('client_id', c.id).limit(500)),
+    safe(sb.from('gst_months').select('*').eq('client_id', c.id).eq('period', start).maybeSingle()),
+    safe(sb.from('renewals').select('kind,holder,ref_no,expires_on,status').eq('client_id', c.id).limit(200))
+  ]);
+  const tasks = tk.data || [];
+  const inMonth = d => d && d >= start && d <= end;
+  const filed = tasks.filter(t => t.status === 'Filed' && (periodToMonth(t.period) === ym || inMonth(t.filed_on)))
+    .sort((a, b) => (a.filed_on || '').localeCompare(b.filed_on || '') || a.return_name.localeCompare(b.return_name))
+    .map(t => ({ type: t.work_type, ret: t.return_name, period: t.period, filed_on: t.filed_on || null, arn: t.arn || '' }));
+  const pending = tasks.filter(t => isOpen(t.status) && (t.status === 'Pending data' || !t.due_date || t.due_date <= nextEnd))
+    .sort((a, b) => (a.due_date || '9999').localeCompare(b.due_date || '9999'))
+    .map(t => ({ type: t.work_type, ret: t.return_name, period: t.period, due: t.due_date || null, status: t.status, late: !!(t.due_date && t.due_date < today()) }));
+  const tax = (ti.error ? [] : ti.data || []).filter(x => x.period === label || (x.kind === 'ADV' && (inMonth(x.due_date) || inMonth(x.paid_on))))
+    .map(x => ({ kind: x.kind, period: x.period, due: x.due_date, payable: num(x.total), paid_on: x.paid_on || null, paid: x.paid_on ? num(x.paid_amount ?? x.total) : 0, challan: x.challan || '' }));
+  let gst = null, missing = [];
+  const row = gm.error ? null : gm.data;
+  if (row && (row.sales || row.purchases || row.gstr2b || row.gstr3b)) {
+    const sm = GR.summarise(row);
+    gst = { sales: Math.round(sm.out.t), out_tax: Math.round(gTax(sm.out)), itc_2b: sm.has2b ? Math.round(gTax(sm.itc2b)) : null, itc_books: sm.counts.purchases ? Math.round(gTax(sm.itcBooks)) : null,
+      blocked: Math.round(gTax(sm.blocked)), cash: Math.round(row.gstr3b && row.gstr3b.cash ? gTax(row.gstr3b.cash) : sm.cashTotal), cash_from: row.gstr3b && row.gstr3b.cash ? 'filed GSTR-3B' : 'draft working',
+      verified: row.status === 'Verified', has2b: sm.has2b, hasBooks: !!sm.counts.purchases };
+    if (sm.rec) missing = sm.rec.items.filter(o => o.st === 'books_only' && o.b).map(o => ({ supplier: o.b.n || '', gstin: o.b.g || '', inv: o.b.i, date: o.b.d || '', tax: Math.round(GR.tax(o.b)) }))
+      .sort((a, b) => b.tax - a.tax);
+  }
+  const renew = (rn.error ? [] : rn.data || []).filter(x => rnLive(x) && x.expires_on && x.expires_on <= iso(addDays(new Date(), 60)))
+    .sort((a, b) => a.expires_on.localeCompare(b.expires_on)).map(x => ({ kind: x.kind, holder: x.holder || '', expires: x.expires_on }));
+  return { v: 1, ym, label: ymLabelFull(ym), made_at: new Date().toISOString(), made_by: me.full_name || me.email,
+    client: { name: c.name, gstin: c.gstin || '', pan: c.pan || '', contact: c.contact_person || '' },
+    firm: { name: firmName(), address: settings.firm_address || '', phone: settings.firm_phone || '', email: settings.firm_email || '' },
+    filed, pending, tax, gst, missing, missing_tax: missing.reduce((s, m) => s + m.tax, 0), renew };
+}
+
+/* ---------- 2. the printable report (also stored for the client portal) ---------- */
+function clientReportHtml(R) {
+  const e = esc, rs = n => '₹' + Math.round(n || 0).toLocaleString('en-IN');
+  const sec = (title, inner, note = '') => `<h2>${title}</h2>${note ? `<p class="muted">${note}</p>` : ''}${inner}`;
+  const tbl = (head, rows, empty) => rows.length ? `<table><thead><tr>${head.map(h => `<th${/₹$/.test(h) ? ' class="r"' : ''}>${h}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table>` : `<p class="muted">${empty}</p>`;
+  const taxPaid = R.tax.reduce((s, t) => s + t.paid, 0);
+  const tiles = [['Returns filed', R.filed.length], ['Tax paid', rs(taxPaid)], ['Pending items', R.pending.length], ['Invoices missing in 2B', R.missing.length]];
+  const g = R.gst;
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${e(R.client.name)} – ${e(R.label)} report</title><style>
+    body{font-family:Arial,Helvetica,sans-serif;color:#14213d;margin:32px auto;max-width:860px;padding:0 18px;font-size:13px;line-height:1.45}
+    .top{display:flex;justify-content:space-between;gap:16px;border-bottom:3px solid #2667d1;padding-bottom:12px;flex-wrap:wrap}h1{font-size:20px;margin:0}
+    .ttl{text-align:right}.ttl b{font-size:18px;color:#2667d1;display:block}.muted{color:#5a6478}
+    .tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:18px 0}.tile{background:#eef3fb;border-radius:10px;padding:10px 12px}.tile b{display:block;font-size:20px}
+    h2{font-size:15px;margin:22px 0 6px;color:#2667d1}table{width:100%;border-collapse:collapse}th,td{border:1px solid #d5dce8;padding:6px 8px;text-align:left;vertical-align:top}
+    th{background:#eef3fb;font-size:12px}.r{text-align:right}.late{color:#b42318;font-weight:700}.ok{color:#1f7a4d;font-weight:700}
+    .kv{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.kv div{border:1px solid #d5dce8;border-radius:8px;padding:8px 10px}.kv b{display:block;font-size:15px}
+    .foot{margin-top:28px;border-top:1px solid #d5dce8;padding-top:8px;font-size:11px}
+    @media (max-width:640px){.tiles,.kv{grid-template-columns:1fr 1fr}body{margin:16px auto}}@media print{.noprint{display:none}body{margin:10mm auto}}</style></head><body>
+    <div class="noprint" style="text-align:right;margin-bottom:10px"><button onclick="print()">Print / Save as PDF</button></div>
+    <div class="top"><div><h1>${e(R.firm.name)}</h1><div class="muted">${e(R.firm.address)}</div><div class="muted">${[e(R.firm.phone), e(R.firm.email)].filter(Boolean).join(' · ')}</div></div>
+      <div class="ttl"><b>Monthly compliance report</b>${e(R.label)}<br><span class="muted">${e(R.client.name)}${R.client.gstin ? '<br>GSTIN ' + e(R.client.gstin) : R.client.pan ? '<br>PAN ' + e(R.client.pan) : ''}</span></div></div>
+    <div class="tiles">${tiles.map(([l, v]) => `<div class="tile"><span class="muted">${l}</span><b>${v}</b></div>`).join('')}</div>
+    ${sec('Returns filed', tbl(['Return', 'Period', 'Filed on', 'ARN / acknowledgement'], R.filed.map(f => `<tr><td>${e(f.ret)}</td><td>${e(f.period)}</td><td>${fmtDate(f.filed_on)}</td><td>${e(f.arn || '—')}</td></tr>`), 'No returns filed for this month yet.'))}
+    ${sec('Tax paid', tbl(['Tax', 'Period', 'Payable ₹', 'Paid ₹', 'Paid on', 'Challan'], R.tax.map(t => `<tr><td>${e(TI_KIND[t.kind] || t.kind)}</td><td>${e(t.period)}</td><td class="r">${rs(t.payable)}</td><td class="r">${t.paid_on ? rs(t.paid) : '—'}</td><td class="${!t.paid_on && t.due && t.due < today() && t.payable > 0 ? 'late' : ''}">${t.paid_on ? fmtDate(t.paid_on) : t.payable > 0 ? 'Not paid · due ' + fmtDate(t.due) : '—'}</td><td>${e(t.challan || '')}</td></tr>`), 'No tax payment recorded for this month.'))}
+    ${g ? sec('GST summary', `<div class="kv"><div><span class="muted">Taxable sales</span><b>${rs(g.sales)}</b></div><div><span class="muted">Output tax</span><b>${rs(g.out_tax)}</b></div>
+      <div><span class="muted">ITC available (GSTR-2B)</span><b>${g.itc_2b == null ? '—' : rs(g.itc_2b)}</b></div><div><span class="muted">ITC as per your books</span><b>${g.itc_books == null ? '—' : rs(g.itc_books)}</b></div>
+      <div><span class="muted">ITC not available</span><b>${rs(g.blocked)}</b></div><div><span class="muted">Cash payable (${e(g.cash_from)})</span><b>${rs(g.cash)}</b></div></div>`, g.verified ? '' : 'Working not yet verified — figures may change.') : ''}
+    ${g && g.has2b && g.hasBooks ? sec('Purchase invoices missing in GSTR-2B', tbl(['Supplier', 'GSTIN', 'Invoice', 'Date', 'Tax ₹'], R.missing.slice(0, 60).map(m => `<tr><td>${e(m.supplier)}</td><td>${e(m.gstin)}</td><td>${e(m.inv)}</td><td>${fmtDate(m.date)}</td><td class="r">${rs(m.tax)}</td></tr>`), '<span class="ok">✓ All purchase invoices in your books appear in GSTR-2B.</span>')
+      + (R.missing.length ? `<p>ITC of <b>${rs(R.missing_tax)}</b> cannot be claimed until these suppliers file their returns. Please ask them to upload the invoices.${R.missing.length > 60 ? ` (${R.missing.length - 60} more not shown.)` : ''}</p>` : '')) : ''}
+    ${sec('Pending items', tbl(['Work', 'Period', 'Due', 'Status'], R.pending.map(p => `<tr><td>${e(p.ret)}</td><td>${e(p.period)}</td><td class="${p.late ? 'late' : ''}">${fmtDate(p.due)}</td><td>${p.status === 'Pending data' ? '<b>Waiting for your documents</b>' : e(p.status)}</td></tr>`), '<span class="ok">✓ Nothing pending.</span>'))}
+    ${R.renew.length ? sec('Renewals coming up', tbl(['Item', 'Holder', 'Expires'], R.renew.map(x => `<tr><td>${e(x.kind)}</td><td>${e(x.holder)}</td><td>${fmtDate(x.expires)}</td></tr>`), '')) : ''}
+    <div class="foot muted">Prepared by ${e(R.firm.name)} on ${fmtDate(R.made_at.slice(0, 10))}. Please contact us for any clarification.</div></body></html>`;
+}
+const clientReportMsg = (R, c, published) => {
+  const rs = n => inr(Math.round(n || 0)), paid = R.tax.filter(t => t.paid_on), due = R.tax.filter(t => !t.paid_on && t.payable > 0), waiting = R.pending.filter(p => p.status === 'Pending data');
+  const L = [`Dear ${c.contact_person || c.name},`, `Your compliance summary for ${R.label}:`];
+  L.push(R.filed.length ? `\nReturns filed:\n${R.filed.map(f => `- ${f.ret} (${f.period})${f.arn ? ' · ARN ' + f.arn : ''}`).join('\n')}` : '\nReturns filed: none yet.');
+  if (paid.length) L.push(`\nTax paid:\n${paid.map(t => `- ${TI_KIND[t.kind]} ${t.period}: ${rs(t.paid)}`).join('\n')}`);
+  if (due.length) L.push(`\nTax to pay:\n${due.map(t => `- ${TI_KIND[t.kind]} ${t.period}: ${rs(t.payable)} by ${fmtDate(t.due)}`).join('\n')}`);
+  if (R.gst && R.gst.itc_2b != null) L.push(`\nITC available in GSTR-2B: ${rs(R.gst.itc_2b)}`);
+  if (R.missing.length) L.push(`${R.missing.length} purchase invoice${R.missing.length > 1 ? 's' : ''} (ITC ${rs(R.missing_tax)}) not yet in GSTR-2B — please ask the supplier${R.missing.length > 1 ? 's' : ''} to upload.`);
+  if (waiting.length) L.push(`\nWaiting for your documents:\n${waiting.map(p => `- ${p.ret} (${p.period})`).join('\n')}`);
+  L.push(published ? `\nFull report: sign in to your client portal ${portalUrl()}` : '\nThe full report (PDF) is attached / will follow.');
+  L.push(`- ${firmName()}`);
+  return L.join('\n');
+};
+
+/* ---------- 3. the page ---------- */
+let crMonth = prevMonth(), crQ = '';
+VIEWS.clientreport = async v => {
+  const r = await safe(sb.from('client_reports').select('id,client_id,period,published,published_at,sent_on,sent_via,made_at').eq('period', crMonth + '-01').limit(5000));
+  if (r.error) return notReady(v, 'Monthly client report', 'update-session2.sql');
+  const rep = new Map((r.data || []).map(x => [x.client_id, x]));
+  const list = myClients();
+  v.innerHTML = `<div class="page-head"><h2>Monthly client report</h2><span class="spacer"></span><label class="small muted" for="crM">Month</label><input type="month" id="crM" value="${esc(crMonth)}"></div>
+    <p class="muted small" style="margin-top:-6px">Returns filed with ARN, tax paid, ITC, pending items and purchase invoices missing in GSTR-2B — for each client. <b>Publish</b> puts it in the client portal; WhatsApp / Email send the summary.</p>
+    <div class="bento-stats card stats4" style="margin-bottom:14px"><div class="mini blue"><span>Clients</span><b>${list.length}</b></div>
+      <div class="mini green"><span>Published to portal</span><b>${list.filter(c => (rep.get(c.id) || {}).published).length}</b></div>
+      <div class="mini amber"><span>Not sent yet</span><b>${list.filter(c => !(rep.get(c.id) || {}).sent_on).length}</b></div>
+      <div class="mini"><span>Month</span><b class="tp-amt">${esc(ymLabelFull(crMonth))}</b></div></div>
+    <div class="toolbar"><input type="search" id="crQ" placeholder="Search client" value="${esc(crQ)}"></div><div id="crList"></div>`;
+  const draw = () => {
+    const q = lc(crQ), rows = list.filter(c => !q || lc(c.name).includes(q));
+    $('#crList').innerHTML = rows.length ? `<div class="table-wrap"><table><thead><tr><th>Client</th><th>Services</th><th>Portal</th><th>Sent</th><th></th></tr></thead><tbody>${rows.map(c => { const x = rep.get(c.id) || {};
+      return `<tr data-c="${c.id}"><td><b>${esc(c.name)}</b><div class="muted small">${esc(c.gstin || c.pan || '')}</div></td><td class="wrap">${(c.services || []).map(wtBadge).join(' ')}</td>
+        <td class="small">${x.published ? `<span class="st st-filed">Published ${fmtDate((x.published_at || '').slice(0, 10))}</span>` : '<span class="muted">—</span>'}</td>
+        <td class="small">${x.sent_on ? `${fmtDate(x.sent_on)}<div class="muted">${esc(x.sent_via || '')}</div>` : '<span class="muted">—</span>'}</td>
+        <td class="row-btns"><button class="btn sm" data-cr="view">Report / PDF</button><button class="btn sm ${x.sent_on ? '' : 'primary'}" data-cr="wa">WhatsApp</button><button class="btn sm" data-cr="mail">Email</button>
+          ${isManager() ? `<button class="btn sm ghost" data-cr="${x.published ? 'unpub' : 'pub'}">${x.published ? 'Unpublish' : 'Publish to portal'}</button>` : ''}</td></tr>`; }).join('')}</tbody></table></div>`
+      : '<div class="table-wrap"><div class="empty">No clients.</div></div>';
+  };
+  draw();
+  $('#crM').onchange = e => { crMonth = e.target.value || prevMonth(); route(); };
+  $('#crQ').oninput = e => { crQ = e.target.value; draw(); };
+  const store = async (c, R, patch) => {
+    const rec = { client_id: c.id, period: crMonth + '-01', data: R, html: clientReportHtml(R), made_at: R.made_at, ...patch };
+    const { data } = await must(sb.from('client_reports').upsert(rec, { onConflict: 'client_id,period' }).select('id,client_id,period,published,published_at,sent_on,sent_via,made_at').single());
+    rep.set(c.id, data); draw();
+  };
+  $('#crList').addEventListener('click', async e => {
+    const b = e.target.closest('[data-cr]'); if (!b) return;
+    const c = clientById(b.closest('tr').dataset.c), act = b.dataset.cr, x = rep.get(c.id) || {};
+    if (act === 'mail' && !firstEmail(c)) return toast('No email saved for this client (Clients → Edit)', true);
+    const w = act === 'view' || act === 'wa' ? window.open('', '_blank') : null;     // open now, fill after the data loads (pop-up rule)
+    if ((act === 'view' || act === 'wa') && !w) return toast('Allow pop-ups for this site', true);
+    if (w) w.document.write('<p style="font-family:Arial;padding:20px">Preparing the report…</p>');
+    b.disabled = true;
+    try {
+      const R = await buildClientReport(c, crMonth);
+      if (act === 'view') { w.document.open(); w.document.write(clientReportHtml(R)); w.document.close(); await store(c, R, {}); }
+      if (act === 'wa') { if (!c.phone) toast('No phone saved for this client — pick the contact in WhatsApp'); w.location.href = waShare(clientReportMsg(R, c, !!x.published), c.phone); await store(c, R, { sent_on: today(), sent_via: 'WhatsApp' }); }
+      if (act === 'mail') { location.href = mailUrl(c.email, `Compliance report – ${R.label} – ${c.name}`, clientReportMsg(R, c, !!x.published)); await store(c, R, { sent_on: today(), sent_via: 'Email' }); }
+      if (act === 'pub') { await store(c, R, { published: true, published_at: new Date().toISOString(), published_by: me.id }); toast(`Published — ${c.name} can see it in the client portal`); }
+      if (act === 'unpub') { await must(sb.from('client_reports').update({ published: false }).eq('client_id', c.id).eq('period', crMonth + '-01')); rep.set(c.id, { ...x, published: false }); draw(); toast('Removed from the client portal'); }
+    } catch (err) { if (w) w.close(); toast(friendly(err), true); }
+    finally { b.disabled = false; }
+  });
+};
+
+/* ---------- 4. GSTR-1 JSON (GST portal: Returns → GSTR-1 → Prepare offline → Upload) ---------- */
+const g1json = (() => {
+  const r2 = x => Math.round((+x || 0) * 100) / 100;
+  const dmy = s => { const [y, m, d] = String(s).slice(0, 10).split('-'); return `${d}-${m}-${y}`; };
+  const up = v => String(v ?? '').trim().toUpperCase();
+  const has = v => v !== undefined && v !== null && String(v).trim() !== '';
+  const det = (x, s = 1) => { const o = { txval: r2(s * x.amt), rt: x.rt }; if (x.inter) o.iamt = r2(s * x.ig); else { o.camt = r2(s * x.cg); o.samt = r2(s * x.sg); } o.csamt = r2(s * x.cs); return o; };
+  const DOCNUM = Object.fromEntries(G1L.docs.map((d, i) => [d, i + 1]));
+  function build(D, c, period) {
+    const own = String(c.gstin || '').slice(0, 2), S = G1.calcSales(D.sales || [], own, c.gstin), V = G1.calcAdv(D.adv || [], own), sm = G1.summary(D, c);
+    const errors = [...S, ...V].filter(o => o.x && !o.x.ok).map(o => `${o.row.no || o.row.rv || '(no number)'}: ${o.x.check}`);
+    const ok = S.filter(o => o.x && o.x.ok).map(o => ({ ...o, x: { ...o.x, rt: has(o.row.nil) ? 0 : num(o.row.rate) } }));
+    const notes = [], out = { gstin: up(c.gstin), fp: period.slice(5, 7) + period.slice(0, 4), version: 'GST3.2.3', hash: 'hash' };
+    // group lines of the same document into one invoice with rate-wise items
+    const group = (rows, keyFn) => { const m = new Map(); rows.forEach(o => { const k = keyFn(o); if (!m.has(k)) m.set(k, []); m.get(k).push(o); }); return [...m.values()]; };
+    const items = (lines, s = 1, nest = true) => { const byRate = new Map(); lines.forEach(({ x }) => { const k = x.rt; const a = byRate.get(k) || { amt: 0, ig: 0, cg: 0, sg: 0, cs: 0, rt: k, inter: x.inter }; a.amt += x.amt; a.ig += x.ig; a.cg += x.cg; a.sg += x.sg; a.cs += x.cs; byRate.set(k, a); });
+      return [...byRate.values()].map((a, i) => nest ? { num: i + 1, itm_det: det(a, s) } : det(a, s)); };
+    const val = lines => r2(lines.reduce((t, { row, x }) => t + x.amt + (row.rc === 'Yes' ? 0 : x.ig + x.cg + x.sg) + x.cs, 0));
+    const invTyp = r => /^SEZ - Without/.test(r.exp || '') ? 'SEWOP' : /^SEZ - With/.test(r.exp || '') ? 'SEWP' : 'R';
+    const pos = (o) => o.x.sc === '99' ? '96' : o.x.sc;
+    // B2B + SEZ
+    const b2b = ok.filter(o => ['B2B', 'SEZ'].includes(o.x.table) && o.x.type === 'Invoice');
+    if (b2b.length) out.b2b = group(b2b, o => up(o.row.gstin)).map(g => ({ ctin: up(g[0].row.gstin),
+      inv: group(g, o => up(o.row.no)).map(L => ({ inum: String(L[0].row.no).trim(), idt: dmy(L[0].row.d), val: val(L), pos: pos(L[0]), rchrg: L[0].row.rc === 'Yes' ? 'Y' : 'N', inv_typ: invTyp(L[0].row), itms: items(L) })) }));
+    // B2CL
+    const b2cl = ok.filter(o => o.x.table === 'B2CL');
+    if (b2cl.length) out.b2cl = group(b2cl, o => pos(o)).map(g => ({ pos: pos(g[0]), inv: group(g, o => up(o.row.no)).map(L => ({ inum: String(L[0].row.no).trim(), idt: dmy(L[0].row.d), val: val(L), itms: items(L) })) }));
+    // Exports
+    const exp = ok.filter(o => o.x.table === 'EXP' && o.x.type === 'Invoice');
+    if (exp.length) out.exp = group(exp, o => /Without/.test(o.row.exp) ? 'WOPAY' : 'WPAY').map(g => ({ exp_typ: /Without/.test(g[0].row.exp) ? 'WOPAY' : 'WPAY',
+      inv: group(g, o => up(o.row.no)).map(L => ({ inum: String(L[0].row.no).trim(), idt: dmy(L[0].row.d), val: val(L), itms: items(L, 1, false).map(d => ({ txval: d.txval, rt: d.rt, iamt: d.iamt || 0, csamt: d.csamt })) })) }));
+    // Credit / debit notes
+    const notesR = ok.filter(o => o.x.type !== 'Invoice' && has(o.row.gstin));
+    if (notesR.length) out.cdnr = group(notesR, o => up(o.row.gstin)).map(g => ({ ctin: up(g[0].row.gstin),
+      nt: group(g, o => up(o.row.no)).map(L => ({ ntty: L[0].x.type === 'Credit Note' ? 'C' : 'D', nt_num: String(L[0].row.no).trim(), nt_dt: dmy(L[0].row.d), val: val(L), pos: pos(L[0]), rchrg: 'N', inv_typ: invTyp(L[0].row), itms: items(L) })) }));
+    const notesU = ok.filter(o => o.x.type !== 'Invoice' && !has(o.row.gstin));
+    const cdnur = [], b2csNotes = [];
+    group(notesU, o => up(o.row.no)).forEach(L => {
+      const r = L[0].row, isExp = /^Export/.test(r.exp || ''), big = L[0].x.inter && val(L) > 100000;
+      if (isExp || big) cdnur.push({ typ: isExp ? (/Without/.test(r.exp) ? 'EXPWOP' : 'EXPWP') : 'B2CL', ntty: L[0].x.type === 'Credit Note' ? 'C' : 'D', nt_num: String(r.no).trim(), nt_dt: dmy(r.d), val: val(L), ...(isExp ? {} : { pos: pos(L[0]) }), itms: items(L) });
+      else b2csNotes.push(...L);
+    });
+    if (cdnur.length) out.cdnur = cdnur;
+    if (b2csNotes.length) notes.push(`${new Set(b2csNotes.map(o => up(o.row.no))).size} credit/debit note(s) to unregistered customers were netted into B2CS (Table 7), as the portal requires.`);
+    // B2CS (state + rate, notes netted)
+    const bcs = new Map();
+    [...ok.filter(o => o.x.table === 'B2CS'), ...b2csNotes].forEach(o => { const k = pos(o) + '|' + o.x.rt + '|' + (o.row.eco ? up(o.row.eco) : ''); const s = o.x.sign;
+      const a = bcs.get(k) || { pos: pos(o), rt: o.x.rt, inter: o.x.inter, eco: o.row.eco ? up(o.row.eco) : '', amt: 0, ig: 0, cg: 0, sg: 0, cs: 0 }; a.amt += s * o.x.amt; a.ig += s * o.x.ig; a.cg += s * o.x.cg; a.sg += s * o.x.sg; a.cs += s * o.x.cs; bcs.set(k, a); });
+    if (bcs.size) out.b2cs = [...bcs.values()].filter(a => Math.abs(a.amt) > 0.004).map(a => ({ sply_ty: a.inter ? 'INTER' : 'INTRA', pos: a.pos, typ: a.eco ? 'E' : 'OE', ...(a.eco ? { etin: a.eco } : {}), ...det(a) }));
+    // Nil / exempt / non-GST (Table 8)
+    const nil = {};
+    ok.filter(o => o.x.table === 'NIL').forEach(o => { const k = (o.x.inter ? 'INTR' : 'INTRA') + (has(o.row.gstin) ? 'B2B' : 'B2C'); const a = nil[k] = nil[k] || { sply_ty: k, expt_amt: 0, nil_amt: 0, ngsup_amt: 0 };
+      const f = o.row.nil === 'Exempted' ? 'expt_amt' : o.row.nil === 'Non-GST' ? 'ngsup_amt' : 'nil_amt'; a[f] = r2(a[f] + o.x.sign * o.x.amt); });
+    if (Object.keys(nil).length) out.nil = { inv: Object.values(nil) };
+    // Advances (11A / 11B)
+    const adv = (kind) => { const m = new Map(); V.filter(o => o.x && o.x.ok && kind.test(o.row.ty)).forEach(({ row, x }) => { const p = x.sc, k = p;
+        const e = m.get(k) || { pos: p, sply_ty: x.inter ? 'INTER' : 'INTRA', rates: new Map() }; const rt = num(row.rate), a = e.rates.get(rt) || { rt, ad_amt: 0, iamt: 0, camt: 0, samt: 0, csamt: 0 };
+        a.ad_amt = r2(a.ad_amt + x.amt); a.iamt = r2(a.iamt + x.ig); a.camt = r2(a.camt + x.cg); a.samt = r2(a.samt + x.sg); a.csamt = r2(a.csamt + x.cs); e.rates.set(rt, a); m.set(k, e); });
+      return [...m.values()].map(e => ({ pos: e.pos, sply_ty: e.sply_ty, itms: [...e.rates.values()].map(a => { const o = { rt: a.rt, ad_amt: a.ad_amt }; if (e.sply_ty === 'INTER') o.iamt = a.iamt; else { o.camt = a.camt; o.samt = a.samt; } o.csamt = a.csamt; return o; }) })); };
+    const at = adv(/11A/), txpd = adv(/11B/);
+    if (at.length) out.at = at; if (txpd.length) out.txpd = txpd;
+    // HSN (Table 12, B2B and B2C split)
+    const hb = [], hc = [];
+    Object.entries(sm.hsn).forEach(([k, h]) => { const [tab, code, rate, uqc] = k.split('|');
+      const e = { hsn_sc: code, desc: '', uqc: uqc || 'NA', qty: r2(h.q), rt: +rate, txval: r2(h.t), iamt: r2(h.ig), camt: r2(h.cg), samt: r2(h.sg), csamt: r2(h.cs) };
+      (tab === 'B2B' ? hb : hc).push(e); });
+    if (hb.length || hc.length) out.hsn = { ...(hb.length ? { hsn_b2b: hb.map((e, i) => ({ ...e, num: i + 1 })) } : {}), ...(hc.length ? { hsn_b2c: hc.map((e, i) => ({ ...e, num: i + 1 })) } : {}) };
+    // Documents issued (Table 13)
+    const docs = sm.docs.filter(d => d.total);
+    if (docs.length) out.doc_issue = { doc_det: docs.map(d => ({ doc_num: DOCNUM[d.nat], docs: [{ num: 1, from: String(d.from), to: String(d.to), totnum: num(d.total), cancel: num(d.cancelled), net_issue: num(d.net) }] })) };
+    const amendN = G1.calcAmend(D.amend || [], own).filter(o => o.x).length;
+    if (amendN) notes.push(`${amendN} amendment row(s) are not included — enter amendments (Tables 9A/9C/10) directly on the GST portal.`);
+    if (c.gst_scheme === 'QRMP') notes.push('QRMP client: for a quarter-end month this is GSTR-1 (quarterly) and must hold the whole quarter; other months are IFF (B2B only) — upload B2B there.');
+    const count = ['b2b', 'b2cl', 'b2cs', 'cdnr', 'cdnur', 'exp'].reduce((s, k) => s + (out[k] || []).length, 0);
+    return { json: out, errors, notes, count, summary: sm };
+  }
+  return { build };
+})();
+
 // GST review → Tax payment intimation for the same month
-document.addEventListener('click', e => { if (e.target.closest && e.target.closest('[data-tpfrom]')) { tpTab = 'GST'; tpMonth = grMonth; } }, true);
+document.addEventListener('click', e => { if (!e.target.closest) return; if (e.target.closest('[data-tpfrom]')) { tpTab = 'GST'; tpMonth = grMonth; } if (e.target.closest('[data-crgo]')) { crMonth = grMonth; crQ = (clientById(grClient) || {}).name || ''; } }, true);
 
 // expose pure helpers for testing
-window.__tracker = { fillGstWorkings, G1, GR, RECO, gstr3bFromApi, periodToMonth, strongPassword, periodFor, dueDateFor, parseCSV, toCSV, gstLateFee, gstInterest, tdsCalc, rocCalc, monthsSpan, tdsDepositDue, rnStage, anyDate, parseRenewalRows, gstPayDue, tdsPayDue, advInstalment, advCurrent, advDue, recurringPlan, taxMsg, addMonths, fyEndOf, obProgress, rnKind };
+window.__tracker = { fillGstWorkings, G1, GR, RECO, gstr3bFromApi, periodToMonth, strongPassword, periodFor, dueDateFor, parseCSV, toCSV, gstLateFee, gstInterest, tdsCalc, rocCalc, monthsSpan, tdsDepositDue, g1json, clientReportHtml, clientReportMsg, rnStage, anyDate, parseRenewalRows, gstPayDue, tdsPayDue, advInstalment, advCurrent, advDue, recurringPlan, taxMsg, addMonths, fyEndOf, obProgress, rnKind };
 start();
 })();
