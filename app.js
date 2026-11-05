@@ -3110,7 +3110,8 @@ const GR = (() => {
   }
   // ---------- full summary ----------
   function summarise(m) {
-    const S = (m.sales && m.sales.rows) || [], P = (m.purchases && m.purchases.rows) || [], B = (m.gstr2b && m.gstr2b.rows) || [];
+    const SA = (m.sales && m.sales.rows) || [], S = SA.filter(r => !r.nil), P = (m.purchases && m.purchases.rows) || [], B = (m.gstr2b && m.gstr2b.rows) || [];
+    const nilOut = fix(sum(SA, r => r.nil && r.nil !== 'Non-GST')), nonGst = fix(sum(SA, r => r.nil === 'Non-GST'));
     const out = fix(sum(S)), outB2B = fix(sum(S, r => gstinOk(r.g))), outB2C = fix(sum(S, r => !gstinOk(r.g)));
     const itc2b = fix(sum(B, r => !r.na && !r.rc)), blocked = fix(sum(B, r => r.na)), rcm2b = fix(sum(B, r => r.rc && !r.na));
     const itcBooks = fix(sum(P, r => !r.rc)), rcmBooks = fix(sum(P, r => r.rc));
@@ -3128,8 +3129,8 @@ const GR = (() => {
     if (S.length) { cmp('Books (sales register) vs GSTR-1', out, g1); cmp('Books (sales register) vs GSTR-3B 3.1(a)', out, t31); }
     cmp('GSTR-1 vs GSTR-3B 3.1(a)', g1, t31);
     if (g3 && g3.itc_net && has2b) cmp('GSTR-2B ITC vs GSTR-3B ITC claimed', itc2b, { t: itc2b.t, ...g3.itc_net });
-    return { out, outB2B, outB2C, itc2b, blocked, rcm, itcBooks, itcBase, has2b, liab: fix(liab), setoff: so, cash, cashTotal: tax(cash), rec, checks,
-      counts: { sales: S.length, purchases: P.length, b2b: B.length },
+    return { out, outB2B, outB2C, nilOut, nonGst, itc2b, blocked, rcm, itcBooks, itcBase, has2b, liab: fix(liab), setoff: so, cash, cashTotal: tax(cash), rec, checks,
+      counts: { sales: SA.length, purchases: P.length, b2b: B.length },
       trend: { sales: out.t, outTax: tax(out), itc: tax(itcBase), cash: g3 && g3.cash ? tax(g3.cash) : tax(cash), filedCash: g3 && g3.cash ? true : false } };
   }
   return { amt, normInv, toDate, mapHeader, parseTable, parse2BJson, mergeDocs, setoff, reconcile, summarise, tax, gstinOk, r2 };
@@ -3463,6 +3464,7 @@ VIEWS.gst = async v => {
         <div class="table-wrap"><table class="gr-t">${th}<tbody>
           ${row4('3.1(a) Outward taxable supplies (sales register)', sm.out)}
           ${sm.out.t ? row4('&nbsp;&nbsp;· to registered (B2B)', sm.outB2B, 'sub') + row4('&nbsp;&nbsp;· to unregistered (B2C)', sm.outB2C, 'sub') : ''}
+          ${sm.nilOut.t ? row4('3.1(c) Nil rated / exempted supplies', sm.nilOut) : ''}${sm.nonGst.t ? row4('3.1(e) Non-GST outward supplies', sm.nonGst) : ''}
           ${gTax(sm.rcm) ? row4('3.1(d) Inward supplies on reverse charge', sm.rcm) : ''}
           ${row4(`4(A)(5) ITC available ${sm.has2b ? '(GSTR-2B)' : '(books)'}`, sm.itcBase)}
           ${gTax(sm.blocked) ? row4('ITC not available in 2B (do not claim)', sm.blocked, 'warn-row') : ''}
@@ -3632,6 +3634,7 @@ VIEWS.gst = async v => {
     const f = given || await pickFile(kind === 'gstr2b' ? '.json,.xlsx,.xls,.zip' : '.xlsx,.xls,.csv');
     if (!f) return false;
     if (/\.zip$/i.test(f.name)) return toast('Please unzip the portal download first and upload the .json file inside', true);
+    if (kind === 'sales') { try { return await salesToG1(f); } catch (e) { toast('Could not read the file: ' + friendly(e), true); return false; } }
     try {
       let rows = [], meta = '';
       if (kind === 'gstr2b' && /\.json$/i.test(f.name)) {
@@ -3659,6 +3662,33 @@ VIEWS.gst = async v => {
       await save({ [kind]: { rows, file: f.name, source: given ? 'email' : 'file', ...by() } });
       toast(`${label} saved — ${rows.length} documents`); return true;
     } catch (e) { toast('Could not read the file: ' + friendly(e), true); }
+  }
+  // sales file → GSTR-1 entry (check there, Save pushes it to the draft GSTR-3B)
+  async function salesToG1(f) {
+    const sheets = await readSheets(f), mLabel = (() => { const [y, m] = grMonth.split('-'); return `${MONTHS[+m - 1]} ${y}`; })();
+    let res = SALESIN.read(sheets, { month: grMonth, drafts: false });
+    if (res.skipped.draft && res.skipped.draft.n && confirm(`${res.skipped.draft.n} line(s) are DRAFT invoices (taxable ${gst$(res.skipped.draft.amt)}) — not yet issued.\n\nOK = include them\nCancel = leave them out`))
+      res = SALESIN.read(sheets, { month: grMonth, drafts: true });
+    if (!res.lines.length && res.skipped.month && res.skipped.month.n && confirm(`All ${res.skipped.month.n} lines are dated outside ${mLabel}. Load them anyway?`))
+      res = SALESIN.read(sheets, { drafts: res.skipped.draft ? res.skipped.draft.n === 0 : true });
+    if (!res.lines.length) { toast(res.error || 'No sales lines found in this file', true); return false; }
+    const C = G1.calcSales(res.lines, String(c.gstin || '').slice(0, 2), c.gstin).filter(o => o.x);
+    const ok = C.filter(o => o.x.ok), tab = {}; C.forEach(o => { tab[o.x.table] = (tab[o.x.table] || 0) + 1; });
+    const taxable = ok.filter(o => !o.row.nil).reduce((s, o) => s + o.x.sign * o.x.amt, 0), nilAmt = ok.filter(o => o.row.nil).reduce((s, o) => s + o.x.sign * o.x.amt, 0);
+    const tax = ok.reduce((s, o) => s + o.x.sign * (o.x.ig + o.x.cg + o.x.sg), 0), bad = C.length - ok.length;
+    const left = [res.skipped.outScope && res.skipped.outScope.n ? `${res.skipped.outScope.n} out-of-scope line(s) e.g. reimbursements — ${gst$(res.skipped.outScope.amt)}` : '',
+      res.skipped.draft && res.skipped.draft.n ? `${res.skipped.draft.n} draft line(s) — ${gst$(res.skipped.draft.amt)}` : '',
+      res.skipped.void && res.skipped.void.n ? `${res.skipped.void.n} void line(s)` : '',
+      res.skipped.month && res.skipped.month.n ? `${res.skipped.month.n} line(s) of other months — ${gst$(res.skipped.month.amt)}` : ''].filter(Boolean);
+    const diff = Math.abs(tax - res.fileTax);
+    if (!confirm(`${f.name} — ${res.source}\n\n${C.length} lines: ${Object.entries(tab).map(([k, v]) => `${k} ${v}`).join(' · ')}\nTaxable value: ${gst$(taxable)}${nilAmt ? `\nNil / exempt / non-GST: ${gst$(nilAmt)}` : ''}\nGST worked out: ${gst$(tax)} · GST in file: ${gst$(res.fileTax)}${diff > 1 ? '  ⚠ check' : '  ✓'}`
+      + `${left.length ? `\n\nLeft out:\n• ${left.join('\n• ')}` : ''}${bad ? `\n\n${bad} row(s) need a correction — shown in red in GSTR-1 entry.` : ''}\n\nLoad into GSTR-1 entry? Check the rows there, then Save to update the draft GSTR-3B.`)) return false;
+    const key = c.id + '|' + period, g = row.g1 || {};
+    const cur = g1Drafts[key] || { sales: (g.sales || []).map(x => ({ ...x })), amend: (g.amend || []).map(x => ({ ...x })), adv: (g.adv || []).map(x => ({ ...x })), docs: (g.docs || []).map(x => ({ ...x })), dirty: false };
+    if (cur.sales.some(r => Object.keys(r).length) && !confirm('Replace the sales rows already in GSTR-1 entry with these?')) return false;
+    cur.sales = res.lines.map(x => ({ ...x })); cur.dirty = true; g1Drafts[key] = cur;
+    grTab = 'g1'; g1Tab = 'sales'; render();
+    toast(`${C.length} lines loaded into GSTR-1 entry — check, then Save`); return true;
   }
   function enterFigures(kind) {
     const cur = row[kind] || {}, f = (pre, o = {}) => ['t', 'ig', 'cg', 'sg', 'cs'].filter(k => pre !== 'x' || k !== 't').map(k => `<label>${{ t: 'Taxable value', ig: 'IGST', cg: 'CGST', sg: 'SGST', cs: 'Cess' }[k]}<input type="number" step="0.01" name="${pre}_${k}" value="${o[k] ?? ''}"></label>`).join('');
@@ -3805,7 +3835,7 @@ const G1 = (() => {
       x.check = !has(r.d) ? 'Date missing' : !has(no) ? 'Invoice no missing' : no.length > 16 ? 'Invoice no over 16 characters' : / /.test(no.trim()) ? 'Remove spaces from invoice no'
         : !has(r.tx) ? 'Taxable value missing'
         : has(r.gstin) && up(r.gstin).length !== 15 ? 'Customer GSTIN must be 15 characters' : has(r.gstin) && up(r.gstin) === up(ownGstin) ? 'Customer GSTIN = client\'s own GSTIN'
-        : x.st === 'CHECK' ? 'Unknown state / GSTIN state code' : !has(r.nil) && !has(r.rate) ? 'GST rate missing' : String(r.hsn ?? '').trim().length < 4 ? 'HSN / SAC must be at least 4 digits'
+        : x.st === 'CHECK' ? 'Unknown state / GSTIN state code' : !has(r.nil) && !has(r.rate) ? 'GST rate missing' : r.nil !== 'Non-GST' && String(r.hsn ?? '').trim().length < 4 ? 'HSN / SAC must be at least 4 digits'
         : has(r.qty) && !has(r.uqc) ? 'Unit (UQC) needed when quantity is given' : has(r.eco) && up(r.eco).length !== 15 ? 'E-commerce GSTIN must be 15 characters'
         : t !== 'Invoice' && !has(r.ono) ? 'Original invoice no needed for a note' : 'OK';
       x.ok = x.check === 'OK'; x.sign = t === 'Credit Note' ? -1 : 1;
@@ -3869,7 +3899,7 @@ const G1 = (() => {
   function toRegister(S) {
     return S.filter(o => o.x && o.x.ok).map(({ row: r, x }) => { const s = x.sign, rc = r.rc === 'Yes';
       return { g: up(r.gstin), n: r.name || '', i: String(r.no), d: r.d || '', t: r2(s * x.amt), ig: rc ? 0 : r2(s * x.ig), cg: rc ? 0 : r2(s * x.cg), sg: rc ? 0 : r2(s * x.sg), cs: r2(s * x.cs),
-        v: r2(s * x.val), cn: s < 0 || undefined, src: 'G1' }; });
+        v: r2(s * x.val), cn: s < 0 || undefined, nil: r.nil || undefined, src: 'G1' }; });
   }
   // read the filled Excel template (sheets Sales / Amendments / Advances / Documents, data from row 5)
   const xdate = v => { if (typeof v === 'number' && v > 20000) { const d = new Date(Math.round((v - 25569) * 864e5)); return d.toISOString().slice(0, 10); } return GR.toDate(v); };
@@ -3887,6 +3917,92 @@ const G1 = (() => {
     return { sales, amend, adv, docs, gstin: g };
   }
   return { SALES, AMEND, ADV, RATES, calcSales, calcAmend, calcAdv, summary, toRegister, fromWorkbook, code, sname, has };
+})();
+
+/* =====================================================================
+   SALES FILE → GSTR-1 ENTRY ROWS
+   Zoho Invoice / Zoho Books "Invoice" export (one line per item) and any other sales register.
+   ===================================================================== */
+const SALESIN = (() => {
+  const n = v => { const x = parseFloat(String(v ?? '').replace(/,/g, '')); return isFinite(x) ? x : 0; };
+  const r2 = x => Math.round(x * 100) / 100;
+  const has = v => v !== undefined && v !== null && String(v).trim() !== '';
+  const xdate = v => { if (typeof v === 'number' && v > 20000) { const d = new Date(Math.round((v - 25569) * 864e5)); return d.toISOString().slice(0, 10); } return GR.toDate(v); };
+  const UQC_ALIAS = { NO: 'NOS', NOS: 'NOS', NUMBER: 'NOS', NUMBERS: 'NOS', UNIT: 'UNT', UNITS: 'UNT', PC: 'PCS', PCS: 'PCS', PIECE: 'PCS', PIECES: 'PCS', KG: 'KGS', KGS: 'KGS',
+    G: 'GMS', GM: 'GMS', GMS: 'GMS', L: 'LTR', LTR: 'LTR', LITRE: 'LTR', LITER: 'LTR', ML: 'MLT', M: 'MTR', MTR: 'MTR', METER: 'MTR', METRE: 'MTR', BOX: 'BOX', SET: 'SET', DOZ: 'DOZ', DOZEN: 'DOZ', PAIR: 'PRS' };
+  const uqcOf = u => { const k = String(u || '').trim().toUpperCase().replace(/\.$/, ''); const c = UQC_ALIAS[k] || k; return G1L.uqc.includes(c) && c !== 'OTH' ? c : ''; };
+  const stateOf = code => (G1L.states.find(s => s[0] === String(code).padStart(2, '0')) || [])[1] || '';
+  const RATES = [0, 0.25, 3, 5, 12, 18, 28, 40];
+  const nearRate = p => RATES.reduce((b, r) => Math.abs(r - p) < Math.abs(b - p) ? r : b, RATES[0]);
+
+  // ---- Zoho export ----
+  const isZoho = rows => { const h = (rows[0] || []).map(x => String(x).trim()); return h.includes('GST Treatment') && h.includes('Item Total') && (h.includes('Invoice Number') || h.includes('Credit Note Number')); };
+  function fromZoho(rows, opts = {}) {
+    const h = rows[0].map(x => String(x).trim()), col = name => h.indexOf(name), get = (r, name) => { const i = col(name); return i < 0 ? '' : r[i]; };
+    const isCN = h.includes('Credit Note Number');
+    const out = [], skipped = { outScope: { n: 0, amt: 0 }, draft: { n: 0, amt: 0 }, void: { n: 0, amt: 0 }, month: { n: 0, amt: 0 } };
+    let fileTax = 0;
+    rows.slice(1).forEach(r => {
+      if (!r.some(has)) return;
+      const status = String(get(r, isCN ? 'Credit Note Status' : 'Invoice Status')).trim().toLowerCase();
+      const cg = n(get(r, 'CGST')), sg = n(get(r, 'SGST')), ig = n(get(r, 'IGST')), cs = n(get(r, 'CESS')), lineTax = cg + sg + ig + cs;
+      const incl = /^true$/i.test(String(get(r, 'Is Inclusive Tax')).trim());
+      const tx = r2(n(get(r, 'Item Total')) - (incl ? lineTax : 0));
+      const d = xdate(get(r, isCN ? 'Credit Note Date' : 'Invoice Date'));
+      if (status === 'void') { skipped.void.n++; skipped.void.amt += tx; return; }
+      if (status === 'draft' && !opts.drafts) { skipped.draft.n++; skipped.draft.amt += tx; return; }
+      if (opts.month && d && d.slice(0, 7) !== opts.month) { skipped.month.n++; skipped.month.amt += tx; return; }
+      const supply = String(get(r, 'Supply Type')).trim().toLowerCase();
+      if (/out of scope/.test(supply)) { skipped.outScope.n++; skipped.outScope.amt += tx; return; }
+      fileTax += lineTax;
+      const treat = String(get(r, 'GST Treatment')).trim().toLowerCase();
+      const gstin = String(get(r, 'GST Identification Number (GSTIN)') || '').trim().toUpperCase();
+      const posCode = (String(get(r, 'Place of Supply(With State Code)')).match(/^(\d{1,2})/) || [])[1] || '';
+      const hsn = String(get(r, 'HSN/SAC') || '').trim();
+      const o = { d, no: String(get(r, isCN ? 'Credit Note Number' : 'Invoice Number')).trim(), ty: isCN ? 'Credit Note' : 'Invoice',
+        name: String(get(r, 'Customer Name') || get(r, 'Company Name') || '').trim(), tx };
+      if (gstin && /business_gst|business_sez|deemed/.test(treat)) o.gstin = gstin;
+      else if (posCode && treat !== 'overseas') o.state = stateOf(posCode);
+      if (hsn) o.hsn = hsn;
+      const u = uqcOf(get(r, 'Usage unit')), q = n(get(r, 'Quantity'));
+      if (u && q && !/^99/.test(hsn)) { o.qty = q; o.uqc = u; }
+      if (/non-gst/.test(supply)) o.nil = 'Non-GST';
+      else if (/exempt/.test(supply)) o.nil = 'Exempted';
+      else if (/nil/.test(supply)) o.nil = 'Nil rated';
+      else o.rate = nearRate(n(get(r, 'CGST Rate %')) + n(get(r, 'SGST Rate %')) || n(get(r, 'IGST Rate %')));
+      if (cs) o.cess = cs;
+      if (treat === 'overseas') o.exp = ig ? 'Export - With GST' : 'Export - Without GST';
+      if (treat === 'business_sez') o.exp = ig ? 'SEZ - With GST' : 'SEZ - Without GST';
+      if (isCN) { const oi = String(get(r, 'Associated Invoice Number') || get(r, 'Reference#') || '').trim(); if (oi) o.ono = oi; }
+      out.push(o);
+    });
+    Object.values(skipped).forEach(s => s.amt = r2(s.amt));
+    return { lines: out, skipped, fileTax: r2(fileTax), source: isCN ? 'Zoho credit notes' : 'Zoho invoices' };
+  }
+
+  // ---- any other sales register (columns guessed by the review engine) ----
+  function fromRegister(rows, opts = {}) {
+    const p = GR.parseTable(rows, {});
+    if (!(p.rows || []).length) return { lines: [], error: p.error || 'No invoice rows found', skipped: {} };
+    const skipped = { month: { n: 0, amt: 0 } }; let fileTax = 0;
+    const lines = [];
+    GR.mergeDocs(p.rows).forEach(x => {
+      if (opts.month && x.d && x.d.slice(0, 7) !== opts.month) { skipped.month.n++; skipped.month.amt += Math.abs(x.t || 0); return; }
+      const t = Math.abs(x.t || 0), tx = Math.abs((x.ig || 0) + (x.cg || 0) + (x.sg || 0));
+      fileTax += tx;
+      const o = { d: x.d || '', no: x.i, ty: x.cn ? 'Credit Note' : 'Invoice', name: x.n || '', tx: r2(t) };
+      if (x.g) o.gstin = x.g;
+      if (t && tx) o.rate = nearRate(tx / t * 100);
+      lines.push(o);
+    });
+    skipped.month.amt = r2(skipped.month.amt);
+    return { lines, skipped, fileTax: r2(fileTax), source: 'sales register' };
+  }
+  function read(sheets, opts) {
+    const z = sheets.find(s => isZoho(s.rows || []));
+    return z ? fromZoho(z.rows, opts) : fromRegister((sheets[0] || {}).rows || [], opts);
+  }
+  return { isZoho, fromZoho, fromRegister, read };
 })();
 
 /* =====================================================================
