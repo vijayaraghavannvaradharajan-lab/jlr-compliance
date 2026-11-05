@@ -366,6 +366,7 @@ const NI = {   // menu icons (stroke SVG paths)
   gst: '<path d="M6 2h12v20l-3-2-3 2-3-2-3 2z"></path><path d="M9 7h6M9 11h6"></path>',
   tds: '<circle cx="7" cy="7" r="2.5"></circle><circle cx="17" cy="17" r="2.5"></circle><path d="M19 5L5 19"></path>',
   mca: '<path d="M3 21h18M5 21V8l7-5 7 5v13"></path><path d="M9 21v-5h6v5"></path>',
+  companies: '<path d="M4 21V4h10v17M14 9h6v12M4 21h18M8 8h2M8 12h2M8 16h2M17 13h1M17 17h1"></path>',
   notices: '<path d="M12 9v4M12 17h.01M10.3 3.9L2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"></path>',
   clients: '<circle cx="9" cy="8" r="3.5"></circle><path d="M2.5 20a6.5 6.5 0 0 1 13 0M17 4.5a3.5 3.5 0 0 1 0 7M21.5 20a6 6 0 0 0-4-5.6"></path>',
   onboarding: '<path d="M9 11l3 3 8-8M20 12v8a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h10"></path>',
@@ -386,7 +387,7 @@ const navIcon = k => `<svg aria-hidden="true" width="18" height="18" viewBox="0 
 function navGroups() {
   const G = [
     ['Overview', [['dashboard', 'Dashboard'], ['calendar', 'Due-date calendar']]],
-    ['Compliance work', [['work', isManager() ? 'All work' : 'My work'], ['gst', 'GST review', 'gst'], ['work-tds', 'TDS / TCS', 'tds'], ['work-mca', 'MCA / ROC', 'mca'], ['notices', 'Notices']]],
+    ['Compliance work', [['work', isManager() ? 'All work' : 'My work'], ['gst', 'GST review', 'gst'], ['work-tds', 'TDS / TCS', 'tds'], ['work-mca', 'MCA / ROC work', 'mca'], ['mca', 'Companies & LLPs', 'companies'], ['notices', 'Notices']]],
     ['Clients', [isManager() && ['clients', 'Clients'], ['onboarding', 'Onboarding'], ['renewals', 'Renewals (DSC, LUT…)'], ['inbox', 'Client mail'], ['clientreport', 'Monthly client reports']]],
     ['Payments & billing', [['taxpay', 'Tax payment intimation'], isManager() && ['billing', 'Billing & fees']]],
     ['Office', [isManager() && ['workload', 'Team workload'], isPartner() && ['reports', 'Reports'], ['updates', 'Law updates'], ['checklists', 'Checklists'], ['calc', 'Late fee calculator']]],
@@ -1132,7 +1133,7 @@ VIEWS.dashboard = async v => {
   const now = new Date(), t = today(), in7 = iso(addDays(now, 7));
   const y = now.getFullYear(), m = now.getMonth() + 1;
   const mStart = iso(new Date(y, m - 1, 1)), mEnd = iso(new Date(y, m, 0));
-  let notRows = [], invRows = null, luNew = 0, payFu = [], rnR, obR, tiR;
+  let notRows = [], invRows = null, luNew = 0, payFu = [], rnR, obR, tiR, mcR;
   const [open, month, dd] = await Promise.all([
     must(sb.from('tasks').select('*').not('status', 'in', '("Filed","Not applicable")').order('due_date', { ascending: true, nullsFirst: false }).limit(3000)),
     must(sb.from('tasks').select('id,client_id,work_type,return_name,status,due_date,filed_on,remarks').gte('due_date', mStart).lte('due_date', mEnd).limit(5000)),
@@ -1143,8 +1144,9 @@ VIEWS.dashboard = async v => {
     isManager() ? safe(sb.from('followups').select('client_id,on_date,next_on,created_at').eq('kind', 'payment').order('on_date', { ascending: false }).order('created_at', { ascending: false }).limit(5000)) : Promise.resolve({ data: [] }),
     safe(sb.from('renewals').select('id,expires_on,status,reminders').not('expires_on', 'is', null).lte('expires_on', iso(addDays(now, 30))).limit(3000)),
     safe(sb.from('onboarding').select('client_id').eq('status', 'In progress').limit(1000)),
-    safe(sb.from('tax_intimations').select('id').in('kind', ['GST', 'TDS']).eq('period', monthLabel(prevMonth())).not('sent_on', 'is', null).limit(5000))
-  ]).then(r => { [rnR, obR, tiR] = r.slice(7); notRows = r[3].error ? [] : r[3].data || []; luNew = r[4].error ? 0 : (r[4].data || []).length; invRows = r[5].error ? null : r[5].data; payFu = r[6].error ? [] : r[6].data || []; return r; });
+    safe(sb.from('tax_intimations').select('id').in('kind', ['GST', 'TDS']).eq('period', monthLabel(prevMonth())).not('sent_on', 'is', null).limit(5000)),
+    safe(sb.from('mca_companies').select('client_id,entity_type,incorporated_on,first_fy_end,agms').limit(3000))
+  ]).then(r => { [rnR, obR, tiR, mcR] = r.slice(7); notRows = r[3].error ? [] : r[3].data || []; luNew = r[4].error ? 0 : (r[4].data || []).length; invRows = r[5].error ? null : r[5].data; payFu = r[6].error ? [] : r[6].data || []; return r; });
   const rows = open.data || [];
   const rnRows = rnR.error ? null : (rnR.data || []).filter(rnLive), rnSt = (rnRows || []).map(x => rnStage(x, t));
   const rnExp = rnSt.filter(s => s.days < 0).length, rnDue = rnSt.filter(s => s.days >= 0).length, rnRem = rnSt.filter(s => s.due).length;
@@ -1211,6 +1213,10 @@ VIEWS.dashboard = async v => {
     const bal = {}; invRows.forEach(i => { bal[i.client_id] = (bal[i.client_id] || 0) + num(i.total) - num(i.paid); });
     const seen = new Set(), dueP = payFu.filter(f => !seen.has(f.client_id) && seen.add(f.client_id)).filter(f => f.next_on && f.next_on <= t && (bal[f.client_id] || 0) > 0.009).length;
     if (dueP) chips.push(`<a class="chip amber" href="#/billing" data-billdue>${dueP} payment follow-up${dueP > 1 ? 's' : ''} due</a>`);
+  }
+  if (mcR && !mcR.error) {                                  // v20: AGM overdue for last year's accounts
+    const F0 = MCA.fyStartOf(t) - 1, late = (mcR.data || []).filter(co => { const a = MCA.agmDue(co, F0); return a && !MCA.agmOf(co, F0).agm_on && a.due < t && (MCA.firstFy(co) == null || MCA.firstFy(co) <= F0) && (clientById(co.client_id) || {}).active; }).length;
+    if (late) chips.push(`<a class="chip red" href="#/mca" data-mcagm>${late} AGM${late > 1 ? 's' : ''} overdue (${MCA.FY(F0)})</a>`);
   }
   if (rnExp) chips.push(`<a class="chip red" href="#/renewals" data-rnw="expired">${rnExp} renewal${rnExp > 1 ? 's' : ''} expired</a>`);
   if (rnRem) chips.push(`<a class="chip amber" href="#/renewals" data-rnw="remind">${rnRem} renewal reminder${rnRem > 1 ? 's' : ''} to send</a>`);
@@ -1665,6 +1671,9 @@ VIEWS.settings = async v => {
   const ml = document.createElement('div');
   v.appendChild(ml);
   renderMailSettings(ml);
+  const ai = document.createElement('div');
+  v.appendChild(ai);
+  renderAiSettings(ai);
 };
 
 /* ---------- GST auto-status via Sandbox (admin, Settings page) ---------- */
@@ -3425,7 +3434,7 @@ VIEWS.inbox = async v => {
           ${m.snippet ? `<div class="mail-snip muted small">${esc(m.snippet.slice(0, 220))}${m.snippet.length > 220 ? '…' : ''}</div>` : ''}
           <div class="mail-files">${(m.files || []).map((f, i) => `<div class="mail-file"><span class="pill ${MAIL_KIND[f.kind] ? MAIL_KIND[f.kind][1] : 'a'} small">${(MAIL_KIND[f.kind] || ['File'])[0]}</span>
             <span class="mail-fn">${esc(f.name)}</span><span class="muted small">${Math.max(1, Math.round((f.size || 0) / 1024))} KB</span>
-            <button class="btn sm" data-dl="${i}">Download</button>${['sales', 'purchases', 'gstr2b', 'excel', 'json'].includes(f.kind) && c.gstin ? `<button class="btn sm primary" data-imp="${i}">Import to GST review</button>` : ''}</div>`).join('')}</div>
+            <button class="btn sm" data-dl="${i}">Download</button>${['pdf', 'image'].includes(f.kind) && c.gstin ? `<button class="btn sm primary" data-rb="${i}" title="Read this bill into the purchase register">Read bill</button>` : ''}${['sales', 'purchases', 'gstr2b', 'excel', 'json'].includes(f.kind) && c.gstin ? `<button class="btn sm primary" data-imp="${i}">Import to GST review</button>` : ''}</div>`).join('')}</div>
           <div class="mail-foot">${ts.length ? `<span class="small">✓ Marked data received: ${ts.map(t => `<a href="#/work" class="tag-link">${esc(t.return_name)} · ${esc(t.period)}</a>`).join(', ')}</span>`
             : `<span class="small muted">No “Pending data” work found for ${monthLbl(m.period)} — mark it on the work item if needed.</span>`}
             <span class="spacer"></span>${m.status !== 'Done' ? '<button class="btn sm" data-st="Done">✓ Done</button>' : ''}${m.status === 'New' ? '<button class="btn sm ghost" data-st="Ignored">Ignore</button>' : ''}${m.status !== 'New' ? '<button class="btn sm ghost" data-st="New">Back to new</button>' : ''}</div>
@@ -3443,6 +3452,15 @@ VIEWS.inbox = async v => {
       if (b.dataset.st) {
         const patch = { status: b.dataset.st, handled_by: b.dataset.st === 'New' ? null : me.id, handled_at: b.dataset.st === 'New' ? null : new Date().toISOString() };
         await must(sb.from('mail_inbox').update(patch).eq('id', m.id)); Object.assign(m, patch); draw(); refreshMailBadge();
+      }
+      if (b.dataset.rb) {
+        const bf = (m.files || []).filter(x => ['pdf', 'image'].includes(x.kind));
+        const all = bf.length > 1 && confirm(`This mail has ${bf.length} PDF / photo files.\n\nOK = read all ${bf.length} as bills\nCancel = only ${m.files[+b.dataset.rb].name}`);
+        b.disabled = true; b.textContent = 'Opening…';
+        const files = await Promise.all((all ? bf : [m.files[+b.dataset.rb]]).map(x => openMailFile(x.path, true)));
+        pendingGstImport = { client: m.client_id, month: m.period.slice(0, 7), kind: 'bills', files, mailId: m.id };
+        grClient = m.client_id; grMonth = m.period.slice(0, 7); grTab = 'recon';
+        location.hash = '#/gst';
       }
       if (b.dataset.imp) {
         const f = m.files[+b.dataset.imp];
@@ -3565,7 +3583,7 @@ VIEWS.gst = async v => {
         ${card('sales', 'Sales register', S, S ? `${S.rows.length} documents · taxable ${gst$(sm.out.t)} · tax ${gst$(gTax(sm.out))}` : 'Type in the GSTR-1 entry tab, or upload an Excel / CSV / Tally export',
           `<button class="btn sm" data-up="sales">Upload</button><button class="link small" data-tpl="sales">Template</button>`)}
         ${card('purchases', 'Purchase register (books)', P, P ? `${P.rows.length} documents · ITC in books ${gst$(gTax(sm.itcBooks))}` : 'Purchases as per books, for the 2B match',
-          `<button class="btn sm" data-up="purchases">Upload</button><button class="link small" data-tpl="purchases">Template</button>`)}
+          `<button class="btn sm" data-up="purchases">Upload</button><button class="btn sm" data-bills title="PDF or photo bills: read and add to the purchase register">Read bills</button><button class="link small" data-tpl="purchases">Template</button>`)}
         ${card('gstr2b', 'GSTR-2B', B, B ? `${B.rows.length} documents · ITC available ${gst$(gTax(sm.itc2b))}${gTax(sm.blocked) ? ` · not available ${gst$(gTax(sm.blocked))}` : ''}` : 'Portal JSON or Excel download, or fetch with OTP',
           `<button class="btn sm" data-up="gstr2b">Upload JSON / Excel</button>`)}
         ${card('gstr3b', 'GSTR-3B (filed)', G3, G3 ? `3.1(a) taxable ${gst$(G3.t31a && G3.t31a.t)} · ITC ${gst$(gTax(G3.itc_net))} · cash ${gst$(gTax(G3.cash))}` : 'Filed figures — fetch or type in',
@@ -3848,6 +3866,7 @@ VIEWS.gst = async v => {
     const d = b.dataset;
     if (d.gt) { grTab = d.gt; render(); }
     if (d.up) upload(d.up);
+    if (d.bills != null) { const fs = await pickFiles('.pdf,image/*'); if (fs.length) readBillsDialog({ c, month: grMonth, files: fs, getRow: () => row, save }).catch(err => toast(friendly(err), true)); }
     if (d.ent) enterFigures(d.ent);
     if (d.tpl) template(d.tpl);
     if (d.clr) { if (!confirm('Remove this data for the month?')) return; await save({ [d.clr]: null }).catch(err => toast(friendly(err), true)); }
@@ -3860,7 +3879,8 @@ VIEWS.gst = async v => {
   // file sent from Client mail → "Import to GST review"
   if (pendingGstImport && pendingGstImport.client === grClient && pendingGstImport.month === grMonth) {
     const p = pendingGstImport; pendingGstImport = null;
-    if (await upload(p.kind, p.file)) {
+    if (p.kind === 'bills') readBillsDialog({ c, month: grMonth, files: p.files, getRow: () => row, save, onAdded: () => safe(sb.from('mail_inbox').update({ status: 'Done', handled_by: me.id, handled_at: new Date().toISOString() }).eq('id', p.mailId)).then(() => refreshMailBadge().catch(() => {})) }).catch(err => toast(friendly(err), true));
+    else if (await upload(p.kind, p.file)) {
       await safe(sb.from('mail_inbox').update({ status: 'Done', handled_by: me.id, handled_at: new Date().toISOString() }).eq('id', p.mailId));
       refreshMailBadge().catch(() => {});
     }
@@ -5420,6 +5440,879 @@ const g1json = (() => {
 document.addEventListener('click', e => { if (!e.target.closest) return; if (e.target.closest('[data-tpfrom]')) { tpTab = 'GST'; tpMonth = grMonth; } if (e.target.closest('[data-crgo]')) { crMonth = grMonth; crQ = (clientById(grClient) || {}).name || ''; } }, true);
 
 // expose pure helpers for testing
-window.__tracker = { fillGstWorkings, G1, GR, RECO, gstr3bFromApi, periodToMonth, strongPassword, periodFor, dueDateFor, parseCSV, toCSV, gstLateFee, gstInterest, tdsCalc, rocCalc, monthsSpan, tdsDepositDue, g1json, clientReportHtml, clientReportMsg, rnStage, anyDate, parseRenewalRows, gstPayDue, tdsPayDue, advInstalment, advCurrent, advDue, recurringPlan, taxMsg, addMonths, fyEndOf, obProgress, rnKind };
+/* =====================================================================
+   v20 · SESSION 3: MCA DEPTH — company master, directors, AGM-based ROC dates, DIR-3 KYC, ADT-1 / DPT-3 / MSME-1
+   ===================================================================== */
+const MCA_TYPES = ['Private company', 'Public company', 'OPC', 'Section 8', 'Producer company', 'Nidhi', 'LLP'];
+const MCA_DESIG = ['Director', 'Managing Director', 'Whole-time Director', 'Additional Director', 'Nominee Director', 'Independent Director', 'Designated Partner', 'Partner', 'Company Secretary', 'CFO', 'CEO', 'Manager'];
+const CIN_TYPE = { PTC: 'Private company', PLC: 'Public company', OPC: 'OPC', NPL: 'Section 8', FTC: 'Private company', FLC: 'Public company', GOI: 'Public company', SGC: 'Public company', GAP: 'Section 8', GAT: 'Public company', ULL: 'Public company', ULT: 'Private company' };
+const STATE_ROC = { TN: 'RoC Chennai', KA: 'RoC Bengaluru', KL: 'RoC Ernakulam', AP: 'RoC Vijayawada', TG: 'RoC Hyderabad', MH: 'RoC Mumbai', DL: 'RoC Delhi', GJ: 'RoC Ahmedabad', WB: 'RoC Kolkata', PY: 'RoC Puducherry', RJ: 'RoC Jaipur', UP: 'RoC Kanpur', HR: 'RoC Delhi', MP: 'RoC Gwalior', OR: 'RoC Cuttack', GA: 'RoC Goa', PB: 'RoC Chandigarh', CH: 'RoC Chandigarh', BR: 'RoC Patna', AS: 'RoC Shillong', JH: 'RoC Ranchi', CT: 'RoC Bilaspur', UR: 'RoC Uttarakhand', HP: 'RoC Himachal Pradesh', JK: 'RoC Jammu' };
+const MCA = (() => {
+  const p2 = n => String(n).padStart(2, '0');
+  const isoD = d => `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
+  const plus = (s, n) => { const d = new Date(s + 'T00:00:00'); d.setDate(d.getDate() + n); return isoD(d); };
+  const fyL = s => `${s}-${String(s + 1).slice(2)}`;                 // 2025 → "2025-26"
+  const FY = s => `FY ${fyL(s)}`;
+  const fyStartOf = s => { const [y, m] = s.split('-').map(Number); return m >= 4 ? y : y - 1; };
+  const isLLP = co => (co && co.entity_type) === 'LLP';
+  const isOPC = co => (co && co.entity_type) === 'OPC';
+  function cinInfo(s) {
+    const u = String(s || '').toUpperCase().replace(/\s/g, '');
+    let m = u.match(/^([LU])(\d{5})([A-Z]{2})(\d{4})([A-Z]{3})(\d{6})$/);
+    if (m) return { kind: 'company', listed: m[1] === 'L', state: m[3], year: +m[4], code: m[5], type: CIN_TYPE[m[5]] || '', roc: STATE_ROC[m[3]] || '' };
+    if (/^[A-Z]{3}-\d{4}$/.test(u)) return { kind: 'llp', type: 'LLP' };
+    return null;
+  }
+  const dinOk = d => /^\d{8}$/.test(String(d || ''));
+  // start year of the company's first financial year (Sec 2(41): incorporated on/after 1 Jan → first FY may end 31 Mar of the next year)
+  const firstFy = co => co.first_fy_end ? +co.first_fy_end.slice(0, 4) - 1 : co.incorporated_on ? +co.incorporated_on.slice(0, 4) : null;
+  const agmOf = (co, F) => (co.agms || []).find(a => a.fy === fyL(F)) || {};
+  function agmDue(co, F) {                                                  // { due, basis } — null for OPC / LLP
+    if (isLLP(co) || isOPC(co)) return null;
+    const a = agmOf(co, F), first = firstFy(co) === F;
+    const due = a.extended_to || (first ? `${F + 1}-12-31` : `${F + 1}-09-30`);
+    return { due, first, basis: a.extended_to ? `AGM extended by RoC to ${a.extended_to}` : first ? 'First AGM: within 9 months of the end of the first FY (Sec 96)' : 'Within 6 months of the FY end (Sec 96)' };
+  }
+  // next DIR-3 KYC due: 30 June after every third consecutive FY (Rule 12A, from 31 Mar 2026). Filed in FY 2025-26 → 30 Jun 2028.
+  function kycNext(d, t) {
+    if (d.kyc_next) return { due: d.kyc_next, basis: 'Next KYC date set by hand' };
+    if (d.kyc_on) { const e = fyStartOf(d.kyc_on) + 1; return { due: `${e + 2}-06-30`, basis: `Last KYC filed ${d.kyc_on} (FY ${fyL(e - 1)}) — next by 30 June after the third FY (Rule 12A)` }; }
+    const y = +t.slice(0, 4), nxt = t <= `${y}-06-30` ? `${y}-06-30` : `${y + 1}-06-30`;
+    return { due: nxt, unknown: true, basis: 'Last KYC date not saved — check the DIN status on MCA and enter it' };
+  }
+  const live = (d, from) => !d.ceased_on || d.ceased_on >= from;
+  // ROC work for the accounts year F (FY F-(F+1)): annual forms, DPT-3, MSME-1 (H2 of F, H1 of F+1), DIR-3 KYC falling due in the filing year
+  function plan(co, dirs = [], F, { t = isoD(new Date()), kycOwner = () => true } = {}) {
+    const out = [], fyEnd = `${F + 1}-03-31`, a = agmOf(co, F), ap = { dpt3: true, msme1: false, cfs: false, xbrl: false, ...(co.applies || {}) };
+    const add = (o) => out.push({ period: FY(F), ...o });
+    const ff = firstFy(co);
+    if (ff != null && ff > F) { /* not yet incorporated in this accounts year */ }
+    else if (isLLP(co)) {
+      add({ return_name: 'LLP Form 11', due: `${F + 1}-05-30`, basis: 'Annual return — by 30 May' });
+      add({ return_name: 'LLP Form 8', due: `${F + 1}-10-30`, basis: 'Statement of account & solvency — by 30 October' });
+    } else {
+      const ag = agmDue(co, F), held = a.agm_on || null;
+      if (ag) add({ return_name: 'AGM', due: held || ag.due, done: !!held, basis: held ? `AGM held on ${held}` : ag.basis, ag: true });
+      const base = held || (ag && ag.due), est = !held && !isOPC(co);
+      const aocDue = isOPC(co) ? plus(fyEnd, 180) : plus(base, 30);
+      const aocBasis = isOPC(co) ? 'OPC: within 180 days of the FY end' : held ? '30 days from the AGM' : '30 days from the last date for the AGM (AGM date not entered yet)';
+      add({ return_name: ap.xbrl ? 'AOC-4 XBRL' : 'AOC-4', due: aocDue, est, basis: aocBasis });
+      if (ap.cfs) add({ return_name: 'AOC-4 CFS', due: aocDue, est, basis: aocBasis + ' (consolidated)' });
+      const mgt = isOPC(co) || co.small_company ? 'MGT-7A' : 'MGT-7';
+      add({ return_name: mgt, due: isOPC(co) ? plus(`${F + 1}-09-30`, 60) : plus(base, 60), est,
+        basis: isOPC(co) ? 'OPC: 60 days from the date the AGM would have been due (30 Sep)' : held ? '60 days from the AGM' : '60 days from the last date for the AGM (AGM date not entered yet)' });
+      const au = co.auditor || {};
+      if (!isOPC(co) && (!au.name || au.to_fy === fyL(F)))
+        add({ return_name: 'ADT-1', due: plus(base, 15), est, basis: !au.name ? 'No auditor saved — appointment / re-appointment at this AGM, ADT-1 within 15 days' : `Auditor's term ends at this AGM (term to FY ${au.to_fy}) — new or re-appointment, ADT-1 within 15 days` });
+      if (ap.dpt3) add({ return_name: 'DPT-3', due: `${F + 1}-06-30`, basis: 'Return of deposits / outstanding loans as on 31 March — by 30 June' });
+      if (ap.msme1) {
+        add({ return_name: 'MSME-1', period: `H2 (Oct–Mar) ${FY(F)}`, due: `${F + 1}-04-30`, basis: 'MSE supplier dues over 45 days, Oct–Mar — by 30 April' });
+        add({ return_name: 'MSME-1', period: `H1 (Apr–Sep) ${FY(F + 1)}`, due: `${F + 1}-10-31`, basis: 'MSE supplier dues over 45 days, Apr–Sep — by 31 October' });
+      }
+    }
+    const wFrom = `${F + 1}-04-01`, wTo = `${F + 2}-03-31`;
+    dirs.filter(d => dinOk(d.din) && live(d, wFrom) && kycOwner(d)).forEach(d => {
+      const k = kycNext(d, t);
+      if (k.unknown ? F === fyStartOf(t) - 1 : k.due <= wTo && (k.due >= wFrom || k.due < t))
+        out.push({ return_name: 'DIR-3 KYC', period: `KYC ${k.due.slice(0, 4)} · ${d.name} · DIN ${d.din}`, due: k.due, est: !!k.unknown, basis: k.basis, din: d.din });
+    });
+    return out;
+  }
+  // paste from MCA V3 "View company / LLP master data" → director table
+  function parseDirectorPaste(text) {
+    const out = [], seen = new Set();
+    String(text || '').split(/\r?\n/).forEach(line => {
+      const m = line.match(/(^|\D)(\d{8})(\D|$)/); if (!m) return;
+      const din = m[2]; if (seen.has(din)) return;
+      const cells = line.split(/\t| {2,}/).map(s => s.trim()).filter(Boolean);
+      const dates = (line.match(/\b\d{1,2}[\/.\-](\d{1,2}|[A-Za-z]{3})[\/.\-]\d{2,4}\b/g) || []);
+      const desig = [...MCA_DESIG].sort((p, q) => q.length - p.length).find(x => new RegExp('\\b' + x.replace(/[-]/g, '.') + '\\b', 'i').test(line)) || (/designated partner/i.test(line) ? 'Designated Partner' : /director/i.test(line) ? 'Director' : '');
+      let name = cells.find(c => /[A-Za-z]{2}/.test(c) && !c.includes(din) && !MCA_DESIG.some(x => lc(c) === lc(x)) && !/^(yes|no|active|approved|-)$/i.test(c) && !/\d{1,2}[\/.\-]/.test(c) && !/^[A-Z]{5}\d{4}[A-Z]$/.test(c));
+      if (!name) { const rest = line.replace(din, ' ').replace(/\d[\d\/.\-]*/g, ' '); name = rest.replace(new RegExp(desig || '^$', 'i'), ' ').replace(/\s+/g, ' ').trim(); }
+      name = String(name || '').replace(/\s+/g, ' ').trim();
+      if (!name) return;
+      seen.add(din);
+      const pan = (line.match(/\b[A-Z]{5}\d{4}[A-Z]\b/) || [])[0] || null;
+      out.push({ din, name: name === name.toUpperCase() ? name.toLowerCase().replace(/\b[a-z]/g, x => x.toUpperCase()) : name, designation: desig || 'Director', appointed_on: dates[0] ? (anyDate(dates[0].replace(/\./g, '/')) || null) : null, ceased_on: dates[1] ? (anyDate(dates[1].replace(/\./g, '/')) || null) : null, pan });
+    });
+    return out;
+  }
+  return { cinInfo, dinOk, agmDue, agmOf, kycNext, plan, parseDirectorPaste, fyL, FY, fyStartOf, isLLP, isOPC, firstFy, plus };
+})();
+
+let mcaTab = 'companies', mcaFy = MCA.fyStartOf(today()) - 1, mcaQ = '', mcaWin = 'all';
+async function mcaLoad() {
+  const [co, di, tk, rn] = await Promise.all([
+    safe(sb.from('mca_companies').select('*').limit(3000)),
+    safe(sb.from('mca_directors').select('*').order('name').limit(10000)),
+    safe(sb.from('tasks').select('id,client_id,return_name,period,due_date,status,assigned_to,filed_on,arn').eq('work_type', 'ROC/MCA').limit(10000)),
+    safe(sb.from('renewals').select('id,client_id,kind,holder,expires_on,status').eq('kind', 'DSC').limit(5000))
+  ]);
+  if (co.error || di.error) return null;
+  return { co: co.data || [], di: di.data || [], tk: tk.data || [], rn: rn.data || [] };
+}
+// one owner company per DIN for the KYC task (a director on 3 companies files one KYC)
+function mcaKycOwners(cos, dirs) {
+  const own = {}, name = id => lc(clientName(id));
+  dirs.filter(d => MCA.dinOk(d.din) && !d.ceased_on).sort((a, b) => name(a.client_id).localeCompare(name(b.client_id))).forEach(d => { if (!own[d.din]) own[d.din] = d.client_id; });
+  return own;
+}
+function mcaCompanyList(D) {
+  const byC = Object.fromEntries(D.co.map(x => [x.client_id, x]));
+  return clients.filter(c => (c.active || byC[c.id]) && (byC[c.id] || c.cin || (c.services || []).includes('ROC/MCA')))
+    .map(c => ({ c, co: byC[c.id] || { client_id: c.id, entity_type: (MCA.cinInfo(c.cin) || {}).type || '', cin: c.cin || '', agms: [], auditor: {}, applies: {}, _new: true } }));
+}
+const mcaTaskKey = (cid, rn, p) => `${cid}|${lc(rn)}|${lc(p)}`;
+function mcaPlanAll(D, F) {
+  const own = mcaKycOwners(D.co, D.di), tmap = new Map(D.tk.map(x => [mcaTaskKey(x.client_id, x.return_name, x.period), x])), t = today();
+  return mcaCompanyList(D).flatMap(({ c, co }) => {
+    const dirs = D.di.filter(d => d.client_id === c.id);
+    return MCA.plan(co, dirs, F, { t, kycOwner: d => own[d.din] === c.id }).map(it => ({ ...it, c, co, task: tmap.get(mcaTaskKey(c.id, it.return_name, it.period)) || null }));
+  });
+}
+const mcaStatus = it => it.done ? 'done' : it.task ? (it.task.status === 'Filed' ? 'filed' : it.task.status === 'Not applicable' ? 'na' : 'open') : 'none';
+const dscFor = (D, d) => D.rn.filter(r => r.client_id === d.client_id && r.holder && lc(r.holder).includes(lc(d.name).split(' ')[0])).sort((a, b) => (b.expires_on || '').localeCompare(a.expires_on || ''))[0];
+
+VIEWS.mca = async v => {
+  const D = await mcaLoad();
+  if (!D) return notReady(v, 'Companies & LLPs', 'update-session3.sql');
+  const t = today(), in30 = iso(addDays(new Date(), 30)), F = mcaFy;
+  const list = mcaCompanyList(D), items = mcaPlanAll(D, F);
+  const open = items.filter(i => !i.ag && !['filed', 'na'].includes(mcaStatus(i)));
+  const agmLate = items.filter(i => i.ag && !i.done && i.due < t).length;
+  const late = open.filter(i => i.due < t).length, due30 = open.filter(i => i.due >= t && i.due <= in30).length;
+  const kyc = items.filter(i => i.return_name === 'DIR-3 KYC' && !['filed', 'na'].includes(mcaStatus(i)) && (i.due <= iso(addDays(new Date(), 90)) || i.est)).length;
+  const noWork = open.filter(i => !i.task).length;
+  const fyOpts = [0, 1, 2, 3].map(k => MCA.fyStartOf(t) - k).map(s => `<option value="${s}" ${s === F ? 'selected' : ''}>Accounts ${MCA.FY(s)}</option>`).join('');
+  v.innerHTML = `<div class="page-head"><h2>Companies &amp; LLPs</h2><span class="muted">CIN · directors · AGM · ROC forms · DIR-3 KYC</span><span class="spacer"></span>
+      <select id="mcFy" aria-label="Accounts year">${fyOpts}</select>
+      <button class="btn" id="mcTpl">Excel template</button><button class="btn" id="mcImp">Import Excel</button><button class="btn" id="mcCsv">Export CSV</button>
+      ${isManager() ? `<button class="btn primary" id="mcWork" ${noWork ? '' : 'disabled'}>Create ROC work (${noWork})</button>` : ''}<input type="file" id="mcFile" accept=".xlsx,.xls,.csv" hidden></div>
+    <div class="bento-stats card stats4" style="margin-bottom:14px">
+      <button class="mini red" data-mw="agm"><span>AGM overdue</span><b>${agmLate}</b></button>
+      <button class="mini red" data-mw="late"><span>ROC forms overdue</span><b>${late}</b></button>
+      <button class="mini amber" data-mw="30"><span>Due in 30 days</span><b>${due30}</b></button>
+      <button class="mini blue" data-mw="kyc"><span>DIR-3 KYC to check</span><b>${kyc}</b></button></div>
+    <p class="muted small" style="margin:-4px 2px 12px">Dates follow the AGM: AOC-4 30 days, MGT-7/7A 60 days, ADT-1 15 days after it. Until the AGM date is entered they use the last date for the AGM (marked “est.”). DIR-3 KYC is now once every three years — by 30 June after the third FY (Rule 12A, from 31 Mar 2026).</p>
+    <div class="toolbar"><div class="seg">${[['companies', `Companies · ${list.length}`], ['due', `ROC due list · ${items.filter(i => !i.ag).length}`], ['directors', `Directors · ${D.di.length}`]].map(([k, l]) => `<button data-mt="${k}" class="${mcaTab === k ? 'on' : ''}">${l}</button>`).join('')}</div>
+      <input type="search" id="mcQ" placeholder="Search company / CIN / director / DIN" value="${esc(mcaQ)}"><span class="spacer"></span>
+      ${mcaTab === 'due' ? `<select id="mcW" aria-label="Show">${opts([['all', 'All'], ['open', 'Open'], ['late', 'Overdue'], ['30', 'Due in 30 days'], ['nowork', 'No work item yet'], ['kyc', 'DIR-3 KYC']], mcaWin, x => x[1], x => x[0])}</select>` : ''}
+      <button class="btn" id="mcAdd">+ Company / LLP</button></div>
+    <div id="mcBody"></div>`;
+  const q = () => lc(mcaQ);
+  const body = $('#mcBody');
+  const pill = it => { const s = mcaStatus(it);
+    if (s === 'done') return '<span class="st st-filed">Held</span>';
+    if (s === 'filed') return `<span class="st st-filed">Filed</span>${it.task.filed_on ? `<div class="muted tiny">${fmtDate(it.task.filed_on)}</div>` : ''}`;
+    if (s === 'na') return '<span class="st st-not-applicable">N/A</span>';
+    if (s === 'open') return `<span class="st st-${slug(it.task.status || 'Pending data')}">${esc(it.task.status || 'Pending data')}</span>${it.task.due_date !== it.due ? `<div class="tiny warn-t" title="The work item has ${fmtDate(it.task.due_date)}">work item: ${fmtDate(it.task.due_date)}</div>` : ''}`;
+    return it.ag ? '<span class="muted small">Not held</span>' : '<span class="muted small">No work item</span>'; };
+  const dueCell = it => { const late = !['done', 'filed', 'na'].includes(mcaStatus(it)) && it.due < t, d = daysFrom(t, it.due);
+    return `<span class="${late ? 'late' : d <= 15 && d >= 0 ? 'soon' : ''}">${fmtDate(it.due)}</span>${it.est ? ' <span class="pill a tiny" title="Estimated">est.</span>' : ''}${late ? `<div class="tiny late">${-d} day${d === -1 ? '' : 's'} late</div>` : ''}`; };
+  const draw = () => {
+    $$('[data-mt]', v).forEach(b => b.classList.toggle('on', b.dataset.mt === mcaTab));
+    if (mcaTab === 'companies') {
+      const rows = list.filter(({ c, co }) => !q() || lc([c.name, c.cin, co.cin, co.entity_type, ...D.di.filter(d => d.client_id === c.id).map(d => d.name + ' ' + d.din)].join(' ')).includes(q()));
+      body.innerHTML = rows.length ? `<div class="table-wrap"><table><thead><tr><th>Company / LLP</th><th>Type</th><th>AGM ${esc(MCA.fyL(F))}</th><th>Annual forms</th><th>Directors</th><th></th></tr></thead><tbody>
+        ${rows.map(({ c, co }) => { const its = items.filter(i => i.c.id === c.id), ag = its.find(i => i.ag), forms = its.filter(i => !i.ag && i.return_name !== 'DIR-3 KYC');
+          const dirs = D.di.filter(d => d.client_id === c.id && !d.ceased_on), kycDue = its.filter(i => i.return_name === 'DIR-3 KYC' && !['filed', 'na'].includes(mcaStatus(i)));
+          return `<tr class="${ag && !ag.done && ag.due < t ? 'overdue' : ''}"><td class="wrap"><b>${esc(c.name)}</b><div class="muted small">${esc(co.cin || c.cin || 'CIN not saved')}${co._new ? ' · <span class="warn-t">master not filled</span>' : ''}</div></td>
+            <td><span class="badge">${esc(co.entity_type || '—')}</span>${co.small_company ? '<div class="muted tiny">Small company</div>' : ''}</td>
+            <td>${ag ? (ag.done ? `<span class="st st-filed">Held ${fmtDate(ag.due)}</span>` : `Due ${dueCell(ag)}`) : `<span class="muted small">${MCA.isLLP(co) ? 'LLP — no AGM' : co.entity_type === 'OPC' ? 'OPC — no AGM' : '—'}</span>`}</td>
+            <td class="wrap small">${forms.map(i => `<span class="mca-f ${mcaStatus(i)} ${mcaStatus(i) === 'none' || mcaStatus(i) === 'open' ? (i.due < t ? 'late' : '') : ''}" title="${esc(i.return_name + ' · ' + i.period + ' · due ' + fmtDate(i.due) + (i.est ? ' (est.)' : '') + ' — ' + i.basis)}">${esc(i.return_name)} ${fmtDate(i.due).slice(0, 6)}${mcaStatus(i) === 'filed' ? ' ✓' : ''}</span>`).join(' ') || '—'}</td>
+            <td>${dirs.length}${kycDue.length ? `<div class="tiny warn-t">${kycDue.length} KYC</div>` : ''}</td>
+            <td class="row-btns"><button class="btn sm primary" data-mplan="${c.id}">Plan &amp; work</button><button class="btn sm" data-mdir="${c.id}">Directors</button><button class="btn sm ghost" data-medit="${c.id}">Edit</button></td></tr>`; }).join('')}</tbody></table></div>`
+        : `<div class="table-wrap"><div class="empty">${list.length ? 'No match.' : 'No companies yet. Clients with a CIN or the ROC/MCA service appear here — or click “+ Company / LLP”.'}</div></div>`;
+    } else if (mcaTab === 'due') {
+      const sel = items.filter(i => !i.ag || mcaWin === 'all').filter(i => { const s = mcaStatus(i);
+        return mcaWin === 'all' ? true : mcaWin === 'open' ? !['done', 'filed', 'na'].includes(s) : mcaWin === 'late' ? !['done', 'filed', 'na'].includes(s) && i.due < t
+          : mcaWin === '30' ? !['done', 'filed', 'na'].includes(s) && i.due >= t && i.due <= in30 : mcaWin === 'nowork' ? s === 'none' && !i.ag : i.return_name === 'DIR-3 KYC'; })
+        .filter(i => !q() || lc([i.c.name, i.return_name, i.period, i.co.cin].join(' ')).includes(q())).sort((a, b) => a.due.localeCompare(b.due));
+      body.innerHTML = sel.length ? `<div class="count">${sel.length} item${sel.length > 1 ? 's' : ''}</div><div class="table-wrap"><table><thead><tr><th>Company</th><th>Form</th><th>Period</th><th>Due</th><th>How the date is worked out</th><th>Work</th></tr></thead><tbody>
+        ${sel.map(i => `<tr><td class="wrap"><b>${esc(i.c.name)}</b></td><td><b>${esc(i.return_name)}</b></td><td class="small wrap">${esc(i.period)}</td><td class="nowrap">${dueCell(i)}</td><td class="small wrap muted">${esc(i.basis)}</td><td>${pill(i)}</td></tr>`).join('')}</tbody></table></div>`
+        : '<div class="table-wrap"><div class="empty">Nothing in this view.</div></div>';
+    } else {
+      const own = mcaKycOwners(D.co, D.di), byDin = {};
+      D.di.forEach(d => { if (MCA.dinOk(d.din)) (byDin[d.din] = byDin[d.din] || []).push(d); });
+      const rows = D.di.filter(d => !q() || lc([d.name, d.din, d.designation, clientName(d.client_id), d.pan].join(' ')).includes(q()));
+      body.innerHTML = rows.length ? `<div class="table-wrap"><table><thead><tr><th>Name</th><th>DIN</th><th>Company</th><th>Designation</th><th>Appointed</th><th>DIR-3 KYC</th><th>DSC</th><th></th></tr></thead><tbody>
+        ${rows.map(d => { const k = MCA.kycNext(d, t), dsc = dscFor(D, d), other = (byDin[d.din] || []).filter(x => x.client_id !== d.client_id);
+          const kd = daysFrom(t, k.due);
+          return `<tr class="${d.ceased_on ? 'muted-row' : ''}"><td class="wrap"><b>${esc(d.name)}</b>${d.pan ? `<div class="muted tiny">${esc(d.pan)}</div>` : ''}</td><td class="nowrap">${esc(d.din || '—')}${d.din && !MCA.dinOk(d.din) ? ' <span class="warn-t tiny">check</span>' : ''}</td>
+            <td class="wrap">${esc(clientName(d.client_id))}${other.length ? `<div class="muted tiny">also: ${other.map(x => esc(clientName(x.client_id))).join(', ')}</div>` : ''}</td>
+            <td class="small">${esc(d.designation || '')}${d.ceased_on ? `<div class="tiny">Ceased ${fmtDate(d.ceased_on)}</div>` : ''}</td><td class="small">${fmtDate(d.appointed_on)}</td>
+            <td class="small">${!MCA.dinOk(d.din) || d.ceased_on ? '—' : `${d.kyc_on ? 'Filed ' + fmtDate(d.kyc_on) : '<span class="warn-t">Last KYC not saved</span>'}<div class="${kd < 0 ? 'late' : kd <= 90 ? 'soon' : 'muted'}">Next by ${fmtDate(k.due)}</div>${own[d.din] && own[d.din] !== d.client_id ? '<div class="muted tiny">KYC work under the other company</div>' : ''}`}</td>
+            <td class="small">${dsc ? `${fmtDate(dsc.expires_on)}${dsc.expires_on && dsc.expires_on < t ? ' <span class="late">expired</span>' : ''}` : `<button class="link small" data-mdsc="${d.id}">+ DSC expiry</button>`}</td>
+            <td><button class="btn sm ghost" data-mdir="${d.client_id}">Edit</button></td></tr>`; }).join('')}</tbody></table></div>`
+        : `<div class="table-wrap"><div class="empty">${D.di.length ? 'No match.' : 'No directors yet. Open a company → Directors, or paste the director list from MCA master data.'}</div></div>`;
+    }
+  };
+  draw();
+  $('#mcFy').onchange = e => { mcaFy = +e.target.value; route(); };
+  $$('[data-mt]', v).forEach(b => b.onclick = () => { mcaTab = b.dataset.mt; VIEWS.mca(v); });
+  $$('[data-mw]', v).forEach(b => b.onclick = () => { mcaTab = 'due'; mcaWin = { agm: 'all', late: 'late', 30: '30', kyc: 'kyc' }[b.dataset.mw]; VIEWS.mca(v); });
+  $('#mcQ').oninput = e => { mcaQ = e.target.value; draw(); };
+  if ($('#mcW')) $('#mcW').onchange = e => { mcaWin = e.target.value; draw(); };
+  $('#mcAdd').onclick = () => {
+    const cands = myClients().filter(c => !list.some(x => x.c.id === c.id));
+    if (!cands.length) return toast('All your clients are already listed — open Edit on a company');
+    const m = modal('Add company / LLP', `<label>Client<select name="cid"><option value="">Select client…</option>${opts(cands, '', c => c.name, c => c.id)}</select></label>`, { saveText: 'Next',
+      onSave: el => { const c = clientById(fv(el, 'cid')); if (!c) { toast('Pick a client', true); return false; } setTimeout(() => editCompany({ c, co: { client_id: c.id, entity_type: '', cin: c.cin || '', agms: [], auditor: {}, applies: {}, _new: true } }, D), 0); } });
+  };
+  $('#mcTpl').onclick = () => mcaTemplate().catch(e => toast(friendly(e), true));
+  $('#mcImp').onclick = () => $('#mcFile').click();
+  $('#mcFile').onchange = e => { const f = e.target.files[0]; e.target.value = ''; if (f) mcaImport(f, D).catch(err => toast(friendly(err), true)); };
+  $('#mcCsv').onclick = () => download(`roc-due-list-${MCA.fyL(F)}.csv`, toCSV([['Company', 'CIN', 'Type', 'Form', 'Period', 'Due', 'Estimated', 'Basis', 'Work status', 'Filed on', 'SRN / ARN'],
+    ...items.map(i => [i.c.name, i.co.cin || i.c.cin || '', i.co.entity_type || '', i.return_name, i.period, i.due, i.est ? 'Yes' : '', i.basis, i.done ? 'Held' : i.task ? i.task.status : 'No work item', i.task && i.task.filed_on || '', i.task && i.task.arn || ''])]));
+  if ($('#mcWork')) $('#mcWork').onclick = () => mcaWorkDialog(open.filter(i => !i.task), `Create ROC work — accounts ${MCA.FY(F)}`);
+  body.addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    const get = id => list.find(x => x.c.id === id) || { c: clientById(id), co: { client_id: id, agms: [], auditor: {}, applies: {}, _new: true } };
+    if (b.dataset.medit) editCompany(get(b.dataset.medit), D);
+    if (b.dataset.mdir) editDirectors(get(b.dataset.mdir), D);
+    if (b.dataset.mplan) mcaPlanDialog(get(b.dataset.mplan), D, F);
+    if (b.dataset.mdsc) { const d = D.di.find(x => x.id === b.dataset.mdsc); editRenewal(null, { client_id: d.client_id, kind: 'DSC', holder: `${d.name}${d.designation ? ' (' + d.designation + ')' : ''}`, repeat_months: 24 }); }
+  });
+};
+
+function editCompany({ c, co }, D) {
+  const ap = { dpt3: true, msme1: false, cfs: false, xbrl: false, ...(co.applies || {}) }, au = co.auditor || {}, F = mcaFy, a = MCA.agmOf(co, F);
+  const body = `<div class="form-grid">
+    <label>CIN / LLPIN<input name="cin" value="${esc(co.cin || c.cin || '')}" style="text-transform:uppercase" placeholder="U74999TN2015PTC123456"></label>
+    <label>Type<select name="entity_type"><option value="">Select…</option>${opts(MCA_TYPES, co.entity_type || '')}</select></label>
+    <label>Incorporated on<input type="date" name="incorporated_on" value="${esc(co.incorporated_on || '')}"></label>
+    <label>RoC<input name="roc" value="${esc(co.roc || '')}" placeholder="RoC Chennai"></label>
+    <label>Authorised capital (₹)<input type="number" name="auth_capital" value="${esc(co.auth_capital ?? '')}"></label>
+    <label><span data-paid>${co.entity_type === 'LLP' ? 'Total contribution (₹)' : 'Paid-up capital (₹)'}</span><input type="number" name="paid_capital" value="${esc(co.paid_capital ?? '')}"></label>
+    <label>Company email (MCA)<input name="company_email" value="${esc(co.company_email || '')}"></label>
+    <label>First FY ends (only if unusual)<input type="date" name="first_fy_end" value="${esc(co.first_fy_end || '')}" title="Incorporated on/after 1 January? The first FY may end on 31 March of the next year."></label>
+    <label class="full">Registered office<input name="reg_office" value="${esc(co.reg_office || '')}"></label>
+    <div class="full toolbar" style="margin:0"><label class="check"><input type="checkbox" name="small_company" ${co.small_company ? 'checked' : ''}> Small company (MGT-7A)</label>
+      <label class="check"><input type="checkbox" name="dpt3" ${ap.dpt3 ? 'checked' : ''}> DPT-3 (loans / deposits)</label>
+      <label class="check"><input type="checkbox" name="msme1" ${ap.msme1 ? 'checked' : ''}> MSME-1 (MSE dues &gt; 45 days)</label>
+      <label class="check"><input type="checkbox" name="cfs" ${ap.cfs ? 'checked' : ''}> Has subsidiary (AOC-4 CFS)</label>
+      <label class="check"><input type="checkbox" name="xbrl" ${ap.xbrl ? 'checked' : ''}> XBRL filing</label></div>
+    <h4 class="full" style="margin:8px 0 0">AGM for accounts ${MCA.FY(F)}</h4>
+    <label>AGM held on<input type="date" name="agm_on" value="${esc(a.agm_on || '')}"></label>
+    <label>Extended by RoC to<input type="date" name="extended_to" value="${esc(a.extended_to || '')}"></label>
+    <label>Balance sheet date<input type="date" name="bs_date" value="${esc(a.bs_date || `${F + 1}-03-31`)}"></label>
+    <h4 class="full" style="margin:8px 0 0">Statutory auditor</h4>
+    <label>Auditor / firm<input name="au_name" value="${esc(au.name || '')}"></label>
+    <label>FRN / M. No.<input name="au_frn" value="${esc(au.frn || '')}"></label>
+    <label>Appointed at AGM on<input type="date" name="au_on" value="${esc(au.appointed_on || '')}"></label>
+    <label>Term ends at AGM for FY<input name="au_to" value="${esc(au.to_fy || '')}" placeholder="e.g. 2029-30"></label>
+    <label class="full">Remarks<textarea name="remarks" rows="2">${esc(co.remarks || '')}</textarea></label>
+    ${(co.agms || []).filter(x => x.agm_on && x.fy !== MCA.fyL(F)).length ? `<div class="full small"><b>Earlier AGMs</b> ${(co.agms || []).filter(x => x.agm_on && x.fy !== MCA.fyL(F)).sort((x, y) => y.fy.localeCompare(x.fy)).map(x => `<span class="muted">FY ${esc(x.fy)}: ${fmtDate(x.agm_on)}</span>`).join(' · ')}</div>` : ''}
+  </div>`;
+  const m = modal(`${c.name} — company master`, body, { wide: true,
+    extra: !co._new && isManager() ? '<button class="btn danger" data-mcdel>Remove master</button>' : '',
+    onSave: async el => {
+      const ck = n => $(`[name=${n}]`, el).checked, cin = fv(el, 'cin').toUpperCase().replace(/\s/g, '') || null;
+      if (cin && !MCA.cinInfo(cin) && !confirm(`"${cin}" does not look like a CIN (21 characters) or LLPIN (AAA-1234). Save anyway?`)) return false;
+      const agms = (co.agms || []).filter(x => x.fy !== MCA.fyL(F));
+      const agmRec = { ...a, fy: MCA.fyL(F), agm_on: fv(el, 'agm_on') || null, extended_to: fv(el, 'extended_to') || null, bs_date: fv(el, 'bs_date') || null };
+      if (agmRec.agm_on || agmRec.extended_to) agms.push(agmRec);
+      if (agmRec.agm_on && agmRec.agm_on < `${F + 1}-04-01`) { toast('The AGM date is before the end of that financial year', true); return false; }
+      const rec = { client_id: c.id, cin, entity_type: fv(el, 'entity_type') || null, incorporated_on: fv(el, 'incorporated_on') || null, roc: fv(el, 'roc') || null,
+        auth_capital: fv(el, 'auth_capital') === '' ? null : num(fv(el, 'auth_capital')), paid_capital: fv(el, 'paid_capital') === '' ? null : num(fv(el, 'paid_capital')),
+        company_email: fv(el, 'company_email') || null, first_fy_end: fv(el, 'first_fy_end') || null, reg_office: fv(el, 'reg_office') || null, small_company: ck('small_company'),
+        applies: { dpt3: ck('dpt3'), msme1: ck('msme1'), cfs: ck('cfs'), xbrl: ck('xbrl') }, agms,
+        auditor: { name: fv(el, 'au_name') || null, frn: fv(el, 'au_frn') || null, appointed_on: fv(el, 'au_on') || null, to_fy: fv(el, 'au_to') || null }, remarks: fv(el, 'remarks') || null };
+      if (rec.small_company && ['Public company', 'Section 8', 'LLP'].includes(rec.entity_type)) { toast('Only a private company can be a small company', true); return false; }
+      await must(sb.from('mca_companies').upsert(rec, { onConflict: 'client_id' }));
+      if (cin && cin !== (c.cin || null)) { try { await must(sb.from('clients').update({ cin }).eq('id', c.id)); c.cin = cin; } catch (e) {} }
+      toast('Saved');
+      // AGM date entered → offer to move open work items to the AGM-based dates
+      if (agmRec.agm_on && agmRec.agm_on !== a.agm_on) {
+        const its = MCA.plan(rec, [], F).filter(i => ['AOC-4', 'AOC-4 XBRL', 'AOC-4 CFS', 'MGT-7', 'MGT-7A', 'ADT-1'].includes(i.return_name));
+        const ex = (D.tk || []).filter(x => x.client_id === c.id && isOpen(x.status) && its.some(i => lc(i.return_name) === lc(x.return_name) && lc(i.period) === lc(x.period)));
+        const ch = ex.map(x => [x, its.find(i => lc(i.return_name) === lc(x.return_name))]).filter(([x, i]) => x.due_date !== i.due);
+        if (ch.length && confirm(`AGM on ${fmtDate(agmRec.agm_on)}. Move the due dates of ${ch.length} open work item(s)?\n\n${ch.map(([x, i]) => `${x.return_name}: ${fmtDate(x.due_date)} → ${fmtDate(i.due)}`).join('\n')}`))
+          await Promise.all(ch.map(([x, i]) => must(sb.from('tasks').update({ due_date: i.due }).eq('id', x.id))));
+      }
+      route();
+    } });
+  const el = m.el;
+  $('[name=cin]', el).addEventListener('change', () => {
+    const i = MCA.cinInfo(fv(el, 'cin')); if (!i) return;
+    if (i.type && !fv(el, 'entity_type')) $('[name=entity_type]', el).value = i.type;
+    if (i.roc && !fv(el, 'roc')) $('[name=roc]', el).value = i.roc;
+    if (i.year && !fv(el, 'incorporated_on')) toast(`CIN shows incorporation in ${i.year}${i.listed ? ' · listed' : ''} — enter the exact date`);
+  });
+  $('[name=entity_type]', el).addEventListener('change', () => { $('[data-paid]', el).textContent = fv(el, 'entity_type') === 'LLP' ? 'Total contribution (₹)' : 'Paid-up capital (₹)'; });
+  const del = $('[data-mcdel]', el);
+  if (del) del.onclick = async () => { if (!confirm('Remove the company master (CIN details, AGM history, auditor)? Directors and work items are kept.')) return; try { await must(sb.from('mca_companies').delete().eq('client_id', c.id)); m.close(); toast('Removed'); route(); } catch (e) { toast(friendly(e), true); } };
+}
+
+function editDirectors({ c, co }, D) {
+  let rows = D.di.filter(d => d.client_id === c.id).map(d => ({ ...d }));
+  const LLP = MCA.isLLP(co);
+  const m = modal(`${c.name} — ${LLP ? 'designated partners' : 'directors & KMP'}`, `<div data-dl></div>
+    <div class="toolbar" style="margin-top:10px"><button class="btn sm" data-dadd>+ Add ${LLP ? 'partner' : 'director'}</button><button class="btn sm" data-dpaste>Paste from MCA master data</button><span class="spacer"></span>
+      <a class="btn sm ghost" href="https://www.mca.gov.in/content/mca/global/en/mca/master-data/MDS.html" target="_blank" rel="noopener">Open MCA master data ↗</a></div>
+    <p class="muted small">DIR-3 KYC: enter the date the last KYC was filed — the next one is due by 30 June after the third financial year. A change of mobile, email or address needs a KYC update within 30 days.</p>`, { wide: true, saveText: 'Save', onSave: async () => save() });
+  const el = m.el, box = $('[data-dl]', el);
+  const orig = new Map(rows.filter(r => r.id).map(r => [r.id, { ...r }]));
+  const draw = () => {
+    box.innerHTML = rows.length ? `<div class="table-wrap"><table class="dir-grid"><thead><tr><th>Name</th><th>DIN / DPIN</th><th>Designation</th><th>Appointed</th><th>Ceased</th><th>Last KYC filed</th><th>Mobile</th><th>Email</th><th>PAN</th><th></th></tr></thead><tbody>
+      ${rows.map((d, i) => `<tr data-i="${i}" class="${d._del ? 'muted-row' : ''}"><td><input data-f="name" value="${esc(d.name || '')}" ${d._del ? 'disabled' : ''}></td>
+        <td><input data-f="din" value="${esc(d.din || '')}" inputmode="numeric" maxlength="8" style="width:7.5em" class="${d.din && !MCA.dinOk(d.din) ? 'bad' : ''}"></td>
+        <td><select data-f="designation">${opts([...new Set([...MCA_DESIG, d.designation || 'Director'])], d.designation || (LLP ? 'Designated Partner' : 'Director'))}</select></td>
+        <td><input type="date" data-f="appointed_on" value="${esc(d.appointed_on || '')}"></td><td><input type="date" data-f="ceased_on" value="${esc(d.ceased_on || '')}"></td>
+        <td><input type="date" data-f="kyc_on" value="${esc(d.kyc_on || '')}"></td><td><input data-f="phone" value="${esc(d.phone || '')}" style="width:8em"></td><td><input data-f="email" value="${esc(d.email || '')}"></td>
+        <td><input data-f="pan" value="${esc(d.pan || '')}" maxlength="10" style="width:7.5em;text-transform:uppercase"></td>
+        <td>${d._del ? `<button class="link small" data-undel="${i}">Undo</button>` : `<button class="icon-btn" data-ddel="${i}" aria-label="Remove">×</button>`}</td></tr>`).join('')}</tbody></table></div>`
+      : '<div class="empty">No directors yet.</div>';
+  };
+  draw();
+  box.addEventListener('input', e => { const f = e.target.dataset.f, tr = e.target.closest('[data-i]'); if (!f || !tr) return; rows[+tr.dataset.i][f] = e.target.value.trim(); if (f === 'din') e.target.classList.toggle('bad', !!e.target.value && !MCA.dinOk(e.target.value.trim())); });
+  box.addEventListener('change', e => { const f = e.target.dataset.f, tr = e.target.closest('[data-i]'); if (f && tr) rows[+tr.dataset.i][f] = e.target.value.trim(); });
+  box.addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return;
+    if (b.dataset.ddel != null) { const r = rows[+b.dataset.ddel]; if (r.id) r._del = true; else rows.splice(+b.dataset.ddel, 1); draw(); }
+    if (b.dataset.undel != null) { rows[+b.dataset.undel]._del = false; draw(); } });
+  $('[data-dadd]', el).onclick = () => { rows.push({ client_id: c.id, name: '', designation: LLP ? 'Designated Partner' : 'Director' }); draw(); const ins = $$('[data-f=name]', box); ins[ins.length - 1].focus(); };
+  $('[data-dpaste]', el).onclick = () => {
+    const pm = modal('Paste director list', `<p class="small" style="margin-top:0">On MCA V3 → <b>View company / LLP master data</b>, select the <b>Director / Signatory details</b> table, copy (Ctrl+C) and paste it below. Rows with an 8-digit DIN are picked up.</p>
+      <textarea rows="10" class="code" data-pt placeholder="DIN    Name    Designation    Date of appointment …"></textarea><div data-pp class="small"></div>`, { wide: true, saveText: 'Add these',
+      onSave: () => { const got = MCA.parseDirectorPaste($('[data-pt]', pm.el).value); if (!got.length) { toast('No rows with a DIN found', true); return false; }
+        let added = 0, upd = 0;
+        got.forEach(g => { const ex = rows.find(r => r.din === g.din); if (ex) { ['designation', 'appointed_on', 'ceased_on', 'pan'].forEach(k => { if (g[k] && !ex[k]) { ex[k] = g[k]; upd++; } }); } else { rows.push({ client_id: c.id, ...g }); added++; } });
+        draw(); toast(`${added} added${upd ? `, ${upd} detail(s) filled` : ''} — check and Save`); } });
+    $('[data-pt]', pm.el).addEventListener('input', e => { const g = MCA.parseDirectorPaste(e.target.value); $('[data-pp]', pm.el).innerHTML = g.length ? `<b>${g.length}</b> found: ${g.map(x => `${esc(x.name)} (${x.din}, ${esc(x.designation)}${x.appointed_on ? ', from ' + fmtDate(x.appointed_on) : ''})`).join('; ')}` : ''; });
+  };
+  async function save() {
+    const live = rows.filter(r => !r._del && (r.name || r.din));
+    const bad = live.find(r => !r.name) || live.find(r => r.din && !MCA.dinOk(r.din));
+    if (bad) { toast(bad.name ? `DIN of ${bad.name} must be 8 digits` : 'Every row needs a name', true); return false; }
+    const dup = live.map(r => r.din).filter(Boolean).find((d, i, a) => a.indexOf(d) !== i);
+    if (dup) { toast(`DIN ${dup} is entered twice`, true); return false; }
+    const clean = r => ({ client_id: c.id, name: r.name, din: r.din || null, designation: r.designation || null, appointed_on: r.appointed_on || null, ceased_on: r.ceased_on || null,
+      kyc_on: r.kyc_on || null, phone: r.phone || null, email: r.email || null, pan: (r.pan || '').toUpperCase() || null });
+    const dels = rows.filter(r => r._del && r.id).map(r => r.id);
+    if (dels.length) await must(sb.from('mca_directors').delete().in('id', dels));
+    const ins = live.filter(r => !r.id).map(clean), upd = live.filter(r => r.id);
+    if (ins.length) await must(sb.from('mca_directors').insert(ins));
+    await Promise.all(upd.map(r => must(sb.from('mca_directors').update(clean(r)).eq('id', r.id))));
+    // event forms: DIR-12 for appointment / cessation in the last 30 days, KYC update for changed contact details
+    const t = today(), back30 = iso(addDays(new Date(), -30)), ev = [];
+    live.forEach(r => { const o = r.id ? orig.get(r.id) : {};
+      if (!LLP && r.appointed_on && r.appointed_on >= back30 && r.appointed_on !== o.appointed_on) ev.push({ return_name: 'DIR-12', period: `Appointment · ${r.name} · ${fmtDate(r.appointed_on)}`, due: MCA.plus(r.appointed_on, 30), why: `${r.name} appointed ${fmtDate(r.appointed_on)}` });
+      if (!LLP && r.ceased_on && r.ceased_on >= back30 && r.ceased_on !== o.ceased_on) ev.push({ return_name: 'DIR-12', period: `Cessation · ${r.name} · ${fmtDate(r.ceased_on)}`, due: MCA.plus(r.ceased_on, 30), why: `${r.name} ceased ${fmtDate(r.ceased_on)}` });
+      if (LLP && (r.appointed_on && r.appointed_on >= back30 && r.appointed_on !== o.appointed_on || r.ceased_on && r.ceased_on >= back30 && r.ceased_on !== o.ceased_on))
+        ev.push({ return_name: 'LLP Form 4', period: `${r.ceased_on ? 'Cessation' : 'Appointment'} · ${r.name} · ${fmtDate(r.ceased_on || r.appointed_on)}`, due: MCA.plus(r.ceased_on || r.appointed_on, 30), why: `${r.name} ${r.ceased_on ? 'ceased' : 'appointed'}` });
+      if (r.id && MCA.dinOk(r.din) && !r.ceased_on && ((o.phone || '') !== (r.phone || '') && o.phone || (o.email || '') !== (r.email || '') && o.email))
+        ev.push({ return_name: 'DIR-3 KYC', period: `Update · ${r.name} · DIN ${r.din} · ${fmtDate(t)}`, due: MCA.plus(t, 30), why: `${r.name}: mobile / email changed — DIR-3 KYC-Web within 30 days` });
+    });
+    toast('Saved');
+    if (ev.length && isManager() && confirm(`Create ${ev.length} event work item(s)?\n\n${ev.map(x => `${x.return_name} by ${fmtDate(x.due)} — ${x.why}`).join('\n')}`))
+      try { await must(sb.from('tasks').upsert(ev.map(x => ({ client_id: c.id, work_type: 'ROC/MCA', return_name: x.return_name, period: x.period, due_date: x.due, assigned_to: c.default_staff || null, remarks: x.why })), { onConflict: 'client_id,return_name,period', ignoreDuplicates: true })); toast('Event work items created'); }
+      catch (e) { toast(friendly(e), true); }
+    route();
+  }
+}
+
+function mcaPlanDialog({ c, co }, D, F) {
+  const own = mcaKycOwners(D.co, D.di), tmap = new Map(D.tk.map(x => [mcaTaskKey(x.client_id, x.return_name, x.period), x]));
+  const its = MCA.plan(co, D.di.filter(d => d.client_id === c.id), F, { kycOwner: d => own[d.din] === c.id }).map(i => ({ ...i, c, co, task: tmap.get(mcaTaskKey(c.id, i.return_name, i.period)) || null }));
+  if (co._new) toast('Fill the company master first for exact dates (type, incorporation, AGM)');
+  mcaWorkDialog(its.filter(i => !i.ag), `${c.name} — ROC work for accounts ${MCA.FY(F)}`, its.find(i => i.ag));
+}
+function mcaWorkDialog(items, title, agm) {
+  const t = today();
+  if (!items.length) return toast('Nothing to create — every item already has a work item');
+  const can = isManager();
+  const rows = items.map((i, k) => { const s = mcaStatus(i), moved = i.task && isOpen(i.task.status) && i.task.due_date !== i.due;
+    return `<tr><td>${s === 'none' || moved ? `<input type="checkbox" data-k="${k}" ${can ? 'checked' : 'disabled'}>` : ''}</td><td class="wrap"><b>${esc(i.c.name)}</b></td><td><b>${esc(i.return_name)}</b><div class="muted tiny">${esc(i.period)}</div></td>
+      <td class="nowrap ${i.due < t && s !== 'filed' ? 'late' : ''}">${fmtDate(i.due)}${i.est ? ' <span class="pill a tiny">est.</span>' : ''}</td><td class="small muted wrap">${esc(i.basis)}</td>
+      <td class="small">${s === 'none' ? 'New' : s === 'filed' ? '✓ Filed' : s === 'na' ? 'N/A' : moved ? `Move date from ${fmtDate(i.task.due_date)}` : esc(i.task.status)}</td></tr>`; }).join('');
+  const m = modal(title, `${agm ? `<p class="small" style="margin-top:0">AGM: ${agm.done ? `held on <b>${fmtDate(agm.due)}</b>` : `last date <b>${fmtDate(agm.due)}</b>${agm.due < t ? ' — <span class="late">overdue</span>' : ''} · ${esc(agm.basis)}`}</p>` : ''}
+    <div class="table-wrap" style="max-height:52vh"><table><thead><tr><th></th><th>Company</th><th>Form</th><th>Due</th><th>Basis</th><th>Work item</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <div class="form-grid" style="margin-top:10px"><label>Assign to<select name="who"><option value="">Each client's default staff</option>${opts(activeStaff(), '', p => p.full_name || p.email, p => p.id)}</select></label></div>
+    ${can ? '' : '<p class="note small">Only a manager or above can create work items.</p>'}`, { wide: true, saveText: 'Create / update work items',
+    onSave: can ? async el => {
+      const pick = $$('[data-k]:checked', el).map(x => items[+x.dataset.k]); if (!pick.length) { toast('Nothing ticked', true); return false; }
+      const who = fv(el, 'who') || null;
+      const neu = pick.filter(i => !i.task), mv = pick.filter(i => i.task);
+      if (neu.length) await must(sb.from('tasks').upsert(neu.map(i => ({ client_id: i.c.id, work_type: 'ROC/MCA', return_name: i.return_name, period: i.period, due_date: i.due,
+        assigned_to: who || i.c.default_staff || null, remarks: (i.est ? 'Estimated date — ' : '') + i.basis })), { onConflict: 'client_id,return_name,period', ignoreDuplicates: true }));
+      await Promise.all(mv.map(i => must(sb.from('tasks').update({ due_date: i.due }).eq('id', i.task.id))));
+      toast(`${neu.length} work item${neu.length === 1 ? '' : 's'} created${mv.length ? `, ${mv.length} date${mv.length > 1 ? 's' : ''} moved` : ''}`); route();
+    } : null });
+}
+
+const MC_HEAD = ['Client (name, GSTIN, PAN or CIN)', 'CIN / LLPIN', 'Type', 'Incorporated on', 'Small company (Y/N)', 'Paid-up capital / contribution', 'Last AGM date', 'AGM for FY', 'Auditor', 'Auditor FRN', 'Auditor term to FY', 'DPT-3 (Y/N)', 'MSME-1 (Y/N)'];
+const MD_HEAD = ['Client (name, GSTIN, PAN or CIN)', 'Name', 'DIN / DPIN', 'Designation', 'Appointed on', 'Ceased on', 'Last DIR-3 KYC filed on', 'Mobile', 'Email', 'PAN'];
+async function mcaTemplate() {
+  const X = await loadXlsxFull(), wb = X.utils.book_new(), F = mcaFy;
+  const a = X.utils.aoa_to_sheet([MC_HEAD, ['ABC Traders Private Limited', 'U74999TN2015PTC123456', 'Private company', '12/06/2015', 'Y', 500000, '', MCA.fyL(F), 'K S & Co', '012345S', '2029-30', 'Y', 'N'],
+    ['XYZ Consultants LLP', 'AAB-1234', 'LLP', '01/04/2019', '', 200000, '', '', '', '', '', '', '']]);
+  a['!cols'] = MC_HEAD.map(() => ({ wch: 18 })); a['!cols'][0] = { wch: 32 }; X.utils.book_append_sheet(wb, a, 'Companies');
+  const b = X.utils.aoa_to_sheet([MD_HEAD, ['ABC Traders Private Limited', 'R. Kumar', '01234567', 'Managing Director', '12/06/2015', '', '28/09/2025', '9840012345', 'kumar@abc.in', 'ABCPK1234A'],
+    ['ABC Traders Private Limited', 'S. Lakshmi', '07654321', 'Director', '12/06/2015', '', '', '', '', '']]);
+  b['!cols'] = MD_HEAD.map(() => ({ wch: 16 })); b['!cols'][0] = { wch: 32 }; X.utils.book_append_sheet(wb, b, 'Directors');
+  const h = X.utils.aoa_to_sheet([['How to fill'], ['Delete the sample rows first. Client = exact client name, or its GSTIN, PAN or CIN.'], ['Type: Private company, Public company, OPC, Section 8, Producer company, Nidhi or LLP (worked out from the CIN when blank).'],
+    ['Dates: dd/mm/yyyy. "AGM for FY" e.g. 2025-26 (the accounts year the AGM adopted). Auditor term to FY: the FY whose AGM ends the term.'], ['Directors: one row per person per company. DIN = 8 digits. KMP without a DIN (CS / CFO) — leave DIN blank.']]);
+  h['!cols'] = [{ wch: 100 }]; X.utils.book_append_sheet(wb, h, 'Help');
+  X.writeFile(wb, 'companies-directors-template.xlsx');
+}
+function mcaFindClient(s) { const u = String(s ?? '').trim().toUpperCase(); return findClient(s) || (u ? clients.find(c => c.cin && c.cin.toUpperCase() === u) : null) || null; }
+function parseMcaSheets(sheets, D, F = mcaFy) {
+  const yes = x => /^(y|yes|true|1)$/i.test(String(x).trim());
+  const find = re => sheets.find(s => s.rows.some(r => r.some(x => re.test(String(x)))));
+  const cos = [], dirs = [], bad = [];
+  const cs = find(/cin \/ llpin|^type$/i), ds = find(/^din|din \/ dpin/i);
+  const hdr = (rows, re) => rows.findIndex(r => r.some(x => re.test(String(x))));
+  if (cs) { const hi = hdr(cs.rows, /cin \/ llpin|^cin/i), H = cs.rows[hi].map(x => lc(String(x))), col = re => H.findIndex(h => re.test(h));
+    const C = { c: col(/^client/), cin: col(/cin/), ty: col(/^type/), inc: col(/incorporat/), sm: col(/small/), cap: col(/capital|contribution/), agm: col(/last agm/), afy: col(/agm for/), au: col(/^auditor$/), frn: col(/frn/), ato: col(/term/), dp: col(/dpt/), ms: col(/msme/) };
+    cs.rows.slice(hi + 1).forEach((r, i) => { if (!r.some(x => String(x).trim())) return; const g = k => C[k] >= 0 ? r[C[k]] : '';
+      const c = mcaFindClient(g('c')) || mcaFindClient(g('cin')); if (!c) return bad.push(`Companies row ${hi + i + 2}: client "${g('c')}" not found`);
+      const cin = String(g('cin') || '').toUpperCase().replace(/\s/g, '') || c.cin || null, ty = MCA_TYPES.find(x => lc(x) === lc(String(g('ty')))) || (MCA.cinInfo(cin) || {}).type || null;
+      const inc = anyDate(g('inc')), agm = anyDate(g('agm')); if (inc === undefined || agm === undefined) return bad.push(`Companies row ${hi + i + 2}: date not understood`);
+      const ex = D.co.find(x => x.client_id === c.id) || {}, afy = String(g('afy') || '').trim() || (agm ? MCA.fyL(MCA.fyStartOf(agm) - 1) : '');
+      const agms = (ex.agms || []).filter(x => x.fy !== afy); if (agm) agms.push({ fy: afy, agm_on: agm });
+      cos.push({ client_id: c.id, cin, entity_type: ty, incorporated_on: inc || ex.incorporated_on || null, small_company: yes(g('sm')), paid_capital: g('cap') === '' ? (ex.paid_capital ?? null) : num(g('cap')),
+        roc: ex.roc || (MCA.cinInfo(cin) || {}).roc || null, agms, applies: { ...(ex.applies || { dpt3: true }), ...(g('dp') !== '' ? { dpt3: yes(g('dp')) } : {}), ...(g('ms') !== '' ? { msme1: yes(g('ms')) } : {}) },
+        auditor: g('au') ? { name: String(g('au')).trim(), frn: String(g('frn') || '').trim() || null, to_fy: String(g('ato') || '').trim() || null } : (ex.auditor || {}) }); }); }
+  if (ds) { const hi = hdr(ds.rows, /din/i), H = ds.rows[hi].map(x => lc(String(x))), col = re => H.findIndex(h => re.test(h));
+    const C = { c: col(/^client/), n: col(/^name/), din: col(/din/), de: col(/designation/), ap: col(/appoint/), ce: col(/ceas/), k: col(/kyc/), ph: col(/mobile|phone/), em: col(/email/), pan: col(/^pan/) };
+    const seen = new Set(D.di.map(d => d.client_id + '|' + d.din));
+    ds.rows.slice(hi + 1).forEach((r, i) => { if (!r.some(x => String(x).trim())) return; const g = k => C[k] >= 0 ? r[C[k]] : '', n = hi + i + 2;
+      const c = mcaFindClient(g('c')); if (!c) return bad.push(`Directors row ${n}: client "${g('c')}" not found`);
+      const din = String(g('din') || '').replace(/\D/g, '').padStart(String(g('din') || '').replace(/\D/g, '').length ? 8 : 0, '0') || null;
+      if (!String(g('n')).trim()) return bad.push(`Directors row ${n}: name missing`);
+      if (din && !MCA.dinOk(din)) return bad.push(`Directors row ${n}: DIN "${g('din')}" is not 8 digits`);
+      const ap = anyDate(g('ap')), ce = anyDate(g('ce')), k = anyDate(g('k')); if ([ap, ce, k].includes(undefined)) return bad.push(`Directors row ${n}: date not understood`);
+      if (din && seen.has(c.id + '|' + din)) return bad.push(`Directors row ${n}: DIN ${din} already saved for ${c.name} — skipped`);
+      if (din) seen.add(c.id + '|' + din);
+      dirs.push({ client_id: c.id, name: String(g('n')).trim(), din, designation: String(g('de') || '').trim() || 'Director', appointed_on: ap, ceased_on: ce, kyc_on: k, phone: String(g('ph') || '').trim() || null, email: String(g('em') || '').trim() || null, pan: String(g('pan') || '').trim().toUpperCase() || null }); }); }
+  if (!cs && !ds) throw new Error('No "Companies" or "Directors" sheet found. Use the Excel template.');
+  return { cos, dirs, bad };
+}
+async function mcaImport(file, D) {
+  const { cos, dirs, bad } = parseMcaSheets(await readSheets(file), D);
+  modal('Import companies & directors', `<p><b>${cos.length}</b> compan${cos.length === 1 ? 'y' : 'ies'} and <b>${dirs.length}</b> director${dirs.length === 1 ? '' : 's'} ready from <b>${esc(file.name)}</b>${bad.length ? `, <b>${bad.length}</b> row(s) left out` : ''}.</p>
+    ${cos.length ? `<p class="small muted">${cos.slice(0, 40).map(x => esc(clientName(x.client_id))).join(', ')}${cos.length > 40 ? ' …' : ''}</p>` : ''}
+    ${bad.length ? `<p class="note warn small">${bad.slice(0, 30).map(esc).join('<br>')}${bad.length > 30 ? `<br>… and ${bad.length - 30} more` : ''}</p>` : ''}`, {
+    saveText: 'Import', onSave: cos.length || dirs.length ? async () => {
+      if (cos.length) await must(sb.from('mca_companies').upsert(cos, { onConflict: 'client_id' }));
+      if (dirs.length) await must(sb.from('mca_directors').insert(dirs));
+      const cinUp = cos.filter(x => x.cin && (clientById(x.client_id) || {}).cin !== x.cin);
+      await Promise.all(cinUp.map(x => safe(sb.from('clients').update({ cin: x.cin }).eq('id', x.client_id))));
+      toast(`Imported ${cos.length} compan${cos.length === 1 ? 'y' : 'ies'}, ${dirs.length} director${dirs.length === 1 ? '' : 's'}`); route(); } : null });
+}
+
+/* =====================================================================
+   v20 · SESSION 3: BILL READER — PDF / photo purchase bills → purchase register
+   Free first: e-invoice QR code → PDF text → text recognition (Tesseract) · Claude only when needed and a key is saved
+   ===================================================================== */
+const BILL = (() => {
+  const r2 = x => Math.round((+x || 0) * 100) / 100;
+  const CH = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  function gstinCheck(g) {                                   // GSTIN check digit (15th character)
+    g = String(g || '').toUpperCase();
+    if (!/^[0-9]{2}[A-Z0-9]{12}[0-9A-Z]$/.test(g)) return false;
+    let s = 0;
+    for (let i = 0; i < 14; i++) { const v = CH.indexOf(g[i]); if (v < 0) return false; const p = v * (i % 2 ? 2 : 1); s += Math.floor(p / 36) + (p % 36); }
+    return CH[(36 - (s % 36)) % 36] === g[14];
+  }
+  // OCR often swaps O/0, I/1, S/5, B/8 — fix by position (2 digits · 5 letters · 4 digits · letter · 1 · Z · check)
+  const D2L = { 0: 'O', 1: 'I', 5: 'S', 8: 'B', 2: 'Z', 6: 'G' }, L2D = { O: '0', D: '0', Q: '0', I: '1', L: '1', S: '5', B: '8', Z: '2', G: '6' };
+  function fixGstin(tok) {
+    let t = String(tok || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (t.length !== 15) return null;
+    if (gstinCheck(t)) return t;
+    const a = t.split('');
+    [0, 1, 7, 8, 9, 10].forEach(i => { if (L2D[a[i]]) a[i] = L2D[a[i]]; });
+    [2, 3, 4, 5, 6, 11].forEach(i => { if (D2L[a[i]]) a[i] = D2L[a[i]]; });
+    if (a[13] === '2') a[13] = 'Z';
+    const f = a.join('');
+    return gstinCheck(f) ? f : null;
+  }
+  function findGstins(text) {
+    const out = [], seen = new Set();
+    const toks = String(text || '').toUpperCase().match(/[0-9OIDQLSBZG]{2}[A-Z0-9]{5}[0-9OIDQLSBZG]{4}[A-Z0-9][A-Z0-9][A-Z0-9]{2}|[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]/g) || [];
+    // also spaced OCR forms like "33 AAAAA 1234 A 1Z5"
+    const spaced = String(text || '').toUpperCase().match(/\b\d{2}\s?[A-Z]{5}\s?\d{4}\s?[A-Z]\s?[1-9A-Z]\s?Z\s?[0-9A-Z]\b/g) || [];
+    [...toks, ...spaced.map(s => s.replace(/\s/g, ''))].forEach(t => { const g = fixGstin(t); if (g && !seen.has(g)) { seen.add(g); out.push(g); } });
+    return out;
+  }
+  // numbers on a piece of text: Indian / western grouping; skips rates (9%, @18) and parts of codes
+  const NUM = /(?<![\w.\/\-])(\d{1,3}(?:,\d{2,3})+(?:\.\d{1,2})?|\d+\.\d{1,2}|\d+)(?![\w%\/])/g;
+  function nums(s) {
+    const out = []; let m;
+    const str = String(s || '').replace(/₹|rs\.?|inr/gi, ' ');
+    NUM.lastIndex = 0;
+    while ((m = NUM.exec(str))) {
+      const before = str.slice(Math.max(0, m.index - 2), m.index), after = str.slice(m.index + m[0].length, m.index + m[0].length + 2);
+      if (/@\s*$/.test(before) || /^\s*%/.test(after)) continue;
+      const x = parseFloat(m[1].replace(/,/g, '')); if (isFinite(x)) out.push(x);
+    }
+    return out;
+  }
+  const HEADS = [
+    ['ig', /\b(igst|integrated\s+tax)\b/i], ['cg', /\b(cgst|central\s+tax)\b/i], ['sg', /\b(sgst|utgst|state\s*\/?\s*ut\s+tax|state\s+tax)\b/i], ['cs', /\b(cess)\b/i],
+    ['v', /(grand\s*total|total\s*invoice\s*(value|amount)|invoice\s*(total|value|amount)|total\s*amount\s*(after\s*tax|payable)?|net\s*(amount|payable|total)|amount\s*payable|total\s*value|bill\s*amount|total\s*\(?(inr|rs)\.?\)?)/i],
+    ['t', /(taxable\s*(value|amount|amt|val)?|assessable\s*value|sub\s*-?\s*total|total\s*before\s*tax|amount\s*before\s*tax)/i]
+  ];
+  const RATES = [0.05, 0.12, 0.18, 0.28, 0.40, 0.03, 0.0025, 0.015, 0.01, 0.06, 0.075, 0.14];
+  function candidates(lines) {
+    const c = { t: [], v: [], ig: [], cg: [], sg: [], cs: [], all: [] };
+    lines.forEach((ln, k) => {
+      const hits = [];
+      HEADS.forEach(([h, re]) => { const g = new RegExp(re.source, 'gi'); let m; while ((m = g.exec(ln))) hits.push({ h, s: m.index, e: m.index + m[0].length }); });
+      hits.sort((a, b) => a.s - b.s);
+      const clean = hits.filter((x, i) => !hits.some((y, j) => j !== i && y.s <= x.s && y.e >= x.e && (y.e - y.s) > (x.e - x.s)));   // "total invoice value" beats "invoice value"
+      clean.forEach((x, i) => {
+        const seg = ln.slice(x.e, i + 1 < clean.length ? clean[i + 1].s : ln.length);
+        let n = nums(seg);
+        if (!n.length && (x.h === 't' || x.h === 'v') && lines[k + 1] && !HEADS.some(([, re]) => re.test(lines[k + 1]))) n = nums(lines[k + 1]).slice(-1);
+        if (n.length) c[x.h].push(...(x.h === 't' || x.h === 'v' ? [n[n.length - 1], ...(n.length > 1 ? [Math.max(...n)] : [])] : [n[n.length - 1]]));
+      });
+      // tax-summary "Total" row of a table: every number may be one of the totals
+      if (/^\s*(sub\s*)?total\b/i.test(ln) && !clean.some(x => x.h === 'v')) { const n = nums(ln); if (n.length >= 2) ['t', 'v', 'ig', 'cg', 'sg'].forEach(h => c[h].push(...n)); }
+      c.all.push(...nums(ln).filter(x => x >= 1));
+    });
+    return c;
+  }
+  function solve(c, { fixedV = null, intra = null, wide = false } = {}) {
+    const top = (a, n) => [...new Set(a.map(r2))].filter(x => x > 0).sort((x, y) => y - x).slice(0, n);
+    const all = wide ? top(c.all, 14) : [];
+    const pool = (k, n) => top(wide ? [...c[k], ...all] : c[k], wide ? 14 : n);
+    const T = pool('t', 6), V = fixedV ? [r2(fixedV)] : pool('v', 6), IG = [0, ...pool('ig', 6)], CG = [0, ...pool('cg', 6)], SG = [0, ...pool('sg', 6)], CS = [0, ...top(c.cs, 3)];
+    let best = null;
+    for (const t of (T.length ? T : [null])) for (const v of (V.length ? V : [null])) for (const ig of IG) for (const cg of CG) for (const sg of SG) for (const cs of CS) {
+      if (ig && (cg || sg)) continue;
+      if (wide && !ig && cg !== sg) continue;
+      const tax = r2(ig + cg + sg + cs);
+      let tt = t; if (tt == null && v != null) tt = r2(v - tax);
+      if (tt == null || tt <= 0 || tax >= tt) continue;
+      if (v != null && tax && v <= tt) continue;
+      let sc = 0; const d = v != null ? Math.abs(tt + tax - v) : null;
+      if (d != null) sc += d <= 1.01 ? 6 : d <= 5 ? 3 : -2 - Math.min(3, d / Math.max(1, v) * 50);
+      if (!ig && (cg || sg)) sc += Math.abs(cg - sg) <= 0.51 ? 3 : -3;
+      const g = ig || cg + sg, rate = g / tt;
+      sc += !g ? -1 : RATES.some(r => Math.abs(rate - r) < 0.0015) ? 3 : rate > 0 && rate <= 0.4 ? 0.5 : -4;
+      if (intra === true && ig) sc -= 3; if (intra === false && (cg || sg)) sc -= 3;
+      if (t == null) sc -= 1;
+      sc += Math.log10(1 + tt) * 0.01;
+      if (!best || sc > best.sc) best = { sc, t: tt, v: v != null ? v : r2(tt + tax), ig, cg, sg, cs, d, rate };
+    }
+    if (!best) return null;
+    best.ok = best.d != null && best.d <= 1.01 && (best.ig || best.cg === best.sg || Math.abs(best.cg - best.sg) <= 0.51) && RATES.some(r => Math.abs(best.rate - r) < 0.0015);
+    return best;
+  }
+  const DATE_RE = /(\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4}|\d{1,2}[\s\-]?[A-Za-z]{3,9}[\s\-,']*\d{2,4}|\d{4}-\d{2}-\d{2})/;
+  const INV_RE = /(?:invoice|inv|bill|document|doc|voucher|vch|note)\s*(?:no|number|num|#)\.?\s*[:\-#]?\s*([A-Za-z0-9][A-Za-z0-9\/\-_.]{0,19})/i;
+  const BAD_INV = /^(date|dated|of|and|no|ref|for|the|type|details)$/i;
+  function normDate(s) {
+    const d = GR.toDate(String(s).replace(/'/g, ' ').replace(/(\d)(st|nd|rd|th)\b/i, '$1').trim());
+    return /^\d{4}-\d{2}-\d{2}$/.test(d) && +d.slice(0, 4) > 2015 && +d.slice(0, 4) < 2100 ? d : '';
+  }
+  function supplierName(lines, gLine, buyerAt) {
+    const SKIP = /tax\s*invoice|invoice|original|duplicate|triplicate|recipient|gstin|gst\s*no|phone|ph[:.]|mobile|mob[:.]|e-?mail|www\.|@|address|road|street|\bst\b|nagar|salai|\bno\b[.:]|pin\s*code|pincode|state\s*(name|code)|cin\b|pan\b|fssai|udyam|irn|ack|e-?way|bill\s*of\s*supply|cash\s*memo|credit\s*note|debit\s*note|^page|^\d|signature|declaration|place of supply|dated|^to$|^m\/s/i;
+    const CO = /\b(pvt|private|ltd|limited|llp|enterprises?|traders?|trading|agenc(y|ies)|industries|services|stores|solutions|corporation|company|& ?co|and co|associates|distributors|suppliers|exports|imports|mart|electricals?|hardwares?|motors|textiles|pharma|foods|chemicals|engineering|technologies|systems|infotech|logistics|transports?)\b/i;
+    const lim = buyerAt >= 0 ? buyerAt : lines.length;
+    const ok = l => l && l.length >= 3 && l.length <= 70 && /[A-Za-z]{3}/.test(l) && !SKIP.test(l);
+    const co = lines.slice(0, Math.min(lim, 25)).find(l => ok(l) && CO.test(l));
+    if (co) return co.replace(/\s{2,}.*/, '').replace(/^for\s+/i, '').trim();
+    if (gLine > 0) for (let k = gLine - 1; k >= Math.max(0, gLine - 6); k--) if (ok(lines[k])) return lines[k].replace(/\s{2,}.*/, '').trim();
+    const first = lines.slice(0, Math.min(lim, 8)).find(ok);
+    return first ? first.replace(/\s{2,}.*/, '').trim() : '';
+  }
+  // signed e-invoice QR (JWT) → fields; a plain JSON QR also works
+  function parseQr(s) {
+    if (!s) return null;
+    let o = null;
+    const parts = String(s).trim().split('.');
+    try {
+      if (parts.length === 3) {
+        const b = parts[1].replace(/-/g, '+').replace(/_/g, '/'), pad = b + '==='.slice((b.length + 3) % 4);
+        const j = JSON.parse(decodeURIComponent(escape(atob(pad))));
+        o = typeof j.data === 'string' ? JSON.parse(j.data) : j.data || j;
+      } else if (/^\s*\{/.test(s)) { const j = JSON.parse(s); o = typeof j.data === 'string' ? JSON.parse(j.data) : j.data || j; }
+    } catch (e) { return null; }
+    if (!o || !(o.SellerGstin || o.DocNo)) return null;
+    return { g: String(o.SellerGstin || '').toUpperCase(), buyer: String(o.BuyerGstin || '').toUpperCase(), i: String(o.DocNo || ''), d: normDate(o.DocDt || ''),
+      v: +o.TotInvVal || 0, cn: /^CRN$/i.test(o.DocTyp || '') || undefined, dn: /^DBN$/i.test(o.DocTyp || '') || undefined, irn: o.Irn || '', hsn: o.MainHsnCode || '', items: +o.ItemCnt || 0 };
+  }
+  // text (PDF text layer or OCR) + optional QR → purchase-register row with confidence notes
+  function extract(text, { client = '', qr = null, known = {} } = {}) {
+    const lines = String(text || '').split(/\r?\n/).map(l => l.replace(/\s+$/, '')).filter(l => l.trim());
+    const flat = lines.join('\n');
+    const gl = findGstins(flat), own = String(client || '').toUpperCase();
+    let g = (qr && qr.g) || gl.find(x => x !== own) || '';
+    const gLine = g ? lines.findIndex(l => findGstins(l).includes(g)) : -1;
+    const buyerAt = lines.findIndex(l => /\b(bill(ed)?\s*to|buyer|consignee|ship(ped)?\s*to|recipient|customer|sold\s*to|details\s*of\s*receiver)\b/i.test(l));
+    let i = '', d = '';
+    for (let k = 0; k < lines.length && !i; k++) {
+      const m = lines[k].match(INV_RE);
+      if (m && !BAD_INV.test(m[1]) && /\d/.test(m[1])) i = m[1].replace(/[.,:]+$/, '');
+      else if (m && BAD_INV.test(m[1]) || /^\s*(invoice|bill)\s*(no|number)\.?\s*$/i.test(lines[k])) { const nx = (lines[k + 1] || '').trim().split(/\s{2,}|\t/)[0]; if (/^[A-Za-z0-9][A-Za-z0-9\/\-_.]{0,19}$/.test(nx) && /\d/.test(nx) && !DATE_RE.test(nx)) i = nx; }
+    }
+    for (const l of lines) { const m = l.match(new RegExp('(?:invoice\\s*date|inv\\.?\\s*date|bill\\s*date|dated|date\\s*of\\s*(?:invoice|issue)|\\bdate)\\s*[:\\-]?\\s*' + DATE_RE.source, 'i')); if (m) { d = normDate(m[1]); if (d) break; } }
+    if (!d) { for (const l of lines) { const m = l.match(DATE_RE); if (m && normDate(m[1])) { d = normDate(m[1]); break; } } }
+    const cn = /credit\s*note/i.test(lines.slice(0, 15).join(' ')) || undefined;
+    const rc = /reverse\s*charge\s*(applicable)?\s*[:\-]?\s*(yes|y)\b/i.test(flat) || undefined;
+    const intra = g && own ? g.slice(0, 2) === own.slice(0, 2) : null;
+    const c = candidates(lines);
+    let s = solve(c, { fixedV: qr && qr.v, intra });
+    if (!s || !s.ok) { const w = solve(c, { fixedV: qr && qr.v, intra, wide: true }); if (w && (!s || w.ok && !s.ok || w.sc > s.sc + 2)) s = w; }
+    const out = { g, n: known[g] || (g ? supplierName(lines, gLine, buyerAt) : supplierName(lines, -1, buyerAt)), i: (qr && qr.i) || i, d: (qr && qr.d) || d,
+      t: s ? r2(s.t) : 0, ig: s ? r2(s.ig) : 0, cg: s ? r2(s.cg) : 0, sg: s ? r2(s.sg) : 0, cs: s ? r2(s.cs) : 0, v: s ? r2(s.v) : r2(qr && qr.v || 0),
+      cn: (qr && qr.cn) || cn, rc, irn: qr && qr.irn || undefined };
+    return { row: out, sumOk: !!(s && s.ok), buyerSeen: own ? gl.includes(own) : null, qrBuyerOk: qr && own ? qr.buyer === own : null, gstins: gl };
+  }
+  // review checks for one row
+  function checks(row, { client = '', month = '', dupKeys = new Set() } = {}) {
+    const out = [], own = String(client || '').toUpperCase(), tax = r2((+row.ig || 0) + (+row.cg || 0) + (+row.sg || 0) + (+row.cs || 0));
+    const add = (lvl, msg) => out.push({ lvl, msg });
+    if (!row.g) add('err', 'Supplier GSTIN missing'); else if (!gstinCheck(row.g)) add('err', 'GSTIN check digit is wrong — re-check the GSTIN');
+    else if (row.g === own) add('err', 'This is the client’s own GSTIN — enter the supplier’s');
+    if (!row.i) add('err', 'Invoice no. missing'); else if (String(row.i).length > 16) add('warn', 'Invoice no. is longer than 16 characters');
+    if (!row.d) add('err', 'Date missing');
+    else { if (month && row.d.slice(0, 7) !== month) add('warn', `Dated ${row.d.split('-').reverse().join('-')} — not in this month`); if (row.d > isoToday()) add('err', 'Date is in the future'); }
+    if (!(+row.t)) add('err', 'Taxable value missing');
+    if (+row.t && +row.v && Math.abs(+row.t + tax - +row.v) > 1.01) add('warn', `Taxable + tax = ${r2(+row.t + tax)}, total on bill ${r2(+row.v)}`);
+    if ((+row.cg || +row.sg) && Math.abs((+row.cg || 0) - (+row.sg || 0)) > 0.51) add('warn', 'CGST and SGST differ');
+    if (+row.ig && (+row.cg || +row.sg)) add('err', 'Both IGST and CGST/SGST');
+    if (row.g && own && gstinCheck(row.g)) { const intra = row.g.slice(0, 2) === own.slice(0, 2); if (intra && +row.ig) add('warn', 'Same state supplier but IGST charged'); if (!intra && (+row.cg || +row.sg)) add('warn', 'Other state supplier but CGST/SGST charged'); }
+    if (+row.t && tax) { const rate = ((+row.ig || 0) + (+row.cg || 0) + (+row.sg || 0)) / +row.t; if (!RATES.some(r => Math.abs(rate - r) < 0.0015)) add('warn', `Tax is ${(rate * 100).toFixed(2)}% of taxable — mixed rates or a misread figure?`); }
+    if (dupKeys.has(dupKey(row))) add('err', 'Already in this month’s purchase register');
+    return out;
+  }
+  const isoToday = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+  const dupKey = r => `${String(r.g || '').toUpperCase()}|${GR.normInv(r.i)}`;
+  // pdf.js text items → lines (keeps columns apart with two spaces)
+  function itemsToLines(items) {
+    const it = items.filter(x => x.str && x.str.trim()).map(x => ({ s: x.str, x: x.transform[4], y: x.transform[5], w: x.width || x.str.length * 4, h: Math.abs(x.transform[3]) || 8 }));
+    it.sort((a, b) => b.y - a.y || a.x - b.x);
+    const rows = [];
+    it.forEach(x => { const r = rows.find(r => Math.abs(r.y - x.y) <= Math.max(2, Math.min(r.h, x.h) * 0.45)); if (r) r.a.push(x); else rows.push({ y: x.y, h: x.h, a: [x] }); });
+    rows.sort((a, b) => b.y - a.y);
+    return rows.map(r => { r.a.sort((p, q) => p.x - q.x); let s = '', end = null;
+      r.a.forEach(x => { if (end != null) { const gap = x.x - end, cw = x.w / Math.max(1, x.s.length); s += gap > cw * 1.8 ? '   ' : gap > cw * 0.25 ? ' ' : ''; } s += x.s; end = x.x + x.w; });
+      return s.replace(/\s+$/, ''); }).join('\n');
+  }
+  return { gstinCheck, fixGstin, findGstins, nums, candidates, solve, parseQr, extract, checks, dupKey, itemsToLines, normDate };
+})();
+
+/* ---------- libraries (loaded only when a bill is read) ---------- */
+const BILL_LIB = Object.assign({
+  pdf: 'pdf.min.js', pdfWorker: 'pdf.worker.min.js', qr: 'jsQR.min.js',
+  tesseract: 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js',
+  tessWorker: 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/worker.min.js',
+  tessCore: 'https://cdn.jsdelivr.net/npm/tesseract.js-core@5.1.1',
+  tessLang: 'https://cdn.jsdelivr.net/npm/@tesseract.js-data/eng@1.0.0/4.0.0_best_int'
+}, window.BILL_LIBS || {});
+const libCache = {};
+const loadLib = (src, test) => libCache[src] || (libCache[src] = test() ? Promise.resolve() : new Promise((ok, bad) => {
+  const s = document.createElement('script'); s.src = src; s.onload = ok; s.onerror = () => { delete libCache[src]; bad(new Error('Could not load ' + src.split('/').pop() + ' — check the internet connection')); }; document.head.appendChild(s); }));
+async function pdfLib() { await loadLib(BILL_LIB.pdf, () => window.pdfjsLib); window.pdfjsLib.GlobalWorkerOptions.workerSrc = BILL_LIB.pdfWorker; return window.pdfjsLib; }
+async function qrLib() { await loadLib(BILL_LIB.qr, () => window.jsQR); return window.jsQR; }
+let tessWorker = null;
+async function ocrWorker(note) {
+  if (tessWorker) return tessWorker;
+  note('Loading text recognition (first time takes ~10 s)…');
+  await loadLib(BILL_LIB.tesseract, () => window.Tesseract);
+  tessWorker = await window.Tesseract.createWorker('eng', 1, { workerPath: BILL_LIB.tessWorker, corePath: BILL_LIB.tessCore, langPath: BILL_LIB.tessLang, gzip: true });
+  return tessWorker;
+}
+function canvasOf(src, max) {
+  const w = src.width, h = src.height, k = Math.min(1, max / Math.max(w, h));
+  const cv = document.createElement('canvas'); cv.width = Math.round(w * k); cv.height = Math.round(h * k);
+  cv.getContext('2d').drawImage(src, 0, 0, cv.width, cv.height); return cv;
+}
+async function scanQr(cv) {
+  const jsQR = await qrLib(), W = cv.width, H = cv.height, ctx = cv.getContext('2d');
+  const regions = [[0, 0, W, H], [W / 2, 0, W / 2, H / 2], [0, 0, W / 2, H / 2], [W / 2, H / 2, W / 2, H / 2], [0, H / 2, W / 2, H / 2], [W / 4, 0, W / 2, H / 2], [W / 3, H / 4, W / 2, H / 2]];
+  for (const [x, y, w, h] of regions) {
+    let img = ctx.getImageData(Math.round(x), Math.round(y), Math.round(w), Math.round(h));
+    if (img.width * img.height > 4.2e6) { const c2 = document.createElement('canvas'); c2.width = Math.round(w); c2.height = Math.round(h); c2.getContext('2d').putImageData(img, 0, 0); const s = canvasOf(c2, 2000); img = s.getContext('2d').getImageData(0, 0, s.width, s.height); }
+    const r = jsQR(img.data, img.width, img.height, { inversionAttempts: 'dontInvert' });
+    if (r && r.data) { const q = BILL.parseQr(r.data); if (q) return q; }
+  }
+  return null;
+}
+const thumbOf = cv => canvasOf(cv, 360).toDataURL('image/jpeg', 0.6);
+// read one bill file with the free methods; returns { row, method, notes, thumb, text, … }
+async function readBillFree(file, ctx, note = () => {}) {
+  const isPdf = /pdf$/i.test(file.type) || /\.pdf$/i.test(file.name);
+  let text = '', qr = null, thumb = '', method = '', cvs = [];
+  if (isPdf) {
+    note('Opening PDF…');
+    const pdfjs = await pdfLib(), doc = await pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()), isEvalSupported: false }).promise;
+    const n = Math.min(doc.numPages, 3);
+    for (let p = 1; p <= n; p++) { const pg = await doc.getPage(p); text += BILL.itemsToLines((await pg.getTextContent()).items) + '\n'; }
+    const pg1 = await doc.getPage(1), vp = pg1.getViewport({ scale: 3 }), cv = document.createElement('canvas');
+    cv.width = Math.round(vp.width); cv.height = Math.round(vp.height);
+    await pg1.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
+    cvs.push(cv); thumb = thumbOf(cv);
+    note('Looking for the e-invoice QR code…'); qr = await scanQr(cv).catch(() => null);
+    method = text.replace(/\s/g, '').length > 60 ? 'PDF text' : '';
+    if (!method && n > 1) for (let p = 2; p <= Math.min(n, 2); p++) { const pg = await doc.getPage(p), v2 = pg.getViewport({ scale: 2.5 }), c2 = document.createElement('canvas'); c2.width = Math.round(v2.width); c2.height = Math.round(v2.height); await pg.render({ canvasContext: c2.getContext('2d'), viewport: v2 }).promise; cvs.push(c2); }
+  } else if (/^image\//i.test(file.type) || /\.(jpe?g|png|webp|bmp|gif)$/i.test(file.name)) {
+    const bmp = await createImageBitmap(file), cv = canvasOf(bmp, 2600);
+    cvs.push(cv); thumb = thumbOf(cv);
+    note('Looking for the e-invoice QR code…'); qr = await scanQr(cv).catch(() => null);
+  } else throw new Error('Not a PDF or photo');
+  if (!method) {
+    note('Reading the text (text recognition)…');
+    const w = await ocrWorker(note);
+    for (const cv of cvs.slice(0, 2)) { const r = await w.recognize(canvasOf(cv, 2400)); text += (r.data && r.data.text || '') + '\n'; }
+    method = 'Text recognition';
+  }
+  const x = BILL.extract(text, { client: ctx.client, qr, known: ctx.known || {} });
+  const notes = [];
+  if (qr) notes.push('E-invoice QR read — GSTIN, invoice no., date and total are exact');
+  if (x.qrBuyerOk === false) notes.push(`QR says the buyer is ${qr.buyer}, not the client`);
+  if (x.buyerSeen === false && !qr) notes.push('Client’s GSTIN not found on the bill');
+  return { row: x.row, sumOk: x.sumOk, method: qr ? method + ' + QR' : method, notes, thumb, text, qr: !!qr };
+}
+const billComplete = b => { const r = b.row; return !!(r.g && BILL.gstinCheck(r.g) && r.i && r.d && +r.t && b.sumOk); };
+async function fileB64(file, maxSide = 1800) {
+  if (/^image\//i.test(file.type)) {                        // shrink photos: fewer AI tokens, smaller upload
+    const cv = canvasOf(await createImageBitmap(file), maxSide), data = cv.toDataURL('image/jpeg', 0.85);
+    return { media_type: 'image/jpeg', data: data.split(',')[1] };
+  }
+  const b = new Uint8Array(await file.arrayBuffer()); let s = '';
+  for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000));
+  return { media_type: 'application/pdf', data: btoa(s) };
+}
+async function readBillAi(file, ctx) {
+  if (file.size > 9e6) throw new Error('File is over 9 MB — too big for AI reading');
+  const f = await fileB64(file);
+  const j = await fnCall('bill-read', 'read', { client_id: ctx.clientId, name: file.name, ...f });
+  const r = j.bill || {};
+  const row = { g: String(r.supplier_gstin || '').toUpperCase().replace(/\s/g, ''), n: r.supplier_name || '', i: String(r.invoice_no || ''), d: BILL.normDate(r.invoice_date || '') || '',
+    t: +r.taxable_value || 0, ig: +r.igst || 0, cg: +r.cgst || 0, sg: +r.sgst || 0, cs: +r.cess || 0, v: +r.total || 0, cn: r.document_type === 'credit_note' || undefined, rc: !!r.reverse_charge || undefined };
+  if (row.g && !BILL.gstinCheck(row.g)) { const f2 = BILL.fixGstin(row.g); if (f2) row.g = f2; }
+  const notes = [`Read by AI (${j.model || 'Claude'}) · about ₹${(+j.cost_inr || 0).toFixed(2)}`];
+  if (r.buyer_gstin && ctx.client && String(r.buyer_gstin).toUpperCase() !== ctx.client) notes.push(`AI: buyer GSTIN on the bill is ${r.buyer_gstin}`);
+  if (r.note) notes.push('AI: ' + r.note);
+  return { row, sumOk: Math.abs(row.t + row.ig + row.cg + row.sg + row.cs - row.v) <= 1.01, method: 'AI', notes };
+}
+let aiState = null;                                           // { ok, why } per client for this session
+async function aiAvailable(clientId) {
+  const r = await safe(sb.rpc('ai_can_read', { p_client: clientId }));
+  aiState = { client: clientId, at: Date.now(), ok: !r.error && r.data && r.data.ok, why: r.error ? 'AI bill reading is not set up (run update-session3.sql)' : (r.data || {}).why || '' };
+  return aiState;
+}
+
+// review window: read every file, let staff correct, then add to the month's purchase register
+async function readBillsDialog({ c, month, files, getRow, save, onAdded }) {
+  if (!files || !files.length) return;
+  const known = {};
+  const cur = getRow();
+  [...((cur.gstr2b || {}).rows || []), ...((cur.purchases || {}).rows || [])].forEach(x => { if (x.g && x.n && !known[x.g]) known[x.g] = x.n; });
+  const dupKeys = new Set(((cur.purchases || {}).rows || []).map(BILL.dupKey));
+  const ctx = { client: String(c.gstin || '').toUpperCase(), clientId: c.id, known };
+  const ai = await aiAvailable(c.id);
+  const bills = [...files].map(f => ({ f, st: 'wait', row: {}, notes: [], method: '' }));
+  const mLabel = `${MONTHS[+month.slice(5, 7) - 1]} ${month.slice(0, 4)}`;
+  const m = modal(`Read bills → purchase register · ${c.name} · ${mLabel}`, `<p class="muted small" style="margin-top:0">Each bill is read on this computer for free (e-invoice QR, PDF text, then text recognition)${ai.ok ? '. When the free reading is incomplete, AI reads it (small cost per bill)' : `. ${esc(ai.why || 'AI reading is off')}`}. <b>Check every figure</b> before adding.</p>
+    <div data-bl></div>`, { wide: true, saveText: 'Add to purchase register', extra: '<span class="muted small" data-bsum></span>',
+    onSave: async () => {
+      const okRows = bills.filter(b => b.st === 'done' && !b.skip);
+      const blocked = okRows.filter(b => BILL.checks(b.row, { client: ctx.client, month, dupKeys }).some(x => x.lvl === 'err'));
+      if (!okRows.length) { toast('Nothing to add yet', true); return false; }
+      if (blocked.length) { toast(`${blocked.length} bill(s) still have errors (red) — fix them or untick “Add”`, true); return false; }
+      const P = getRow().purchases || { rows: [] };
+      const add = okRows.map(b => { const r = b.row, sgn = r.cn ? -1 : 1, a = k => Math.round(sgn * Math.abs(+r[k] || 0) * 100) / 100;
+        return { g: r.g, n: r.n || '', i: r.i, d: r.d, t: a('t'), ig: a('ig'), cg: a('cg'), sg: a('sg'), cs: a('cs'), v: a('v'), cn: r.cn || undefined, rc: r.rc || undefined, src: 'BILL', bill: b.f.name, how: b.method }; });
+      const names = [...new Set([...(String(P.file || '').split(' + ').filter(Boolean)), `${add.length} bill${add.length > 1 ? 's' : ''} read`])];
+      await save({ purchases: { ...P, rows: [...(P.rows || []), ...add], file: names.join(' + '), source: P.source || 'bills', at: new Date().toISOString(), by: me.id } });
+      toast(`${add.length} bill${add.length > 1 ? 's' : ''} added to the purchase register`);
+      if (onAdded) onAdded();
+    } });
+  const box = $('[data-bl]', m.el), sum = $('[data-bsum]', m.el);
+  const F = [['g', 'Supplier GSTIN', 'text', 15], ['n', 'Supplier', 'text'], ['i', 'Invoice no.', 'text'], ['d', 'Date', 'date'], ['t', 'Taxable', 'num'], ['ig', 'IGST', 'num'], ['cg', 'CGST', 'num'], ['sg', 'SGST', 'num'], ['cs', 'Cess', 'num'], ['v', 'Total', 'num']];
+  const draw = () => {
+    box.innerHTML = bills.map((b, k) => { const ck = b.st === 'done' ? BILL.checks(b.row, { client: ctx.client, month, dupKeys }) : [], err = ck.some(x => x.lvl === 'err');
+      return `<div class="bill ${b.st} ${err ? 'has-err' : ''} ${b.skip ? 'skip' : ''}" data-b="${k}">
+        <div class="bill-h">${b.thumb ? `<img src="${b.thumb}" alt="" class="bill-th" data-zoom="${k}">` : '<span class="bill-th ph">📄</span>'}
+          <div class="bill-fn"><b>${esc(b.f.name)}</b><div class="muted tiny">${b.st === 'wait' ? 'Waiting…' : b.st === 'busy' ? esc(b.msg || 'Reading…') : b.st === 'fail' ? `<span class="late">${esc(b.err)}</span>` : `${esc(b.method)}${b.sumOk ? ' · figures add up ✓' : ''}`}</div></div>
+          <span class="spacer"></span>${b.st === 'busy' ? '<span class="spin" aria-hidden="true"></span>' : ''}
+          ${b.st === 'done' || b.st === 'fail' ? `${ai.ok && b.method !== 'AI' ? `<button class="btn sm" data-ai="${k}">Read with AI</button>` : ''}<label class="check small"><input type="checkbox" data-skip="${k}" ${b.skip ? '' : 'checked'}> Add</label>` : ''}</div>
+        ${b.st === 'done' ? `<div class="bill-f">${F.map(([f, l, ty]) => `<label class="${f === 'n' || f === 'g' ? 'wide' : ''}">${l}<input data-f="${f}" ${ty === 'date' ? 'type="date"' : ty === 'num' ? 'inputmode="decimal"' : ''} value="${esc(b.row[f] ?? '')}" ${f === 'g' ? 'maxlength="15" style="text-transform:uppercase"' : ''}></label>`).join('')}
+          <label class="check small"><input type="checkbox" data-f="cn" ${b.row.cn ? 'checked' : ''}> Credit note</label><label class="check small"><input type="checkbox" data-f="rc" ${b.row.rc ? 'checked' : ''}> Reverse charge</label></div>
+          <div class="bill-ck">${[...ck.map(x => `<span class="${x.lvl === 'err' ? 'late' : 'warn-t'}">${x.lvl === 'err' ? '✗' : '⚠'} ${esc(x.msg)}</span>`), ...(b.notes || []).map(n => `<span class="muted">ⓘ ${esc(n)}</span>`)].join('') || '<span class="ok-t">✓ All checks passed</span>'}</div>` : ''}</div>`; }).join('');
+    const done = bills.filter(b => b.st === 'done' && !b.skip);
+    sum.textContent = done.length ? `${done.length} to add · taxable ${gst$(done.reduce((s, b) => s + (+b.row.t || 0) * (b.row.cn ? -1 : 1), 0))} · ITC ${gst$(done.reduce((s, b) => s + ((+b.row.ig || 0) + (+b.row.cg || 0) + (+b.row.sg || 0) + (+b.row.cs || 0)) * (b.row.cn ? -1 : 1), 0))}` : '';
+  };
+  const reCheck = k => { const el = $(`[data-b="${k}"]`, box), b = bills[k]; if (!el) return; const ck = BILL.checks(b.row, { client: ctx.client, month, dupKeys });
+    el.classList.toggle('has-err', ck.some(x => x.lvl === 'err'));
+    $('.bill-ck', el).innerHTML = [...ck.map(x => `<span class="${x.lvl === 'err' ? 'late' : 'warn-t'}">${x.lvl === 'err' ? '✗' : '⚠'} ${esc(x.msg)}</span>`), ...(b.notes || []).map(n => `<span class="muted">ⓘ ${esc(n)}</span>`)].join('') || '<span class="ok-t">✓ All checks passed</span>'; };
+  box.addEventListener('input', e => { const f = e.target.dataset.f, el = e.target.closest('[data-b]'); if (!f || !el) return; const b = bills[+el.dataset.b];
+    b.row[f] = e.target.type === 'checkbox' ? e.target.checked || undefined : ['t', 'ig', 'cg', 'sg', 'cs', 'v'].includes(f) ? GR.amt(e.target.value) : f === 'g' ? e.target.value.trim().toUpperCase() : e.target.value.trim();
+    if (f === 'g' && known[b.row.g] && !b.row.n) { b.row.n = known[b.row.g]; $('[data-f=n]', el).value = b.row.n; }
+    reCheck(+el.dataset.b); });
+  box.addEventListener('change', e => { if (e.target.dataset.f === 'cn' || e.target.dataset.f === 'rc') { const el = e.target.closest('[data-b]'); bills[+el.dataset.b].row[e.target.dataset.f] = e.target.checked || undefined; reCheck(+el.dataset.b); }
+    if (e.target.dataset.skip != null) { bills[+e.target.dataset.skip].skip = !e.target.checked; draw(); } });
+  box.addEventListener('click', async e => {
+    const z = e.target.dataset.zoom; if (z != null) { const u = URL.createObjectURL(bills[+z].f); window.open(u, '_blank', 'noopener'); setTimeout(() => URL.revokeObjectURL(u), 60000); return; }
+    const b = e.target.closest('[data-ai]'); if (!b) return;
+    const k = +b.dataset.ai; await runAi(k);
+  });
+  async function runAi(k) {
+    const b = bills[k]; b.st = 'busy'; b.msg = 'AI is reading the bill…'; draw();
+    try { const r = await readBillAi(b.f, ctx); Object.assign(b, r, { st: 'done', notes: [...r.notes, ...(b.freeNotes || [])] }); }
+    catch (e) { if (b.row && b.row.g !== undefined && b.method) { b.st = 'done'; b.notes = [`AI failed: ${friendly(e)}`, ...(b.notes || [])]; } else { b.st = 'fail'; b.err = 'AI: ' + friendly(e); } }
+    draw();
+  }
+  draw();
+  for (let k = 0; k < bills.length; k++) {
+    if (!document.body.contains(m.el)) return;                 // window closed
+    const b = bills[k]; b.st = 'busy'; draw();
+    try {
+      const r = await readBillFree(b.f, ctx, msg => { b.msg = msg; const el = $(`[data-b="${k}"] .bill-fn .tiny`, box); if (el) el.textContent = msg; });
+      Object.assign(b, r, { st: 'done', freeNotes: r.notes });
+      draw();
+      if (ai.ok && !billComplete(b)) await runAi(k);
+    } catch (e) {
+      b.st = 'fail'; b.err = friendly(e); draw();
+      if (ai.ok) await runAi(k);
+    }
+  }
+}
+const pickFiles = accept => new Promise(res => { const i = document.createElement('input'); i.type = 'file'; i.accept = accept; i.multiple = true; i.onchange = () => res([...i.files]); i.click(); });
+
+/* ---------- Settings: bill reading (AI key) ---------- */
+async function renderAiSettings(box) {
+  const r = await safe(sb.rpc('ai_admin_status'));
+  if (r.error) { box.innerHTML = '<div class="card"><h3>Bill reading (AI)</h3><p class="note small">Run <b>update-session3.sql</b> in Supabase to set this up.</p></div>'; return; }
+  const s = r.data || {}, when = t => t ? new Date(t).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : '—';
+  box.innerHTML = `<div class="card"><h3>Bill reading (AI)</h3>
+    <p class="muted">PDF and photo bills are always read for free first (e-invoice QR code, PDF text, then text recognition on this computer). If a Claude API key is saved and this is switched on, bills that the free reading cannot finish are sent to Claude — about ₹0.05 a bill with Claude Haiku 5.5. The key is stored encrypted in the database and is never shown again.</p>
+    <div class="mail-stat"><span class="pill ${s.enabled && s.key_set ? 'g' : 'a'}">${s.enabled && s.key_set ? '● AI on' : s.key_set ? 'AI switched off' : 'No key — free reading only'}</span>
+      <span class="small">This month: <b>${s.month_reads || 0}</b> bills by AI · about <b>₹${(+s.month_cost || 0).toFixed(2)}</b>${s.month_errors ? ` · ${s.month_errors} failed` : ''}</span></div>
+    <div class="form-grid" style="margin-top:12px">
+      <label>Model<select id="aiModel">${opts([['claude-haiku-5-5', 'Claude Haiku 5.5 — cheapest (recommended)'], ['claude-sonnet-5-5', 'Claude Sonnet 5.5 — for hard handwritten bills']], s.model || 'claude-haiku-5-5', x => x[1], x => x[0])}</select></label>
+      <label>Most AI reads a month<input id="aiMax" type="number" min="0" value="${esc(s.max_per_month ?? 2000)}"></label>
+      <label>Price in (US$ / million tokens)<input id="aiPin" type="number" step="0.01" value="${esc(s.price_in ?? 0.1)}"></label>
+      <label>Price out (US$ / million tokens)<input id="aiPout" type="number" step="0.01" value="${esc(s.price_out ?? 0.5)}"></label>
+      <label>₹ per US$<input id="aiFx" type="number" step="0.5" value="${esc(s.usd_inr ?? 88)}"></label></div>
+    <p class="muted small">Prices are only used to show the cost here. Check the current rates on console.anthropic.com → Settings → Billing.</p>
+    <label class="check" style="margin-top:8px"><input type="checkbox" id="aiOn" ${s.enabled ? 'checked' : ''} ${s.key_set ? '' : 'disabled'}> Use AI when the free reading is incomplete</label>
+    ${isAdmin() ? `<div class="toolbar" style="margin-top:12px"><button class="btn primary" id="aiSave">Save</button><span class="spacer"></span>
+      <button class="btn" id="aiKey">${s.key_set ? 'Replace key' : 'Save Claude API key'}</button>${s.key_set ? '<button class="btn ghost" id="aiDel">Remove key</button>' : ''}</div>
+    ${s.key_set ? `<p class="muted small">Key ending …${esc(s.key_hint || '')}, saved ${when(s.key_set_at)}.</p>` : ''}` : '<p class="muted small">Only the Admin can change these.</p>'}
+    <details class="small" style="margin-top:8px"><summary>How to get a Claude API key</summary><ol class="steps">
+      <li>Go to <a href="https://console.anthropic.com" target="_blank" rel="noopener">console.anthropic.com</a> and sign up / sign in.</li>
+      <li>Settings → Billing: add a payment method and a small credit (e.g. US$5 lasts for thousands of bills).</li>
+      <li>Settings → API keys → Create key (name it “JLR tracker”). Copy it — it starts with <b>sk-ant-</b>.</li>
+      <li>Here: <b>Save Claude API key</b>, paste, then tick “Use AI…” and Save.</li></ol></details></div>`;
+  if (!isAdmin()) return;
+  $('#aiSave', box).onclick = async () => {
+    try { await must(sb.rpc('ai_admin_save', { p_enabled: $('#aiOn', box).checked, p_model: $('#aiModel', box).value, p_max: Math.round(num($('#aiMax', box).value)), p_price_in: num($('#aiPin', box).value), p_price_out: num($('#aiPout', box).value), p_usd_inr: num($('#aiFx', box).value) })); aiState = null; toast('Saved'); renderAiSettings(box); }
+    catch (e) { toast(friendly(e), true); }
+  };
+  $('#aiKey', box).onclick = () => modal('Claude API key', `<p class="small" style="margin-top:0">Paste the key from console.anthropic.com → API keys. It is saved encrypted and cannot be viewed again.</p>
+      <label>API key<input type="password" name="k" autocomplete="off" spellcheck="false" placeholder="sk-ant-…"></label>`, { saveText: 'Save key',
+    onSave: async el => { const k = fv(el, 'k'); if (!/^sk-ant-[A-Za-z0-9_\-]{20,}$/.test(k)) { toast('That does not look like a Claude API key (it starts with sk-ant-)', true); return false; }
+      await must(sb.rpc('ai_admin_set_key', { p_key: k })); aiState = null; toast('Key saved'); renderAiSettings(box); } });
+  if ($('#aiDel', box)) $('#aiDel', box).onclick = async () => { if (!confirm('Remove the Claude API key? Bills will be read with the free methods only.')) return; try { await must(sb.rpc('ai_admin_set_key', { p_key: '' })); aiState = null; toast('Key removed'); renderAiSettings(box); } catch (e) { toast(friendly(e), true); } };
+}
+
+window.__tracker = { MCA, BILL, parseMcaSheets, mcaPlanAll, fillGstWorkings, G1, GR, RECO, gstr3bFromApi, periodToMonth, strongPassword, periodFor, dueDateFor, parseCSV, toCSV, gstLateFee, gstInterest, tdsCalc, rocCalc, monthsSpan, tdsDepositDue, g1json, clientReportHtml, clientReportMsg, rnStage, anyDate, parseRenewalRows, gstPayDue, tdsPayDue, advInstalment, advCurrent, advDue, recurringPlan, taxMsg, addMonths, fyEndOf, obProgress, rnKind };
 start();
 })();
