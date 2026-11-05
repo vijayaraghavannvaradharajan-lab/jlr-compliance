@@ -355,21 +355,73 @@ async function loadRefs() {
   templates = t.error ? [] : t.data || []; rules = r.error ? [] : r.data || [];
 }
 
+const canLayoutB = () => !!me && (me.role === 'admin' || me.role === 'staff');      // Performance layout: Admin and Team members only
+function applyLayout() {
+  const T = window.TrackerTheme; if (T && T.allowLayout) T.allowLayout(canLayoutB());
+}
+const NI = {   // menu icons (stroke SVG paths)
+  dashboard: '<path d="M3 3h7v9H3zM14 3h7v5h-7zM14 12h7v9h-7zM3 16h7v5H3z"></path>',
+  calendar: '<path d="M3 5h18v16H3zM16 2v5M8 2v5M3 10h18"></path>',
+  work: '<path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01"></path>',
+  gst: '<path d="M6 2h12v20l-3-2-3 2-3-2-3 2z"></path><path d="M9 7h6M9 11h6"></path>',
+  tds: '<circle cx="7" cy="7" r="2.5"></circle><circle cx="17" cy="17" r="2.5"></circle><path d="M19 5L5 19"></path>',
+  mca: '<path d="M3 21h18M5 21V8l7-5 7 5v13"></path><path d="M9 21v-5h6v5"></path>',
+  notices: '<path d="M12 9v4M12 17h.01M10.3 3.9L2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"></path>',
+  clients: '<circle cx="9" cy="8" r="3.5"></circle><path d="M2.5 20a6.5 6.5 0 0 1 13 0M17 4.5a3.5 3.5 0 0 1 0 7M21.5 20a6 6 0 0 0-4-5.6"></path>',
+  onboarding: '<path d="M9 11l3 3 8-8M20 12v8a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h10"></path>',
+  renewals: '<path d="M21 12a9 9 0 1 1-3-6.7L21 8M21 3v5h-5"></path>',
+  inbox: '<path d="M3 5h18v14H3zM3 7l9 6 9-6"></path>',
+  clientreport: '<path d="M14 3H5v18h14V8zM14 3v5h5M8 13h8M8 17h5"></path>',
+  taxpay: '<path d="M2 6h20v13H2zM2 10h20M6 15h4"></path>',
+  billing: '<path d="M7 4h10M7 9h10M10 4c3 0 5 1.6 5 4.5S13 13 10 13H7l8 7"></path>',
+  workload: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"></path>',
+  reports: '<path d="M3 3v18h18"></path><path d="M7 15l4-4 3 3 5-6"></path>',
+  updates: '<path d="M4 4h16v12H5.2L4 17.2z"></path><path d="M8 8h8M8 12h5"></path>',
+  checklists: '<path d="M9 6h11M9 12h11M9 18h11M3.5 6l1 1 2-2M3.5 12l1 1 2-2M3.5 18l1 1 2-2"></path>',
+  calc: '<path d="M5 2h14v20H5zM8 6h8M8 10h.01M12 10h.01M16 10h.01M8 14h.01M12 14h.01M16 14h.01M8 18h8"></path>',
+  team: '<circle cx="12" cy="8" r="4"></circle><path d="M4 21a8 8 0 0 1 16 0"></path>',
+  settings: '<circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"></path>'
+};
+const navIcon = k => `<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${NI[k] || NI.work}</svg>`;
+function navGroups() {
+  const G = [
+    ['Overview', [['dashboard', 'Dashboard'], ['calendar', 'Due-date calendar']]],
+    ['Compliance work', [['work', isManager() ? 'All work' : 'My work'], ['gst', 'GST review', 'gst'], ['work-tds', 'TDS / TCS', 'tds'], ['work-mca', 'MCA / ROC', 'mca'], ['notices', 'Notices']]],
+    ['Clients', [isManager() && ['clients', 'Clients'], ['onboarding', 'Onboarding'], ['renewals', 'Renewals (DSC, LUT…)'], ['inbox', 'Client mail'], ['clientreport', 'Monthly client reports']]],
+    ['Payments & billing', [['taxpay', 'Tax payment intimation'], isManager() && ['billing', 'Billing & fees']]],
+    ['Office', [isManager() && ['workload', 'Team workload'], isPartner() && ['reports', 'Reports'], ['updates', 'Law updates'], ['checklists', 'Checklists'], ['calc', 'Late fee calculator']]],
+    isAdmin() && ['Admin', [['team', 'Team & logins'], ['settings', 'Settings']]]
+  ].filter(Boolean);
+  return G.map(([g, items]) => `<div class="side-g"><span class="side-gl">${esc(g)}</span>${items.filter(Boolean).map(([k, l, ic]) => {
+    const href = k.startsWith('work-') ? '#/work' : '#/' + k;
+    return `<a href="${href}" data-k="${k}">${navIcon(ic || k)}<span>${esc(l)}</span>${k === 'inbox' ? '<b class="side-badge" id="sideMail" hidden>0</b>' : ''}</a>`; }).join('')}</div>`).join('');
+}
 function renderShell() {
-  const nav = [['dashboard', 'Dashboard'], ['work', isManager() ? 'All work' : 'My work'], ['calendar', 'Due dates'], ['gst', 'GST review'], ['notices', 'Notices'], ['updates', 'Updates']]
-    .concat(isManager() ? [['workload', 'Workload'], ['billing', 'Billing']] : []).concat(isPartner() ? [['reports', 'Reports']] : []).concat(isManager() ? [['clients', 'Clients']] : []);
-  root.innerHTML = `<header class="top">
-      <div class="brand">${esc(settings.firm_name || cfg.FIRM_NAME || 'Office Work Tracker')}</div>
-      <nav id="nav">${nav.map(([k, l]) => `<a href="#/${k}" data-k="${k}">${l}</a>`).join('')}</nav>
-      <a href="#/inbox" id="mailBadge" class="mail-badge" hidden title="New mail from clients">📥 <b>0</b></a>
-      <div class="user"><button class="btn ghost sm" id="userBtn">${esc(me.full_name || me.email)} ▾</button>
-        <div class="menu" id="userMenu" hidden>
-          <div class="menu-info">${esc(me.email)}<br><span class="badge">${esc(ROLE_LABEL[me.role] || me.role)}</span></div>
-          ${isAdmin() ? '<a href="#/team" data-act="nav">Team</a><a href="#/settings" data-act="nav">Settings</a>' : ''}<a href="#/renewals" data-act="nav">Renewals</a><a href="#/taxpay" data-act="nav">Tax payment intimation</a><a href="#/onboarding" data-act="nav">Client onboarding</a><a href="#/clientreport" data-act="nav">Monthly client report</a><a href="#/inbox" data-act="nav">Client mail</a><a href="#/checklists" data-act="nav">Checklists</a><a href="#/calc" data-act="nav">Late fee calculator</a><button data-act="install">Install app on this device</button><button data-act="theme">Theme</button><button data-act="pw">Change password</button><button data-act="out">Sign out</button></div></div>
-    </header><main id="view"></main>`;
+  applyLayout();
+  const firm = settings.firm_name || cfg.FIRM_NAME || 'Office Work Tracker';
+  root.innerHTML = `<div class="shell">
+    <aside class="side" id="side" aria-label="Main menu">
+      <a class="side-brand" href="#/dashboard"><span class="side-mark" aria-hidden="true">${esc((firm.trim()[0] || 'J').toUpperCase())}</span><span class="side-name"><b>${esc(firm)}</b><small>${esc(settings.firm_tagline || 'Chartered Accountants')}</small></span></a>
+      <nav id="nav">${navGroups()}</nav>
+    </aside>
+    <div class="side-back" id="sideBack" hidden></div>
+    <div class="col">
+      <header class="top">
+        <button class="icon-btn side-tog" id="sideTog" aria-label="Open menu" aria-controls="side" aria-expanded="false"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18"></path></svg></button>
+        <div class="srch" role="search"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"></circle><path d="M21 21l-4.3-4.3"></path></svg>
+          <input id="gSearch" type="search" placeholder="Search client, GSTIN, PAN or return…" aria-label="Search client, GSTIN, PAN or return" autocomplete="off"><div class="srch-res" id="gRes" hidden></div></div>
+        ${isManager() ? '<button class="btn primary top-new" id="topNew">+ New work</button><button class="btn top-cl" id="topClient">+ Client</button>' : ''}
+        <a href="#/inbox" id="mailBadge" class="mail-badge" hidden title="New mail from clients">📥 <b>0</b></a>
+        <div class="user"><button class="btn ghost sm user-btn" id="userBtn"><span class="u-av" aria-hidden="true">${esc(((me.full_name || me.email || '?').trim()[0] || '?').toUpperCase())}</span><span class="u-nm">${esc(me.full_name || me.email)}<small>${esc(ROLE_LABEL[me.role] || me.role)}</small></span> ▾</button>
+          <div class="menu" id="userMenu" hidden>
+            <div class="menu-info">${esc(me.email)}<br><span class="badge">${esc(ROLE_LABEL[me.role] || me.role)}</span></div>
+            <button data-act="theme">Theme &amp; layout</button><button data-act="install">Install app on this device</button><button data-act="pw">Change password</button><button data-act="out">Sign out</button></div></div>
+      </header>
+      <main id="view"></main>
+    </div></div>`;
   const menu = $('#userMenu');
   $('#userBtn').onclick = e => { e.stopPropagation(); menu.hidden = !menu.hidden; };
-  document.addEventListener('click', () => { menu.hidden = true; });
+  document.addEventListener('click', () => { menu.hidden = true; const r = $('#gRes'); if (r) r.hidden = true; });
   menu.onclick = async e => {
     const act = e.target.dataset.act;
     if (act === 'out') { await sb.auth.signOut(); me = null; location.hash = ''; showLogin(); }
@@ -377,6 +429,44 @@ function renderShell() {
     if (act === 'theme') pickTheme();
     if (act === 'install') installApp();
   };
+  // phone: menu slides in
+  const side = $('#side'), back = $('#sideBack'), tog = $('#sideTog');
+  const openSide = on => { side.classList.toggle('open', on); back.hidden = !on; tog.setAttribute('aria-expanded', on); };
+  tog.onclick = () => openSide(!side.classList.contains('open'));
+  back.onclick = () => openSide(false);
+  $('#nav').addEventListener('click', e => {
+    const a = e.target.closest('a[data-k]'); if (!a) return;
+    const k = a.dataset.k;
+    if (k === 'work-tds' || k === 'work-mca') wf = { ...WF_DEFAULT, type: k === 'work-tds' ? 'TDS' : 'ROC/MCA', status: 'open' };
+    else if (k === 'work') wf = { ...WF_DEFAULT };
+    if ((k === 'work-tds' || k === 'work-mca' || k === 'work') && location.hash === '#/work') route();
+    openSide(false);
+  });
+  if ($('#topNew')) $('#topNew').onclick = () => editTask(null, () => route());
+  if ($('#topClient')) $('#topClient').onclick = () => editClient(null);
+  bindSearch();
+}
+function bindSearch() {
+  const inp = $('#gSearch'), res = $('#gRes'); if (!inp) return;
+  let hits = [];
+  const draw = () => {
+    const q = lc(inp.value); if (!q) { res.hidden = true; return; }
+    const qq = q.replace(/\s+/g, '');
+    hits = clients.filter(c => [c.name, c.gstin, c.pan, c.tan, c.cin].some(x => lc(x).replace(/\s+/g, '').includes(qq))).slice(0, 6);
+    res.innerHTML = hits.map((c, i) => `<button type="button" data-h="${i}"><b>${esc(c.name)}</b><span>${esc([c.gstin, c.pan].filter(Boolean).join(' · ') || (c.services || []).join(', '))}</span></button>`).join('')
+      + `<button type="button" data-h="q" class="srch-all">Search all work for “${esc(inp.value.trim())}”</button>`;
+    res.hidden = false;
+  };
+  const go = h => {
+    if (h === 'q') wf = { ...WF_DEFAULT, status: 'all', q: inp.value.trim() };
+    else { const c = hits[+h]; if (!c) return; wf = { ...WF_DEFAULT, status: 'all', client: c.id }; }
+    res.hidden = true; inp.value = ''; inp.blur();
+    if (location.hash === '#/work') route(); else location.hash = '#/work';
+  };
+  inp.oninput = draw;
+  inp.onclick = e => e.stopPropagation();
+  inp.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); go(hits.length ? '0' : 'q'); } if (e.key === 'Escape') { res.hidden = true; inp.blur(); } };
+  res.onclick = e => { e.stopPropagation(); const b = e.target.closest('[data-h]'); if (b) go(b.dataset.h); };
 }
 
 /* ---------- count-up numbers (respects the Animation setting) ---------- */
@@ -431,7 +521,15 @@ function pickTheme() {
   const T = window.TrackerTheme;
   if (!T) return toast('Theme is not available', true);
   const start = T.get();
-  const body = `<div class="small muted" style="font-weight:600;margin-bottom:8px">Theme</div>
+  const okB = canLayoutB();
+  const body = `<div class="small muted" style="font-weight:600;margin-bottom:8px">Layout</div>
+    <div class="layouts">
+      <button type="button" class="lay ${start.layout !== 'b' || !okB ? 'on' : ''}" data-ly="a" aria-pressed="${start.layout !== 'b' || !okB}">
+        <span class="lay-pv lay-a" aria-hidden="true"><i></i><i></i><i></i></span><b>Office</b><span class="small muted">Clean and calm · gentle animation · uses your theme below</span></button>
+      <button type="button" class="lay ${start.layout === 'b' && okB ? 'on' : ''}" data-ly="b" aria-pressed="${start.layout === 'b' && okB}" ${okB ? '' : 'disabled'}>
+        <span class="lay-pv lay-b" aria-hidden="true"><i></i><i></i><i></i></span><b>Performance</b><span class="small muted">${okB ? 'Dark, sharp corners, lots of animation · takes the colour of your theme' : 'For Admin and Team members only'}</span></button>
+    </div>
+    <div class="small muted" style="font-weight:600;margin:18px 0 8px">Theme</div>
     <div class="skins">${T.SKINS.map(([k, name]) => { const [bg, hero, acc] = SKIN_PREVIEW[k];
       return `<button type="button" class="skin ${start.skin === k ? 'on' : ''}" data-s="${k}" aria-pressed="${start.skin === k}">
         <span class="pv" style="background:${bg}"><i style="height:38px;background:${hero}"></i><i style="height:22px;background:${acc}"></i><i style="height:30px;background:${hero};opacity:.6"></i></span><b>${esc(name)}</b></button>`; }).join('')}</div>
@@ -453,6 +551,7 @@ function pickTheme() {
     const cur = T.get();
     $$('[data-s]', el).forEach(b => { b.classList.toggle('on', b.dataset.s === cur.skin); b.setAttribute('aria-pressed', b.dataset.s === cur.skin); });
     $$('[data-an]', el).forEach(b => b.classList.toggle('on', b.dataset.an === cur.anim));
+    $$('[data-ly]', el).forEach(b => { const on = (cur.layout === 'b' && okB ? 'b' : 'a') === b.dataset.ly; b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); });
     $$('[data-m]', el).forEach(b => b.classList.toggle('on', b.dataset.m === cur.mode));
     $$('[data-a]', el).forEach(b => b.classList.toggle('on', b.dataset.a === cur.accent));
     $('[data-orig]', el).style.opacity = cur.skin === 'original' ? '1' : '.4';
@@ -461,6 +560,7 @@ function pickTheme() {
   sync();
   el.addEventListener('click', e => {
     const b = e.target.closest('button'); if (!b) return;
+    if (b.dataset.ly && !b.disabled) { T.setLayout(b.dataset.ly); applyLayout(); sync(); }
     if (b.dataset.s) { T.setSkin(b.dataset.s); sync(); }
     if (b.dataset.an) { T.setAnim(b.dataset.an); sync(); }
     if (b.dataset.m) { T.set(b.dataset.m, null); sync(); }
@@ -468,7 +568,7 @@ function pickTheme() {
     if (b.hasAttribute('data-reset')) { T.reset(); sync(); }
   });
   // Cancel / close restores the previous choice
-  $$('[data-x]', el).forEach(x => x.addEventListener('click', () => { T.setSkin(start.skin); T.setAnim(start.anim); T.set(start.mode, start.accent); }));
+  $$('[data-x]', el).forEach(x => x.addEventListener('click', () => { T.setSkin(start.skin); T.setAnim(start.anim); T.set(start.mode, start.accent); if (T.setLayout) T.setLayout(start.layout); }));
 }
 
 const VIEWS = {};
@@ -478,11 +578,13 @@ async function route() {
   const adminOnly = ['clients', 'team', 'settings', 'billing', 'reports'];
   const need = { team: isAdmin, settings: isAdmin, reports: isPartner, clients: isManager, billing: isManager, workload: isManager }[key];
   if (!VIEWS[key] || (need && !need())) { location.hash = '#/dashboard'; return; }
-  $$('#nav a').forEach(a => a.classList.toggle('active', a.dataset.k === key));
+  const navKey = key === 'work' && wf.type === 'TDS' ? 'work-tds' : key === 'work' && wf.type === 'ROC/MCA' ? 'work-mca' : key;
+  $$('#nav a').forEach(a => { const on = a.dataset.k === navKey; a.classList.toggle('active', on); if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
   const v = $('#view');
   v.innerHTML = '<div class="loading">Loading…</div>';
   try { await VIEWS[key](v); }
   catch (e) { v.innerHTML = `<div class="card"><p class="error">Something went wrong: ${esc(friendly(e))}</p></div>`; }
+  v.classList.remove('enter'); void v.offsetWidth; v.classList.add('enter');      // page change animation (Theme → Animation)
   refreshMailBadge().catch(() => {});
 }
 
@@ -1138,6 +1240,7 @@ VIEWS.dashboard = async v => {
         <text x="21" y="21.5" text-anchor="middle" font-size="8" font-weight="800" fill="#fff">${pct}%</text>
         <text x="21" y="27" text-anchor="middle" font-size="3" fill="#fff">filed</text>
       </svg>
+      <div class="meter" aria-hidden="true"><div class="meter-n"><b>${pct}%</b><span>filed this month</span></div><div class="meter-s">${Array.from({ length: 10 }, (_, i) => `<i class="${i < Math.round(pct / 10) ? 'on' : ''}" style="--i:${i}"></i>`).join('')}</div></div>
     </section>
     <section class="bento-card bento-stats">
       <a class="mini red" href="#/work" data-jump="overdue"><span>Overdue</span><b>${overdue.length}</b></a>
@@ -3290,6 +3393,7 @@ async function mailNewCount() {
 async function refreshMailBadge() {
   const b = $('#mailBadge'); if (!b) return;
   const n = await mailNewCount(); b.hidden = !n; $('b', b).textContent = n;
+  const sm = $('#sideMail'); if (sm) { sm.hidden = !n; sm.textContent = n; }
 }
 const monthLbl = p => p ? `${MONTHS[+p.slice(5, 7) - 1]} ${p.slice(0, 4)}` : '';
 async function openMailFile(path, asFile) {

@@ -1,21 +1,27 @@
 /* Applies the saved theme before the page draws (no flash). Shared by index.html, status.html and portal.html.
    skin: original | crimson | midnight | velocity | emerald   (original keeps light/dark + accent choices)
-   anim: full | subtle | off                                  (default: full, or subtle if the device asks for less motion) */
+   anim: full | subtle | off                                  (default: full, or subtle if the device asks for less motion)
+   layout: a (Office) | b (Performance — dark; only Admin and Team members, the app checks the role) */
 (function () {
   var SKIN_MODE = { crimson: 'dark', midnight: 'dark', emerald: 'dark', velocity: 'light' };
-  var mode = 'system', accent = 'blue', skin = 'original', anim = '';
+  var mode = 'system', accent = 'blue', skin = 'original', anim = '', layout = 'a', layoutOk = false;
+  var staffPage = !/(portal|status)\.html$/.test(location.pathname);     // the client pages always use the Office layout
   try {
     mode = localStorage.getItem('tracker-theme') || 'system';
     accent = localStorage.getItem('tracker-accent') || 'blue';
     skin = localStorage.getItem('tracker-skin') || 'original';
     anim = localStorage.getItem('tracker-anim') || '';
+    layout = localStorage.getItem('tracker-layout') === 'b' ? 'b' : 'a';
+    layoutOk = localStorage.getItem('tracker-layout-ok') === '1';
   } catch (e) {}
   var mq = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
   var rm = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
   if (!SKIN_MODE[skin] && skin !== 'original') skin = 'original';
   function apply() {
     var el = document.documentElement;
-    var dark = SKIN_MODE[skin] ? SKIN_MODE[skin] === 'dark' : (mode === 'dark' || (mode === 'system' && mq && mq.matches));
+    var lay = staffPage && layout === 'b' && layoutOk ? 'b' : 'a';
+    el.setAttribute('data-layout', lay);
+    var dark = lay === 'b' || (SKIN_MODE[skin] ? SKIN_MODE[skin] === 'dark' : (mode === 'dark' || (mode === 'system' && mq && mq.matches)));
     el.setAttribute('data-theme', dark ? 'dark' : 'light');
     el.setAttribute('data-accent', skin === 'original' ? accent : 'none');
     el.setAttribute('data-skin', skin);
@@ -26,16 +32,18 @@
   function save() {
     try {
       localStorage.setItem('tracker-theme', mode); localStorage.setItem('tracker-accent', accent);
-      localStorage.setItem('tracker-skin', skin); localStorage.setItem('tracker-anim', anim);
+      localStorage.setItem('tracker-skin', skin); localStorage.setItem('tracker-anim', anim); localStorage.setItem('tracker-layout', layout);
     } catch (e) {}
   }
   window.TrackerTheme = {
     SKINS: [['original', 'Original', '#2667d1'], ['crimson', 'Crimson Forge', '#b3262b'], ['midnight', 'Midnight Ops', '#f2c94c'],
             ['velocity', 'Velocity', '#d0213a'], ['emerald', 'Emerald Pulse', '#2fd59c']],
-    get: function () { return { mode: mode, accent: accent, skin: skin, anim: anim || document.documentElement.getAttribute('data-anim') }; },
+    get: function () { return { mode: mode, accent: accent, skin: skin, anim: anim || document.documentElement.getAttribute('data-anim'), layout: layout }; },
+    setLayout: function (x) { layout = x === 'b' ? 'b' : 'a'; save(); apply(); },
+    allowLayout: function (ok) { layoutOk = !!ok; try { localStorage.setItem('tracker-layout-ok', ok ? '1' : '0'); } catch (e) {} apply(); },
     set: function (m, a) { if (m) mode = m; if (a) accent = a; save(); apply(); },
     setSkin: function (s) { skin = SKIN_MODE[s] || s === 'original' ? s : 'original'; save(); apply(); },
     setAnim: function (x) { anim = x === 'full' || x === 'subtle' || x === 'off' ? x : ''; save(); apply(); },
-    reset: function () { mode = 'system'; accent = 'blue'; skin = 'original'; anim = ''; save(); apply(); }
+    reset: function () { mode = 'system'; accent = 'blue'; skin = 'original'; anim = ''; layout = 'a'; save(); apply(); }
   };
 })();

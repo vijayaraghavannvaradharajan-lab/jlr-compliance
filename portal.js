@@ -76,7 +76,14 @@
     $('#so').onclick = async () => { await sb.auth.signOut({ scope: 'local' }); showLogin(); };
     const cnt = st => tasks.filter(t => t.status === st).length;
     const due = invs.reduce((a, i) => a + num(i.total) - num(i.paid), 0);
-    out.innerHTML = `<div class="stats">
+    const need = tasks.filter(t => t.status === 'Pending data');
+    const needBox = need.length ? `<section class="card need-box"><h3 style="margin:0 0 4px">What we need from you</h3>
+      <p class="muted small" style="margin:0 0 10px">Send these so we can file on time. You can upload here, or send them on WhatsApp / email.</p>
+      ${need.map(t => { const miss = (t.docs || []).filter(d => !d.received).map(d => d.name), late = t.due_date && t.due_date < today;
+        return `<div class="need-item ${late ? 'late-item' : ''}"><div><b>${esc(t.return_name)} · ${esc(t.period)}</b>
+          <div class="small ${late ? 'late' : 'muted'}">${late ? 'Was due ' : 'Due '}${fmt(t.due_date)}${miss.length ? ' · still needed: ' + miss.map(esc).join(', ') : ' · your documents / data'}</div></div>
+          <button class="btn sm primary" data-up="${t.id}">Upload</button></div>`; }).join('')}</section>` : '';
+    out.innerHTML = needBox + `<div class="stats">
         <div class="stat amber"><div class="n">${cnt('Pending data')}</div><div class="l">Waiting for your documents</div></div>
         <div class="stat blue"><div class="n">${cnt('In progress') + cnt('Ready to file')}</div><div class="l">In progress</div></div>
         <div class="stat green"><div class="n">${cnt('Filed')}</div><div class="l">Filed</div></div>
@@ -84,6 +91,7 @@
       <div class="toolbar"><div class="tabs"><button data-tab="work" class="${tab === 'work' ? 'on' : ''}">Work status</button><button data-tab="inv" class="${tab === 'inv' ? 'on' : ''}">Invoices (${invs.length})</button>${data.reports && data.reports.length ? `<button data-tab="rep" class="${tab === 'rep' ? 'on' : ''}">Monthly reports (${data.reports.length})</button>` : ''}</div></div>
       <div id="pv"></div>`;
     $$('[data-tab]').forEach(b => b.onclick = () => { tab = b.dataset.tab; render(); });
+    $$('.need-box [data-up]', out).forEach(b => b.onclick = () => upload(tasks.find(t => t.id === b.dataset.up)));
     const pv = $('#pv');
     if (tab === 'work') {
       pv.innerHTML = tasks.length ? tasks.map(t => {
