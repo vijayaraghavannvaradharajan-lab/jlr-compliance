@@ -324,11 +324,14 @@ async function boot() {
   try {
     const { data: { user } } = await sb.auth.getUser();
     if (!user) return showLogin();
-    const { data: prof } = await sb.from('profiles').select('*').eq('id', user.id).maybeSingle();
+    const [{ data: prof }, refs] = await Promise.all([            // profile and lists in one round trip
+      sb.from('profiles').select('*').eq('id', user.id).maybeSingle(),
+      loadRefs().then(() => null, e => e)
+    ]);
     if (!prof) { await sb.auth.signOut(); return showLogin('Your login has no profile. Ask the admin to check the setup (schema.sql).'); }
     if (!prof.active) { await sb.auth.signOut(); return showLogin('Your account has been deactivated. Please contact the admin.'); }
+    if (refs) throw refs;
     me = prof;
-    await loadRefs();
     renderShell();
     workItemDatalists();
     if (!/^#\//.test(location.hash)) history.replaceState(null, '', location.pathname + '#/dashboard');
@@ -341,17 +344,14 @@ async function boot() {
 }
 
 async function loadRefs() {
-  const [p, c, s] = await Promise.all([
+  const [p, c, s, t, r] = await Promise.all([          // all in one round trip
     must(sb.from('profiles').select('*').order('full_name')),
     must(sb.from('clients').select('*').order('name')),
-    must(sb.from('settings').select('*').eq('id', 1).maybeSingle())
-  ]);
-  profiles = p.data || []; clients = c.data || []; settings = s.data || {};
-  // checklists (empty if update-checklists.sql has not been run yet)
-  const [t, r] = await Promise.all([
-    sb.from('checklist_templates').select('*').order('id'),
+    must(sb.from('settings').select('*').eq('id', 1).maybeSingle()),
+    sb.from('checklist_templates').select('*').order('id'),     // empty if update-checklists.sql has not been run yet
     sb.from('linked_rules').select('*').order('id')
   ]);
+  profiles = p.data || []; clients = c.data || []; settings = s.data || {};
   templates = t.error ? [] : t.data || []; rules = r.error ? [] : r.data || [];
 }
 
@@ -1030,7 +1030,7 @@ VIEWS.dashboard = async v => {
   const now = new Date(), t = today(), in7 = iso(addDays(now, 7));
   const y = now.getFullYear(), m = now.getMonth() + 1;
   const mStart = iso(new Date(y, m - 1, 1)), mEnd = iso(new Date(y, m, 0));
-  let notRows = [], invRows = null, luNew = 0, payFu = [];
+  let notRows = [], invRows = null, luNew = 0, payFu = [], rnR, obR, tiR;
   const [open, month, dd] = await Promise.all([
     must(sb.from('tasks').select('*').not('status', 'in', '("Filed","Not applicable")').order('due_date', { ascending: true, nullsFirst: false }).limit(3000)),
     must(sb.from('tasks').select('id,client_id,work_type,return_name,status,due_date,filed_on,remarks').gte('due_date', mStart).lte('due_date', mEnd).limit(5000)),
@@ -1038,14 +1038,12 @@ VIEWS.dashboard = async v => {
     safe(sb.from('notices').select('id,status,reply_due,hearing_date').neq('status', 'Closed').limit(3000)),
     safe(sb.from('law_updates').select('id').eq('status', 'published').gte('published_at', iso(addDays(now, -14))).limit(100)),
     isManager() && P4() ? safe(sb.from('invoices').select('client_id,total,paid').limit(5000)) : Promise.resolve({ data: null }),
-    isManager() ? safe(sb.from('followups').select('client_id,on_date,next_on,created_at').eq('kind', 'payment').order('on_date', { ascending: false }).order('created_at', { ascending: false }).limit(5000)) : Promise.resolve({ data: [] })
-  ]).then(r => { notRows = r[3].error ? [] : r[3].data || []; luNew = r[4].error ? 0 : (r[4].data || []).length; invRows = r[5].error ? null : r[5].data; payFu = r[6].error ? [] : r[6].data || []; return r; });
-  const rows = open.data || [];
-  const [rnR, obR, tiR] = await Promise.all([
+    isManager() ? safe(sb.from('followups').select('client_id,on_date,next_on,created_at').eq('kind', 'payment').order('on_date', { ascending: false }).order('created_at', { ascending: false }).limit(5000)) : Promise.resolve({ data: [] }),
     safe(sb.from('renewals').select('id,expires_on,status,reminders').not('expires_on', 'is', null).lte('expires_on', iso(addDays(now, 30))).limit(3000)),
     safe(sb.from('onboarding').select('client_id').eq('status', 'In progress').limit(1000)),
     safe(sb.from('tax_intimations').select('id').in('kind', ['GST', 'TDS']).eq('period', monthLabel(prevMonth())).not('sent_on', 'is', null).limit(5000))
-  ]);
+  ]).then(r => { [rnR, obR, tiR] = r.slice(7); notRows = r[3].error ? [] : r[3].data || []; luNew = r[4].error ? 0 : (r[4].data || []).length; invRows = r[5].error ? null : r[5].data; payFu = r[6].error ? [] : r[6].data || []; return r; });
+  const rows = open.data || [];
   const rnRows = rnR.error ? null : (rnR.data || []).filter(rnLive), rnSt = (rnRows || []).map(x => rnStage(x, t));
   const rnExp = rnSt.filter(s => s.days < 0).length, rnDue = rnSt.filter(s => s.days >= 0).length, rnRem = rnSt.filter(s => s.due).length;
   const obN = obR.error ? null : (obR.data || []).length, tiSent = tiR.error ? null : (tiR.data || []).length;
