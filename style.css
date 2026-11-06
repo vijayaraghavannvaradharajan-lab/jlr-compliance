@@ -1015,3 +1015,13 @@ table.bk-grid input.bk-auto{font-style:italic}
 .nreply{border-top:1px dashed var(--line);padding-top:10px;margin-top:4px}
 .nreply textarea{width:100%;font-family:inherit;line-height:1.5}
 pre.code{white-space:pre-wrap;background:var(--bg);padding:10px;border-radius:8px;font-size:.8rem}
+
+/* ---------- v24: client health ---------- */
+button.mini{border:0;cursor:pointer;text-align:left;font:inherit}
+.hscore{display:inline-flex;align-items:center;justify-content:center;min-width:40px;padding:3px 8px;border-radius:999px;font-weight:800;font-size:.9rem}
+.hscore.green{background:var(--green-soft);color:var(--green)}.hscore.amber{background:var(--amber-soft);color:var(--amber)}.hscore.red{background:var(--red-soft);color:var(--red)}
+.hbar{height:5px;border-radius:9px;background:var(--line);margin-top:6px;width:70px;overflow:hidden}
+.hbar i{display:block;height:100%;border-radius:9px}.hbar i.green{background:var(--green)}.hbar i.amber{background:var(--amber)}.hbar i.red{background:var(--red)}
+.hl-table .chip{display:inline-block;margin:2px 2px 2px 0;padding:3px 9px;font-size:.75rem}
+tr.hl-red td:first-child{box-shadow:inset 4px 0 0 var(--red)}tr.hl-amber td:first-child{box-shadow:inset 4px 0 0 var(--amber)}
+.hl-ul{margin:0;padding-left:18px}.hl-ul li{margin:3px 0}

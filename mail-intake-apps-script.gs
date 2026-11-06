@@ -1,5 +1,5 @@
 /* =====================================================================
-   JLR TRACKER - office mailbox -> tracker (runs every minute in Google Apps Script)   v2 (Nov 2026)
+   JLR TRACKER - office mailbox -> tracker (runs every minute in Google Apps Script)   v3 (Nov 2026)
    A. Client mail: sends attachments from client emails to the tracker. The tracker decides who is
       a client; mail from anyone else is only labelled "JLR/Not a client" and nothing is stored.
       To retry such a mail (after saving that email on the client), remove the label in Gmail.
@@ -7,6 +7,9 @@
       forward a notice) are read and added to Notices. Managers and Partners get an email for each
       new notice, and a summary every morning (8 AM) and night (8 PM). "Check now" on the Notices
       page makes this script check within a minute.
+   C. Data reminders: sends the "please send your documents" emails that the tracker prepares
+      (Settings -> Automatic data chasing) from this mailbox. Client replies with files come back
+      here and are picked up by A.
 
    Setup (once, signed in to the office Gmail):
    1. script.google.com -> open "JLR mail intake" (or New project) -> replace the code with this file -> Save
@@ -36,6 +39,7 @@ function everyMinute() {
     var props = PropertiesService.getScriptProperties();
     if (props.getProperty('INTAKE_KEY')) { try { checkMail_(); } catch (e) { console.error('Client mail: ' + e); } }
     if (props.getProperty('NOTICE_KEY')) { try { noticeWatch_(); } catch (e) { console.error('Notice watch: ' + e); } }
+    if (props.getProperty('NOTICE_KEY')) { try { chaseMail_(); } catch (e) { console.error('Data reminders: ' + e); } }
   } finally { lock.releaseLock(); }
 }
 function checkMail() { everyMinute(); }                  // old trigger name still works
@@ -142,6 +146,20 @@ function sendDigest_(key, when) {
   if (d.unmatched) L.push(d.unmatched + ' notice email(s) still need a client (Notices -> From email).', '');
   L.push('Open the tracker: ' + SITE + '#/notices', '', '— JLR Compliance Tracker');
   MailApp.sendEmail({ to: d.emails.join(','), subject: when + ' notice summary: ' + d.new.length + ' new, ' + d.due.length + ' due soon', body: L.join('\n'), name: 'JLR Compliance Tracker' });
+}
+
+/* ---------------- C. data reminder emails ---------------- */
+function chaseMail_() {
+  var key = PropertiesService.getScriptProperties().getProperty('NOTICE_KEY');
+  var list = rpc_('chase_outbox', { p_key: key }) || [];
+  list.forEach(function (m) {
+    var ok = true, err = null;
+    try {
+      if (MailApp.getRemainingDailyQuota() < 1) throw new Error('Gmail daily sending limit reached — will send tomorrow');
+      MailApp.sendEmail({ to: m.to, subject: m.subject, body: m.body, name: 'JLR Compliance' });
+    } catch (e) { ok = false; err = String(e).slice(0, 300); if (/limit/i.test(err)) return; }
+    rpc_('chase_sent', { p_key: key, p_id: m.id, p_ok: ok, p_error: err });
+  });
 }
 
 function label_(name) { return GmailApp.getUserLabelByName(name) || GmailApp.createLabel(name); }

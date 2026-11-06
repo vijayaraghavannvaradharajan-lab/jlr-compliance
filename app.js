@@ -368,6 +368,7 @@ const NI = {   // menu icons (stroke SVG paths)
   gst: '<path d="M6 2h12v20l-3-2-3 2-3-2-3 2z"></path><path d="M9 7h6M9 11h6"></path>',
   tds: '<circle cx="7" cy="7" r="2.5"></circle><circle cx="17" cy="17" r="2.5"></circle><path d="M19 5L5 19"></path>',
   gstw: '<path d="M4 4h16v16H4z"></path><path d="M8 9h8M8 13h8M8 17h5"></path>',
+  health: '<path d="M3 12h4l2-5 4 10 2-5h6"></path>',
   refresh: '<path d="M21 12a9 9 0 1 1-2.6-6.4M21 3v6h-6"></path>',
   chat: '<path d="M21 12a8 8 0 0 1-11.6 7.1L3 21l1.9-6.4A8 8 0 1 1 21 12z"></path>',
   bank: '<path d="M3 10h18M12 3l9 5H3z"></path><path d="M5 10v8M9.5 10v8M14.5 10v8M19 10v8M3 21h18"></path>',
@@ -400,7 +401,7 @@ function navGroups() {
     ['Tools', [['bank', 'Bank statements', 'bank'], ['calc', 'Late fee calculator'], ['checklists', 'Checklists'], ['updates', 'Law updates']]],
     ['Clients', [isManager() && ['clients', 'Clients'], ['onboarding', 'Onboarding'], ['renewals', 'Renewals (DSC, LUT…)'], ['inbox', 'Client mail'], ['clientreport', 'Monthly client reports']]],
     ['Payments & billing', [['taxpay', 'Tax payment intimation'], isManager() && ['billing', 'Billing & fees']]],
-    (isManager() || isPartner()) && ['Office', [isManager() && ['workload', 'Team workload'], isPartner() && ['reports', 'Reports']]],
+    (isManager() || isPartner()) && ['Office', [['health', 'Client health'], isManager() && ['workload', 'Team workload'], isPartner() && ['reports', 'Reports']]],
     isAdmin() && ['Admin', [['team', 'Team & logins'], ['settings', 'Settings']]]
   ].filter(Boolean);
   return G.map(([g, items]) => `<div class="side-g"><span class="side-gl">${esc(g)}</span>${items.filter(Boolean).map(([k, l, ic]) => {
@@ -591,7 +592,7 @@ async function route() {
   if (!me) return;
   const key = location.hash.replace(/^#\/?/, '').split('?')[0] || 'dashboard';
   const adminOnly = ['clients', 'team', 'settings', 'billing', 'reports'];
-  const need = { team: isAdmin, settings: isAdmin, reports: isPartner, clients: isManager, billing: isManager, workload: isManager }[key];
+  const need = { team: isAdmin, settings: isAdmin, reports: isPartner, clients: isManager, billing: isManager, workload: isManager, health: () => isManager() || isPartner() }[key];
   if (!VIEWS[key] || (need && !need())) { location.hash = '#/dashboard'; return; }
   const navKey = key === 'work' ? ({ GST: 'work-gst', TDS: 'work-tds', 'ROC/MCA': 'work-mca' }[wf.type] || 'work') : key === 'notices' ? ({ GST: 'notices-gst', TDS: 'notices-tds', 'ROC/MCA': 'notices-mca' }[nf.dept] || 'notices') : key;
   $$('#nav a').forEach(a => { const on = a.dataset.k === navKey; a.classList.toggle('active', on); if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
@@ -1272,7 +1273,7 @@ VIEWS.dashboard = async v => {
     <section class="bento-card bento-timeline">
       <div class="bento-head"><h2>${MONTHS_FULL[m - 1]} timeline</h2><span class="muted small">Today is the ${now.getDate()}${['th', 'st', 'nd', 'rd'][(now.getDate() % 10 > 3 || [11, 12, 13].includes(now.getDate())) ? 0 : now.getDate() % 10]}</span></div>
       <div class="tl"><div class="tl-line"></div><div class="tl-done" style="width:${Math.round(100 * (now.getDate() - 0.5) / days)}%"></div>${tl || '<p class="muted small">No due dates this month.</p>'}</div>
-      <div class="chips">${chips.join('') || '<span class="chip green">All clear — nothing overdue</span>'}</div>
+      <div class="chips" id="dashChips">${chips.join('') || '<span class="chip green">All clear — nothing overdue</span>'}</div>
     </section>
     <section class="bento-card bento-portals">
       <h2>Quick portals</h2>
@@ -1310,6 +1311,12 @@ VIEWS.dashboard = async v => {
     try { const { data } = await must(sb.rpc('wa_admin_run', { p_kind: 'daily' })); toast(data ? `${data} reminder(s) sent` : 'Nothing sent — check Settings → WhatsApp reminders', !data); }
     catch (e) { toast(friendly(e), true); } finally { wa.disabled = false; }
   };
+  if (isManager() || isPartner()) HEALTH.load().then(all => {          // v24: clients needing attention
+    const box = $('#dashChips', v), red = all.filter(x => x.level === 'red').length;
+    if (!box || !document.body.contains(box) || !red) return;
+    box.insertAdjacentHTML('beforeend', `<a class="chip red" href="#/health" data-hred>${red} client${red > 1 ? 's' : ''} need${red > 1 ? '' : 's'} attention</a>`);
+    $('[data-hred]', box).onclick = () => { hf = { ...hf, level: 'red' }; };
+  }).catch(() => {});
 };
 
 /* ---------- WORK LIST ---------- */
@@ -1559,6 +1566,7 @@ function editClient(c) {
       <div class="toolbar" style="margin:0" data-svc>${[...WORK_TYPES, ...(c.services || []).filter(x => !WORK_TYPES.includes(x))].map(w => `<label class="check"><input type="checkbox" value="${esc(w)}" ${(c.services || []).includes(w) ? 'checked' : ''}> ${wtIcon(w, 16)} ${esc(w)}</label>`).join('')}</div></div>
     <label class="full">Notes<textarea name="notes">${esc(c.notes || '')}</textarea></label>
     <label class="check full"><input type="checkbox" name="active" ${c.active ? 'checked' : ''}> Active client</label>
+    ${'chase_off' in c ? `<label class="check full"><input type="checkbox" name="chase_off" ${c.chase_off ? 'checked' : ''}> Don't send automatic “please send your documents” reminders to this client</label>` : ''}
     ${!isNew && c.gstin && isAdmin() ? `<div class="full"><button type="button" class="btn sm" data-gstnow>Check GST filing now</button>
       <span class="muted small">Looks up this GSTIN's filed returns and marks matching open GST work as Filed.</span></div>` : ''}
     ${!isNew ? '<div class="full"><button type="button" class="btn sm" data-govlg>🔑 GST / TDS / MCA portal logins</button> <span class="muted small">Encrypted · every view is logged</span></div>' : ''}
@@ -1576,7 +1584,7 @@ function editClient(c) {
         gst_scheme: fv(el, 'gst_scheme'), default_staff: fv(el, 'default_staff') || null,
         contact_person: fv(el, 'contact_person') || null, phone: fv(el, 'phone') || null, email: fv(el, 'email') || null,
         ...(P4() ? { address: fv(el, 'address') || null } : {}),
-        notes: fv(el, 'notes') || null, active: $('[name=active]', el).checked,
+        notes: fv(el, 'notes') || null, active: $('[name=active]', el).checked, ...($('[name=chase_off]', el) ? { chase_off: $('[name=chase_off]', el).checked } : {}),
         services: $$('[data-svc] input:checked', el).map(i => i.value)
       };
       if (!rec.name) { toast('Name is required', true); return false; }
@@ -1691,6 +1699,9 @@ VIEWS.settings = async v => {
   const aw = document.createElement('div');
   v.appendChild(aw);
   renderAutoWorkSettings(aw);
+  const ch = document.createElement('div');
+  v.appendChild(ch);
+  renderChaseSettings(ch);
   const ai = document.createElement('div');
   v.appendChild(ai);
   renderAiSettings(ai);
@@ -8143,6 +8154,156 @@ async function aiNoticeDraft(el, n, btn) {
     } });
 }
 
-window.__tracker = { HELP, noticeLetter, BANK, bankReadFile, TDSW, MCA, BILL, parseMcaSheets, mcaPlanAll, fillGstWorkings, G1, GR, RECO, gstr3bFromApi, periodToMonth, strongPassword, periodFor, dueDateFor, parseCSV, toCSV, gstLateFee, gstInterest, tdsCalc, rocCalc, monthsSpan, tdsDepositDue, g1json, clientReportHtml, clientReportMsg, rnStage, anyDate, parseRenewalRows, gstPayDue, tdsPayDue, advInstalment, advCurrent, advDue, recurringPlan, taxMsg, addMonths, fyEndOf, obProgress, rnKind };
+
+/* =====================================================================
+   v24  CLIENT HEALTH SCORE  (#/health, Managers & Partners)
+   100 points, minus: overdue work, late filings (6 months), data waiting near the due date,
+   reminders ignored, open / overdue notices, unpaid fees. Green ≥ 80 · Amber 50–79 · Red < 50
+   ===================================================================== */
+const HEALTH = {
+  RULES: [
+    // key, label, points each, max points, colour of the chip
+    ['overdue', n => `${n} return${n > 1 ? 's' : ''} overdue`, 15, 45, 'red'],
+    ['nlate', n => `${n} notice repl${n > 1 ? 'ies' : 'y'} overdue`, 20, 40, 'red'],
+    ['nopen', n => `${n} open notice${n > 1 ? 's' : ''}`, 8, 24, 'amber'],
+    ['late', n => `${n} filed late (6 months)`, 5, 20, 'amber'],
+    ['waiting', n => `${n} waiting for data, due soon`, 5, 15, 'amber'],
+    ['ignored', n => `${n} reminders, no reply`, 10, 10, 'amber'],
+    ['fee90', n => `fees unpaid > 90 days`, 15, 15, 'red'],
+    ['fee30', n => `fees unpaid 31–90 days`, 8, 8, 'amber']
+  ],
+  score(c, D, t) {
+    const in5 = iso(addDays(new Date(t + 'T00:00:00'), 5)), back = iso(addDays(new Date(t + 'T00:00:00'), -183)), b30 = iso(addDays(new Date(t + 'T00:00:00'), -30)), b90 = iso(addDays(new Date(t + 'T00:00:00'), -90));
+    const tk = D.tasks.filter(r => r.client_id === c.id && r.status !== 'Not applicable');
+    const open = tk.filter(r => r.status !== 'Filed');
+    const items = {
+      overdue: open.filter(r => r.due_date && r.due_date < t),
+      late: tk.filter(r => r.status === 'Filed' && r.filed_on && r.due_date && r.filed_on > r.due_date && r.due_date >= back),
+      waiting: open.filter(r => r.status === 'Pending data' && r.due_date && r.due_date >= t && r.due_date <= in5),
+      nlate: D.notices.filter(n => n.client_id === c.id && isOpenNotice(n.status) && n.status !== 'Hearing' && n.reply_due && n.reply_due < t),
+      nopen: [], ignored: [], fee90: [], fee30: []
+    };
+    items.nopen = D.notices.filter(n => n.client_id === c.id && n.status !== 'Closed' && !items.nlate.includes(n));
+    const rounds = new Set((D.chase || []).filter(l => l.client_id === c.id && l.kind === 'client' && l.created_at >= b30 && l.status !== 'failed' && l.status !== 'skipped').map(l => l.round_no));
+    if (rounds.size >= 3 && open.some(r => r.status === 'Pending data')) items.ignored = [...rounds];
+    const unpaid = (D.invoices || []).filter(i => i.client_id === c.id && num(i.total) - num(i.paid) > 0.009);
+    const old = unpaid.filter(i => i.inv_date && i.inv_date < b90), mid = unpaid.filter(i => i.inv_date && i.inv_date < b30 && i.inv_date >= b90);
+    if (old.length) items.fee90 = old; else if (mid.length) items.fee30 = mid;
+    let s = 100; const reasons = [];
+    for (const [k, lab, each, max, tone] of this.RULES) {
+      const n = items[k].length; if (!n) continue;
+      const lose = Math.min(max, n * each); s -= lose;
+      reasons.push({ k, text: k === 'ignored' ? lab(n) : lab(n), lose, tone });
+    }
+    const due = unpaid.reduce((a, i) => a + num(i.total) - num(i.paid), 0);
+    s = Math.max(0, s);
+    return { c, score: s, level: s >= 80 ? 'green' : s >= 50 ? 'amber' : 'red', reasons: reasons.sort((a, b) => b.lose - a.lose), items, due };
+  },
+  async load() {
+    const t = today(), from = iso(addDays(new Date(), -200));
+    const [tk, nt, iv, ch] = await Promise.all([
+      must(sb.from('tasks').select('id,client_id,return_name,period,due_date,status,filed_on,assigned_to').gte('due_date', from).limit(20000)),
+      safe(sb.from('notices').select('id,client_id,dept,notice_type,status,reply_due,ref_no').neq('status', 'Closed').limit(5000)),
+      P4() ? safe(sb.from('invoices').select('id,client_id,inv_no,inv_date,total,paid').limit(10000)) : Promise.resolve({ data: [] }),
+      safe(sb.from('chase_log').select('client_id,kind,round_no,status,created_at').gte('created_at', iso(addDays(new Date(), -31))).limit(10000))
+    ]);
+    const D = { tasks: tk.data || [], notices: nt.error ? [] : nt.data || [], invoices: iv.error ? [] : iv.data || [], chase: ch.error ? [] : ch.data || [] };
+    return clients.filter(c => c.active).map(c => this.score(c, D, t)).sort((a, b) => a.score - b.score || a.c.name.localeCompare(b.c.name));
+  }
+};
+let hf = { level: '', staff: '', q: '' };
+VIEWS.health = async v => {
+  await loadRefs();
+  v.innerHTML = '<div class="loading">Working out client health…</div>';
+  const all = await HEALTH.load();
+  const cnt = l => all.filter(x => x.level === l).length;
+  v.innerHTML = `<div class="page-head"><h2>Client health</h2><span class="muted">${all.length} active clients</span><span class="spacer"></span><button class="btn ghost sm" id="hHow">How is it scored?</button></div>
+    <div class="bento-stats card stats4" style="margin-bottom:14px">
+      <button class="mini red" data-hl="red"><span>Needs attention</span><b>${cnt('red')}</b></button>
+      <button class="mini amber" data-hl="amber"><span>Watch</span><b>${cnt('amber')}</b></button>
+      <button class="mini green" data-hl="green"><span>Healthy</span><b>${cnt('green')}</b></button>
+      <button class="mini blue" data-hl=""><span>Average score</span><b>${all.length ? Math.round(all.reduce((a, x) => a + x.score, 0) / all.length) : '—'}</b></button></div>
+    <div class="toolbar"><select id="hL"><option value="">All clients</option><option value="red">Red — needs attention</option><option value="amber">Amber — watch</option><option value="green">Green — healthy</option></select>
+      <select id="hS"><option value="">All staff</option>${opts(activeStaff(), hf.staff, p => p.full_name || p.email, p => p.id)}</select>
+      <input type="search" id="hQ" placeholder="Search client" value="${esc(hf.q)}"></div><div id="hList"></div>`;
+  $('#hL').value = hf.level;
+  const render = () => {
+    const s = hf.q.toLowerCase();
+    const list = all.filter(x => (!hf.level || x.level === hf.level) && (!hf.staff || x.c.default_staff === hf.staff) && (!s || x.c.name.toLowerCase().includes(s)));
+    $('#hList').innerHTML = list.length ? `<div class="table-wrap"><table class="hl-table"><thead><tr><th>Client</th><th>Score</th><th>Why</th><th>Staff</th><th></th></tr></thead><tbody>
+      ${list.map(x => `<tr class="hl-${x.level}" data-hc="${x.c.id}">
+        <td class="wrap"><b>${esc(x.c.name)}</b><div class="muted small">${esc([x.c.gstin || x.c.pan, x.c.phone].filter(Boolean).join(' · '))}</div></td>
+        <td><span class="hscore ${x.level}" title="${x.score} / 100">${x.score}</span><div class="hbar"><i class="${x.level}" style="width:${x.score}%"></i></div></td>
+        <td class="wrap">${x.reasons.length ? x.reasons.map(r => `<span class="chip ${r.tone}" title="−${r.lose}">${esc(r.text)}</span>`).join(' ') : '<span class="muted small">All on time</span>'}${x.due > 0.009 ? `<div class="muted small">Unpaid ${inr(x.due)}</div>` : ''}</td>
+        <td>${esc(profName(x.c.default_staff) || '—')}</td>
+        <td class="nowrap"><button class="btn sm" data-hd="${x.c.id}">Details</button></td></tr>`).join('')}
+      </tbody></table></div>` : '<div class="table-wrap"><div class="empty">No clients here.</div></div>';
+  };
+  render();
+  $('#hL').onchange = e => { hf.level = e.target.value; render(); };
+  $('#hS').onchange = e => { hf.staff = e.target.value; render(); };
+  $('#hQ').oninput = e => { hf.q = e.target.value; render(); };
+  $$('[data-hl]', v).forEach(b => b.onclick = () => { hf.level = b.dataset.hl; $('#hL').value = hf.level; render(); });
+  $('#hHow').onclick = () => modal('How the health score works', `<p class="small" style="margin-top:0">Every active client starts at <b>100</b>. Points come off for:</p>
+    <table class="small"><tbody>${HEALTH.RULES.map(([k, lab, each, max]) => `<tr><td>${esc(lab(2).replace(/^2 /, '').replace(/^fees/, 'Fees'))}</td><td class="r">−${each}${each !== max ? ' each, up to −' + max : ''}</td></tr>`).join('')}</tbody></table>
+    <p class="small"><span class="hscore green">80+</span> healthy · <span class="hscore amber">50–79</span> watch · <span class="hscore red">below 50</span> needs attention. It updates every time the page opens.</p>`);
+  $('#hList').onclick = e => {
+    const id = (e.target.closest('[data-hd]') || {}).dataset?.hd; if (!id) return;
+    const x = all.find(y => y.c.id === id), I = x.items;
+    const sec = (title, rows) => rows.length ? `<h4 style="margin:14px 0 6px">${esc(title)}</h4><ul class="small hl-ul">${rows.join('')}</ul>` : '';
+    const tl = r => `<li>${esc(r.return_name)} · ${esc(r.period || '')} — due ${fmtDate(r.due_date)}${r.filed_on ? ', filed ' + fmtDate(r.filed_on) : ''} <span class="muted">(${esc(profName(r.assigned_to) || 'unassigned')})</span></li>`;
+    const m = modal(`${x.c.name} — ${x.score} / 100`, `<p style="margin-top:0"><span class="hscore ${x.level}">${x.score}</span> ${x.level === 'green' ? 'Healthy' : x.level === 'amber' ? 'Watch' : 'Needs attention'}</p>
+      ${sec('Overdue work', I.overdue.map(tl))}${sec('Waiting for data, due within 5 days', I.waiting.map(tl))}${sec('Filed late in the last 6 months', I.late.map(tl))}
+      ${sec('Notices', [...I.nlate, ...I.nopen].map(n => `<li>${esc(n.dept === 'ROC/MCA' ? 'MCA' : n.dept)} ${esc(n.notice_type)}${n.ref_no ? ' · ' + esc(n.ref_no) : ''} — reply ${n.reply_due ? 'by ' + fmtDate(n.reply_due) : 'date not set'}${I.nlate.includes(n) ? ' <b class="late">overdue</b>' : ''}</li>`))}
+      ${sec('Unpaid fees', [...I.fee90, ...I.fee30].map(i => `<li>Invoice ${esc(i.inv_no || '')} of ${fmtDate(i.inv_date)} — ${inr(num(i.total) - num(i.paid))} due</li>`))}
+      ${I.ignored.length ? `<p class="small">${I.ignored.length} automatic data reminders sent in the last 30 days without the data arriving.</p>` : ''}
+      ${!x.reasons.length ? '<p class="muted">Nothing pending — all work on time, no open notices or unpaid fees.</p>' : ''}`,
+      { extra: `<a class="btn" href="#/work" data-hw>Open work</a>${x.c.phone ? `<a class="btn" href="${esc(waShare('Dear ' + (x.c.contact_person || x.c.name) + ',\n', x.c.phone))}" target="_blank" rel="noopener">WhatsApp</a>` : ''}` });
+    $('[data-hw]', m.el).onclick = () => { wf = { ...WF_DEFAULT, client: id, status: 'open' }; m.close(); };
+  };
+};
+
+/* ---------- Settings: automatic data chasing ---------- */
+async function renderChaseSettings(box) {
+  const r = await safe(sb.rpc('chase_status'));
+  if (r.error) { box.innerHTML = '<div class="card"><h3>Automatic data chasing</h3><p class="note small">Run <b>update-session7.sql</b> in Supabase to switch this on.</p></div>'; return; }
+  const s = r.data || {}, edit = isPartner(), pv = s.preview || [];
+  const when = t => t ? new Date(t).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : '—';
+  box.innerHTML = `<div class="card"><h3>Automatic data chasing</h3>
+    <p class="muted">While work is in <b>Pending data</b>, the client gets a polite reminder by WhatsApp and email every few days until the data arrives — every morning at 10 AM (Mon–Sat). Each reminder shows as a follow-up on the work. If the client still hasn't sent anything after a set number of reminders, the staff member and Managers get an email to call them.</p>
+    <div class="mail-stat"><span class="pill ${s.enabled ? 'g' : 'a'}">${s.enabled ? '● On' : 'Off'}</span>
+      <span class="small">Last run: <b>${when(s.last_run_at)}</b>${s.last_note ? ' · ' + esc(s.last_note) : ''} · Clients reminded in 7 days: <b>${s.sent_7 || 0}</b>${s.queued ? ` · emails waiting to send: <b>${s.queued}</b>` : ''}${s.failed_7 ? ` · <span class="late">${s.failed_7} failed</span>` : ''}</span></div>
+    ${!s.mailbox ? '<p class="note warn small">Emails are sent by the office mailbox script — set up Notice watch first (it uses the same key).</p>' : ''}
+    <div class="form-grid" style="margin-top:12px">
+      <label>Start reminding (days before the due date)<input type="number" id="chStart" min="1" max="30" value="${esc(s.start_days)}"></label>
+      <label>Remind again every (days)<input type="number" id="chEvery" min="1" max="15" value="${esc(s.every_days)}"></label>
+      <label>At most this many reminders per client in 30 days<input type="number" id="chMax" min="1" max="10" value="${esc(s.max_month)}"></label>
+      <label>Tell staff &amp; Managers after this many reminders<input type="number" id="chEsc" min="1" max="10" value="${esc(s.escalate_after)}"></label></div>
+    <label class="check" style="margin-top:8px"><input type="checkbox" id="chOn" ${s.enabled ? 'checked' : ''}> <b>Switched on</b> (this replaces the older one-time client reminder in WhatsApp settings)</label>
+    <label class="check"><input type="checkbox" id="chWa" ${s.use_wa ? 'checked' : ''}> WhatsApp (uses the approved <b>client_data_reminder</b> template)</label>
+    <label class="check"><input type="checkbox" id="chEm" ${s.use_email ? 'checked' : ''}> Email from the office mailbox (clients can reply with the files — they land in Client mail)</label>
+    <div class="toolbar" style="margin-top:12px">${edit ? '<button class="btn primary" id="chSave">Save</button>' : ''}<span class="spacer"></span><button class="btn" id="chRun">Send due reminders now</button></div>
+    <h4 style="margin:16px 0 6px">Waiting for data now (${pv.length})</h4>
+    ${pv.length ? `<div class="table-wrap"><table class="small"><thead><tr><th>Client</th><th>Waiting for</th><th>Earliest due</th><th>Reminders (30 days)</th><th>Next</th></tr></thead><tbody>
+      ${pv.map(p => `<tr><td><b>${esc(p.client)}</b><div class="muted">${p.phone ? 'WhatsApp' : '<span class="late">no mobile</span>'} · ${p.email ? 'email' : '<span class="late">no email</span>'}</div></td><td class="wrap">${esc(p.items)}</td>
+        <td class="${p.earliest < today() ? 'late' : ''}">${fmtDate(p.earliest)}</td><td>${p.sent_30}${p.last_sent ? `<div class="muted">last ${fmtDate(p.last_sent.slice(0, 10))}</div>` : ''}</td>
+        <td>${p.sent_30 >= s.max_month ? '<span class="muted">limit reached</span>' : p.due_now ? '<b>due now</b>' : 'in a few days'}</td></tr>`).join('')}</tbody></table></div>`
+      : '<p class="muted small">No client is waiting on data within the reminder window.</p>'}
+    <p class="muted small">To leave a client out, open the client and tick “Don't send automatic reminders”.</p></div>`;
+  if ($('#chSave', box)) $('#chSave', box).onclick = async () => {
+    const n = id => Math.round(num($(id, box).value));
+    try { await must(sb.rpc('chase_save', { p: { enabled: $('#chOn', box).checked, use_wa: $('#chWa', box).checked, use_email: $('#chEm', box).checked, start_days: n('#chStart'), every_days: n('#chEvery'), max_month: n('#chMax'), escalate_after: n('#chEsc') } })); toast('Saved'); renderChaseSettings(box); }
+    catch (e) { toast(friendly(e), true); }
+  };
+  if (!edit) $$('input', box).forEach(x => x.disabled = true);
+  $('#chRun', box).onclick = async e => {
+    if (!confirm('Send reminders now to the clients marked “due now”?')) return;
+    e.target.disabled = true;
+    try { const { data } = await must(sb.rpc('chase_run_now')); toast(data ? `${data} client${data > 1 ? 's' : ''} reminded` : 'No reminder due right now'); renderChaseSettings(box); }
+    catch (err) { toast(friendly(err), true); e.target.disabled = false; }
+  };
+}
+
+window.__tracker = { HEALTH, HELP, noticeLetter, BANK, bankReadFile, TDSW, MCA, BILL, parseMcaSheets, mcaPlanAll, fillGstWorkings, G1, GR, RECO, gstr3bFromApi, periodToMonth, strongPassword, periodFor, dueDateFor, parseCSV, toCSV, gstLateFee, gstInterest, tdsCalc, rocCalc, monthsSpan, tdsDepositDue, g1json, clientReportHtml, clientReportMsg, rnStage, anyDate, parseRenewalRows, gstPayDue, tdsPayDue, advInstalment, advCurrent, advDue, recurringPlan, taxMsg, addMonths, fyEndOf, obProgress, rnKind };
 start();
 })();
