@@ -367,6 +367,9 @@ const NI = {   // menu icons (stroke SVG paths)
   work: '<path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01"></path>',
   gst: '<path d="M6 2h12v20l-3-2-3 2-3-2-3 2z"></path><path d="M9 7h6M9 11h6"></path>',
   tds: '<circle cx="7" cy="7" r="2.5"></circle><circle cx="17" cy="17" r="2.5"></circle><path d="M19 5L5 19"></path>',
+  gstw: '<path d="M4 4h16v16H4z"></path><path d="M8 9h8M8 13h8M8 17h5"></path>',
+  refresh: '<path d="M21 12a9 9 0 1 1-2.6-6.4M21 3v6h-6"></path>',
+  chat: '<path d="M21 12a8 8 0 0 1-11.6 7.1L3 21l1.9-6.4A8 8 0 1 1 21 12z"></path>',
   bank: '<path d="M3 10h18M12 3l9 5H3z"></path><path d="M5 10v8M9.5 10v8M14.5 10v8M19 10v8M3 21h18"></path>',
   tdsw: '<path d="M4 3h16v18H4zM8 7h8M8 11h3M13 11h3M8 15h3M13 15h3"></path>',
   mca: '<path d="M3 21h18M5 21V8l7-5 7 5v13"></path><path d="M9 21v-5h6v5"></path>',
@@ -390,15 +393,18 @@ const NI = {   // menu icons (stroke SVG paths)
 const navIcon = k => `<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${NI[k] || NI.work}</svg>`;
 function navGroups() {
   const G = [
-    ['Overview', [['dashboard', 'Dashboard'], ['calendar', 'Due-date calendar']]],
-    ['Compliance work', [['work', isManager() ? 'All work' : 'My work'], ['gst', 'GST review', 'gst'], ['bank', 'Bank statements', 'bank'], ['tds', 'TDS working', 'tdsw'], ['work-tds', 'TDS / TCS work', 'tds'], ['work-mca', 'MCA / ROC work', 'mca'], ['mca', 'Companies & LLPs', 'companies'], ['notices', 'Notices']]],
+    ['Overview', [['dashboard', 'Dashboard'], ['calendar', 'Due-date calendar'], ['work', isManager() ? 'All work' : 'My work'], ['notices', 'All notices', 'notices']]],
+    ['GST', [['work-gst', isManager() ? 'GST work' : 'My GST work', 'gstw'], ['gst', 'GST review', 'gst'], ['notices-gst', 'GST notices', 'notices']]],
+    ['TDS', [['work-tds', isManager() ? 'TDS / TCS work' : 'My TDS work', 'tds'], ['tds', 'TDS working', 'tdsw'], ['notices-tds', 'TDS notices', 'notices']]],
+    ['MCA', [['work-mca', isManager() ? 'MCA / ROC work' : 'My MCA work', 'mca'], ['mca', 'Companies & LLPs', 'companies'], ['notices-mca', 'MCA notices', 'notices']]],
+    ['Tools', [['bank', 'Bank statements', 'bank'], ['calc', 'Late fee calculator'], ['checklists', 'Checklists'], ['updates', 'Law updates']]],
     ['Clients', [isManager() && ['clients', 'Clients'], ['onboarding', 'Onboarding'], ['renewals', 'Renewals (DSC, LUT…)'], ['inbox', 'Client mail'], ['clientreport', 'Monthly client reports']]],
     ['Payments & billing', [['taxpay', 'Tax payment intimation'], isManager() && ['billing', 'Billing & fees']]],
-    ['Office', [isManager() && ['workload', 'Team workload'], isPartner() && ['reports', 'Reports'], ['updates', 'Law updates'], ['checklists', 'Checklists'], ['calc', 'Late fee calculator']]],
+    (isManager() || isPartner()) && ['Office', [isManager() && ['workload', 'Team workload'], isPartner() && ['reports', 'Reports']]],
     isAdmin() && ['Admin', [['team', 'Team & logins'], ['settings', 'Settings']]]
   ].filter(Boolean);
   return G.map(([g, items]) => `<div class="side-g"><span class="side-gl">${esc(g)}</span>${items.filter(Boolean).map(([k, l, ic]) => {
-    const href = k.startsWith('work-') ? '#/work' : '#/' + k;
+    const href = k.startsWith('work-') ? '#/work' : k.startsWith('notices-') ? '#/notices' : '#/' + k;
     return `<a href="${href}" data-k="${k}">${navIcon(ic || k)}<span>${esc(l)}</span>${k === 'inbox' ? '<b class="side-badge" id="sideMail" hidden>0</b>' : ''}</a>`; }).join('')}</div>`).join('');
 }
 function renderShell() {
@@ -424,6 +430,7 @@ function renderShell() {
       </header>
       <main id="view"></main>
     </div></div>`;
+  mountHelp();
   const menu = $('#userMenu');
   $('#userBtn').onclick = e => { e.stopPropagation(); menu.hidden = !menu.hidden; };
   document.addEventListener('click', () => { menu.hidden = true; const r = $('#gRes'); if (r) r.hidden = true; });
@@ -442,9 +449,12 @@ function renderShell() {
   $('#nav').addEventListener('click', e => {
     const a = e.target.closest('a[data-k]'); if (!a) return;
     const k = a.dataset.k;
-    if (k === 'work-tds' || k === 'work-mca') wf = { ...WF_DEFAULT, type: k === 'work-tds' ? 'TDS' : 'ROC/MCA', status: 'open' };
+    const WT = { 'work-gst': 'GST', 'work-tds': 'TDS', 'work-mca': 'ROC/MCA' }, ND = { 'notices-gst': 'GST', 'notices-tds': 'TDS', 'notices-mca': 'ROC/MCA', notices: '' };
+    if (WT[k]) wf = { ...WF_DEFAULT, type: WT[k], status: 'open' };
     else if (k === 'work') wf = { ...WF_DEFAULT };
-    if ((k === 'work-tds' || k === 'work-mca' || k === 'work') && location.hash === '#/work') route();
+    if (k in ND) nf = { ...nf, dept: ND[k] };
+    if ((WT[k] || k === 'work') && location.hash === '#/work') route();
+    if (k in ND && location.hash === '#/notices') route();
     openSide(false);
   });
   if ($('#topNew')) $('#topNew').onclick = () => editTask(null, () => route());
@@ -583,7 +593,7 @@ async function route() {
   const adminOnly = ['clients', 'team', 'settings', 'billing', 'reports'];
   const need = { team: isAdmin, settings: isAdmin, reports: isPartner, clients: isManager, billing: isManager, workload: isManager }[key];
   if (!VIEWS[key] || (need && !need())) { location.hash = '#/dashboard'; return; }
-  const navKey = key === 'work' && wf.type === 'TDS' ? 'work-tds' : key === 'work' && wf.type === 'ROC/MCA' ? 'work-mca' : key;
+  const navKey = key === 'work' ? ({ GST: 'work-gst', TDS: 'work-tds', 'ROC/MCA': 'work-mca' }[wf.type] || 'work') : key === 'notices' ? ({ GST: 'notices-gst', TDS: 'notices-tds', 'ROC/MCA': 'notices-mca' }[nf.dept] || 'notices') : key;
   $$('#nav a').forEach(a => { const on = a.dataset.k === navKey; a.classList.toggle('active', on); if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
   const v = $('#view');
   v.innerHTML = '<div class="loading">Loading…</div>';
@@ -694,7 +704,7 @@ function editTask(task, refresh) {
   const body = `<div class="form-grid">
     <label class="full">Client<select name="client_id" ${dis}>${isNew ? '<option value="">Select client…</option>' : ''}${opts(clients.filter(c => c.active || c.id === task.client_id), task.client_id, c => c.name, c => c.id)}</select></label>
     <label>Work type<select name="work_type" ${dis}>${opts(typesWith(task.work_type), task.work_type)}</select></label>
-    <label>Return / task<input name="return_name" list="${dlFor(task.work_type)}" value="${esc(task.return_name || '')}" placeholder="Pick or type, e.g. GSTR-3B" ${dis}></label>
+    <label>Return / task<input autocomplete="off" name="return_name" list="${dlFor(task.work_type)}" value="${esc(task.return_name || '')}" placeholder="Pick or type, e.g. GSTR-3B" ${dis}></label>
     <label>Period<input name="period" value="${esc(task.period || '')}" placeholder="e.g. Oct 2026" ${dis}></label>
     <label>Due date<input name="due_date" type="date" value="${esc(task.due_date || '')}" ${dis}></label>
     <label>Assigned to<select name="assigned_to" ${dis}>${staffOpts(task.assigned_to || '')}</select></label>
@@ -977,7 +987,7 @@ function editTemplate(t) {
       <label>Work type<select name="wt">${opts(WORK_TYPES, t.work_type)}</select></label>
       <label>Checklist name<input name="nm" value="${esc(t.name)}" placeholder="e.g. GSTR-1 (monthly)"></label>
       <label class="full">Use for these returns (comma separated, same names as in work items)
-        <input name="mt" value="${esc((t.matches || []).join(', '))}" list="dl-allret" placeholder="e.g. GSTR-1, IFF"></label>
+        <input autocomplete="off" name="mt" value="${esc((t.matches || []).join(', '))}" list="dl-allret" placeholder="e.g. GSTR-1, IFF"></label>
       <datalist id="dl-allret">${allRet.map(x => `<option value="${esc(x)}"></option>`).join('')}</datalist>
       <label class="full">Steps — one per line. Add “| Reviewer” or “| Partner/Admin” at the end if not done by staff.
         <textarea name="st" rows="14">${esc((t.steps || []).map(s => s.name + (s.who && s.who !== 'Staff' ? ' | ' + s.who : '')).join('\n'))}</textarea></label>
@@ -1052,7 +1062,7 @@ function bulkCreate(preset = {}, refresh = () => {}) {
   const act = clients.filter(c => c.active);
   const body = `<div class="form-grid">
     <label>Work type<select name="work_type">${opts(WORK_TYPES, preset.work_type || 'GST')}</select></label>
-    <label>Return / task<input name="return_name" list="${dlFor(preset.work_type || 'GST')}" value="${esc(preset.return_name || '')}" placeholder="Pick or type, e.g. GSTR-3B"></label>
+    <label>Return / task<input autocomplete="off" name="return_name" list="${dlFor(preset.work_type || 'GST')}" value="${esc(preset.return_name || '')}" placeholder="Pick or type, e.g. GSTR-3B"></label>
     <label>Period<input name="period" value="${esc(preset.period || '')}" placeholder="e.g. Oct 2026"></label>
     <label>Due date<input name="due_date" type="date" value="${esc(preset.due_date || '')}"></label>
     <label class="full">Assign to<select name="assign"><option value="default">Each client's default staff</option>${staffOpts('', { blank: 'Leave unassigned' }).replace('value=""', 'value="none"')}</select></label>
@@ -1306,7 +1316,7 @@ VIEWS.dashboard = async v => {
 const WF_DEFAULT = { month: '', status: 'open', type: '', ret: '', staff: '', client: '', q: '', quick: '' };
 let wf = { ...WF_DEFAULT };
 VIEWS.work = async v => {
-  v.innerHTML = `<div class="page-head"><h2>${isManager() ? 'All work' : 'My work'}</h2><span class="spacer"></span>
+  v.innerHTML = `<div class="page-head"><h2>${(wf.type ? ({ 'ROC/MCA': 'MCA / ROC' }[wf.type] || wf.type) + ' work' : 'All work').replace(/^/, isManager() ? '' : 'My ').replace(/^My All/, 'My')}</h2><span class="spacer"></span>
       ${isManager() ? '<button class="btn" id="bulkBtn">+ Create for many clients</button><button class="btn primary" id="addBtn">+ Add work</button>' : ''}</div>
     <div class="wtabs" role="tablist">${WT_TABS.map(([k, l]) => `<button role="tab" data-wt="${esc(k)}" class="${wf.type === k ? 'on' : ''}">${k ? wtIcon(k, 16) : ''}<span>${l}</span><b data-n="${esc(k)}">…</b></button>`).join('')}</div>
     <div class="toolbar">
@@ -1435,7 +1445,7 @@ function editDue(d) {
   d = d || { work_type: 'GST', due_day: 20, months: [], period_rule: 'prev_month' };
   const body = `<div class="form-grid">
     <label>Work type<select name="work_type">${opts(WORK_TYPES, d.work_type)}</select></label>
-    <label>Return / task<input name="return_name" list="${dlFor(d.work_type)}" value="${esc(d.return_name || '')}"></label>
+    <label>Return / task<input autocomplete="off" name="return_name" list="${dlFor(d.work_type)}" value="${esc(d.return_name || '')}"></label>
     <label class="full">Description<input name="description" value="${esc(d.description || '')}"></label>
     <label>Applies to (optional)<input name="applies_to" value="${esc(d.applies_to || '')}" placeholder="Monthly / QRMP / Composition"></label>
     <label>Due day of month<input name="due_day" type="number" min="1" max="31" value="${esc(d.due_day)}"></label>
@@ -1675,10 +1685,87 @@ VIEWS.settings = async v => {
   const ml = document.createElement('div');
   v.appendChild(ml);
   renderMailSettings(ml);
+  const nw = document.createElement('div');
+  v.appendChild(nw);
+  renderNoticeWatchSettings(nw);
+  const aw = document.createElement('div');
+  v.appendChild(aw);
+  renderAutoWorkSettings(aw);
   const ai = document.createElement('div');
   v.appendChild(ai);
   renderAiSettings(ai);
 };
+
+/* ---------- Settings: automatic GST work ---------- */
+async function renderAutoWorkSettings(box) {
+  const r = await safe(sb.rpc('auto_work_status'));
+  if (r.error) { box.innerHTML = '<div class="card"><h3>Automatic GST work</h3><p class="note small">Run <b>update-session6.sql</b> in Supabase to switch this on.</p></div>'; return; }
+  const s = r.data || {};
+  box.innerHTML = `<div class="card"><h3>Automatic GST work</h3>
+    <p class="muted">Every morning the tracker creates the month's GST returns for each active GST client — GSTR-1 and GSTR-3B for monthly filers, IFF / quarterly returns for QRMP, CMP-08 / GSTR-4 for composition — from the due dates list, and gives each one to the client's own staff member. Work you delete is not created again.</p>
+    <div class="mail-stat"><span class="pill ${s.gst_enabled ? 'g' : 'a'}">${s.gst_enabled ? '● On' : 'Off'}</span>
+      <span class="small">Last run: <b>${s.last_run_at ? new Date(s.last_run_at).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : '—'}</b>${s.last_note ? ' · ' + esc(s.last_note) : ''}</span></div>
+    <p class="muted small">Clients need: GST ticked in services, a GST scheme (Monthly / QRMP / Composition) and a default staff member.</p>
+    <div class="toolbar" style="margin-top:12px"><label class="check"><input type="checkbox" id="awOn" ${s.gst_enabled ? 'checked' : ''} ${isPartner() ? '' : 'disabled'}> Create GST work automatically</label><span class="spacer"></span>
+      <button class="btn" id="awRun">Create this month's work now</button></div></div>`;
+  $('#awOn', box).onchange = async e => { try { await must(sb.rpc('auto_work_save', { p_gst: e.target.checked })); toast('Saved'); renderAutoWorkSettings(box); } catch (err) { toast(friendly(err), true); } };
+  $('#awRun', box).onclick = async e => {
+    e.target.disabled = true;
+    try { const { data } = await must(sb.rpc('auto_work_run')); toast(data ? `${data} new GST work item${data > 1 ? 's' : ''} created` : 'Nothing new — this month\'s GST work is already there'); renderAutoWorkSettings(box); }
+    catch (err) { toast(friendly(err), true); e.target.disabled = false; }
+  };
+}
+
+/* ---------- Settings: notice watch (admin) ---------- */
+async function renderNoticeWatchSettings(box) {
+  const r = await safe(sb.rpc('notice_status'));
+  if (r.error) { box.innerHTML = '<div class="card"><h3>Notice watch</h3><p class="note small">Run <b>update-session6.sql</b> in Supabase to switch this on.</p></div>'; return; }
+  const s = r.data || {}, when = t => t ? new Date(t).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : '—';
+  box.innerHTML = `<div class="card"><h3>Notice watch (GST · TDS · MCA)</h3>
+    <p class="muted">The office mailbox script reads emails from the GST, Income-tax, TRACES and MCA portals — and client emails forwarding a notice — and adds them to Notices with the client, type, reference, period and reply date. Managers and Partners get an email for each new notice and a summary every morning (8 AM) and night (8 PM).</p>
+    <div class="mail-stat"><span class="pill ${s.enabled && s.connected ? 'g' : 'a'}">${s.enabled && s.connected ? '● Running' : s.connected ? 'Switched off' : 'Not set up'}</span>
+      <span class="small">Last check: <b>${when(s.last_check_at)}</b>${s.last_found != null ? ` · found <b>${s.last_found}</b>` : ''} · Needs a client: <b>${s.unmatched || 0}</b></span></div>
+    ${s.last_error ? `<p class="note warn small">Last problem: ${esc(s.last_error)}</p>` : ''}
+    <div class="form-grid" style="margin-top:12px">
+      <label>Check the mailbox every (minutes)<input type="number" id="nwEvery" min="5" max="240" value="${esc(s.every_minutes || 15)}"></label>
+      <label>WhatsApp template name<input id="nwTpl" value="${esc(s.wa_template || 'notice_alert')}"></label></div>
+    <label class="check" style="margin-top:8px"><input type="checkbox" id="nwOn" ${s.enabled ? 'checked' : ''}> Switched on</label>
+    <label class="check"><input type="checkbox" id="nwMail" ${s.alert_email ? 'checked' : ''}> Email alert to Managers &amp; Partners</label>
+    <label class="check"><input type="checkbox" id="nwWa" ${s.alert_wa ? 'checked' : ''}> WhatsApp alert to Managers &amp; Partners (needs the approved template below and their phone numbers in Team)</label>
+    <details class="small" style="margin-top:8px"><summary>WhatsApp template to submit in Meta (Utility, English)</summary>
+      <p>Name <b>notice_alert</b>, body:</p><pre class="code">New {{1}} notice for {{2}}: {{3}}. Reply due: {{4}}. Open {{5}}</pre></details>
+    <div class="toolbar" style="margin-top:12px"><button class="btn primary" id="nwSave">Save</button><span class="spacer"></span>
+      <button class="btn" id="nwKey">${s.connected ? 'Make a new key' : 'Make the notice key'}</button><button class="btn" id="nwScript">Mailbox script &amp; steps</button></div>
+    ${s.connected ? `<p class="muted small">Key made ${when(s.key_set_at)}. Making a new key stops the old one — paste the new key in the mailbox script as NOTICE_KEY.</p>` : ''}</div>`;
+  if (!isAdmin()) $$('input,button', box).forEach(x => x.disabled = true);
+  $('#nwSave', box).onclick = async () => {
+    try { await must(sb.rpc('notice_admin_save', { p: { enabled: $('#nwOn', box).checked, alert_email: $('#nwMail', box).checked, alert_wa: $('#nwWa', box).checked, wa_template: $('#nwTpl', box).value.trim(), every_minutes: Math.round(num($('#nwEvery', box).value)) || 15 } })); toast('Saved'); renderNoticeWatchSettings(box); }
+    catch (e) { toast(friendly(e), true); }
+  };
+  $('#nwKey', box).onclick = async () => {
+    if (s.connected && !confirm('Make a new key? The notice watch stops until you paste the new key into the mailbox script.')) return;
+    const bytes = crypto.getRandomValues(new Uint8Array(24)), key = 'jlrn_' + [...bytes].map(x => x.toString(16).padStart(2, '0')).join('');
+    const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(key)))].map(x => x.toString(16).padStart(2, '0')).join('');
+    try { await must(sb.rpc('notice_admin_set_key', { p_hash: hash })); } catch (e) { return toast(friendly(e), true); }
+    const m = modal('Notice key', `<p class="small" style="margin-top:0">Paste this in the mailbox script: Project Settings → Script properties → <b>NOTICE_KEY</b>. <b>It is shown only once.</b></p>
+      <div class="linkbox"><input readonly value="${esc(key)}"><button class="btn sm" id="nwCp">Copy</button></div>`);
+    $('#nwCp', m.el).onclick = () => copySecret(key, 'Key copied');
+    $$('[data-x]', m.el).forEach(x => x.addEventListener('click', () => renderNoticeWatchSettings(box)));
+  };
+  $('#nwScript', box).onclick = async () => {
+    let code = '';
+    try { const rr = await fetch('mail-intake-apps-script.gs', { cache: 'no-store' }); code = rr.ok ? await rr.text() : ''; } catch (e) {}
+    const m = modal('Notice watch — mailbox script', `<ol class="small steps">
+        <li>Sign in to the office Gmail and open the <b>JLR mail intake</b> project on <a href="https://script.google.com/home" target="_blank" rel="noopener">script.google.com</a> (the same one used for client mail).</li>
+        <li>Replace all the code with the script below and click <b>Save</b>.</li>
+        <li>Project Settings → Script properties → <b>Add</b>: name <b>NOTICE_KEY</b>, value = the key from “Make the notice key”. Keep INTAKE_KEY as it is.</li>
+        <li>Choose <b>setup</b> at the top and click <b>Run</b>. Allow the new “send email” permission.</li>
+        <li>Press <b>Check now</b> on the Notices page — the last check time updates within a minute.</li></ol>
+      ${code ? `<textarea readonly rows="14" class="code">${esc(code)}</textarea>` : '<p class="note warn small">Script file not found on the site — upload mail-intake-apps-script.gs with the other files.</p>'}`,
+      { wide: true, extra: code ? '<button class="btn" id="nwCpS">Copy script</button>' : '' });
+    if (code) $('#nwCpS', m.el).onclick = () => copySecret(code, 'Script copied');
+  };
+}
 
 /* ---------- GST auto-status via Sandbox (admin, Settings page) ---------- */
 async function renderGst(box) {
@@ -2088,7 +2175,7 @@ function renderFees(box, fees) {
   box.innerHTML = `<p class="muted small">Standard fees apply to every client; a client fee overrides it. The fee is filled in automatically when work is created.</p>
     <div class="card"><div class="form-grid fee-add">
       <label>Client<select name="fc"><option value="">Standard (all clients)</option>${opts(clients.filter(c => c.active), '', c => c.name, c => c.id)}</select></label>
-      <label>Return / work<input name="fr" list="dl-feeret" placeholder="e.g. GSTR-3B"></label>
+      <label>Return / work<input autocomplete="off" name="fr" list="dl-feeret" placeholder="e.g. GSTR-3B"></label>
       <label>Fee (₹)<input name="fa" type="number" min="0" step="1"></label>
       <div style="align-self:end"><button class="btn primary" id="feeAdd">Add / update</button></div>
       <datalist id="dl-feeret">${allRet.map(x => `<option value="${esc(x)}"></option>`).join('')}</datalist></div></div>
@@ -2189,8 +2276,10 @@ let nf = { status: 'open', dept: '', q: '' };
 VIEWS.notices = async v => {
   const r = await safe(sb.from('notices').select('*').order('reply_due', { ascending: true, nullsFirst: false }).limit(3000));
   if (r.error) { v.innerHTML = '<div class="card"><h3>Notices</h3><p class="note">Not set up yet — run <b>update-phase4.sql</b> in Supabase, then reload.</p></div>'; return; }
-  const all = r.data || [], t = today(), in7 = iso(addDays(new Date(), 7));
-  v.innerHTML = `<div class="page-head"><h2>Notices</h2><span class="spacer"></span>${isManager() ? '<button class="btn primary" id="addN">+ Add notice</button>' : ''}</div>
+  const all = (r.data || []).filter(n => isManager() || n.assigned_to === me.id), t = today(), in7 = iso(addDays(new Date(), 7));
+  v.innerHTML = `<div class="page-head"><h2>${nf.dept ? (nf.dept === 'ROC/MCA' ? 'MCA' : esc(nf.dept)) + ' notices' : isManager() ? 'All notices' : 'My notices'}</h2><span class="spacer"></span>
+      <button class="btn" id="nCheck" title="Look in the office mailbox for new notice emails now">${navIcon('refresh')}<span>Check now</span></button>${isManager() ? '<button class="btn primary" id="addN">+ Add notice</button>' : ''}</div>
+    <div id="nWatch"></div><div id="nMails"></div>
     <div class="bento-stats card stats4" style="margin-bottom:14px">
       <div class="mini red"><span>Reply overdue</span><b>${all.filter(n => isOpenNotice(n.status) && n.status !== 'Hearing' && n.reply_due && n.reply_due < t).length}</b></div>
       <div class="mini amber"><span>Reply due in 7 days</span><b>${all.filter(n => isOpenNotice(n.status) && n.reply_due >= t && n.reply_due <= in7).length}</b></div>
@@ -2208,7 +2297,7 @@ VIEWS.notices = async v => {
       ${list.map(n => { const late = isOpenNotice(n.status) && n.status !== 'Hearing' && n.reply_due && n.reply_due < t, soon = isOpenNotice(n.status) && n.reply_due >= t && n.reply_due <= in7;
         const can = isManager() || n.assigned_to === me.id;
         return `<tr class="${late ? 'overdue' : ''}"><td class="wrap"><b>${esc(clientName(n.client_id))}</b></td><td>${wtBadge(n.dept === 'ROC/MCA' ? 'ROC/MCA' : n.dept)}</td>
-          <td class="wrap">${esc(n.notice_type)}<div class="muted small">${esc([n.ref_no, n.period].filter(Boolean).join(' · '))}</div></td>
+          <td class="wrap">${esc(n.notice_type)}${n.auto ? ' <span class="pill b small" title="Added automatically from an email">from email</span>' : ''}${n.draft_reply ? ' <span class="pill g small">draft ready</span>' : ''}<div class="muted small">${esc([n.ref_no, n.period].filter(Boolean).join(' · '))}</div></td>
           <td>${fmtDate(n.notice_date)}</td><td class="${late ? 'late' : soon ? 'soon' : ''}">${fmtDate(n.reply_due)}${n.hearing_date ? `<div class="muted small">Hearing ${fmtDate(n.hearing_date)}</div>` : ''}</td>
           <td class="r">${n.amount ? inr(n.amount) : '—'}</td><td>${esc(profName(n.assigned_to) || '—')}</td>
           <td>${can ? `<select class="st st-${slug(n.status)}" data-ns="${n.id}" aria-label="Status">${opts(NOTICE_STATUSES, n.status)}</select>` : `<span class="st st-${slug(n.status)}">${esc(n.status)}</span>`}${n.replied_on ? `<div class="muted small">Replied ${fmtDate(n.replied_on)}</div>` : ''}</td>
@@ -2225,15 +2314,68 @@ VIEWS.notices = async v => {
     try { await must(sb.from('notices').update({ status: e.target.value }).eq('id', id)); toast('Saved'); route(); } catch (err) { toast(friendly(err), true); route(); }
   });
   $('#nList').addEventListener('click', e => { const id = e.target.dataset.ne; if (id) editNotice(all.find(n => n.id === id)); });
+  noticeWatchBar($('#nWatch'), $('#nCheck'));
+  if (isManager()) noticeMailList($('#nMails'));
 };
-function editNotice(n) {
+
+/* notice watch: status line + Check now */
+async function noticeWatchBar(box, btn) {
+  const r = await safe(sb.rpc('notice_status'));
+  if (r.error || !r.data) { box.innerHTML = ''; btn.onclick = () => toast('Notice watch is not set up yet — run update-session6.sql', true); return; }
+  const s = r.data, ago = t => { if (!t) return 'never'; const m = Math.round((Date.now() - new Date(t)) / 60000); return m < 1 ? 'just now' : m < 60 ? m + ' min ago' : m < 1440 ? Math.round(m / 60) + ' h ago' : new Date(t).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }); };
+  box.innerHTML = s.connected && s.enabled
+    ? `<p class="muted small nwatch">● Notice emails checked automatically every ${s.every_minutes} min, with a summary at 8 AM and 8 PM · last check <b>${ago(s.last_check_at)}</b>${s.last_error ? ` · <span class="late">problem: ${esc(s.last_error)}</span>` : ''}</p>`
+    : `<p class="note small">Automatic notice check is not connected yet${isAdmin() ? ' — <a href="#/settings">Settings → Notice watch</a>' : ' — ask the Admin to set it up'}. You can still add notices by hand.</p>`;
+  btn.onclick = async () => {
+    if (!(s.connected && s.enabled)) return toast('Notice watch is not connected yet' + (isAdmin() ? ' — see Settings → Notice watch' : ''), true);
+    btn.disabled = true; const lbl = $('span', btn); lbl.textContent = 'Checking…';
+    try {
+      const before = s.last_check_at;
+      await must(sb.rpc('notice_request_check'));
+      for (let i = 0; i < 18; i++) {                 // the mailbox script runs every minute; wait up to 3 minutes
+        await new Promise(ok => setTimeout(ok, 10000));
+        if (!document.body.contains(btn)) return;
+        const q = await safe(sb.rpc('notice_status'));
+        if (q.data && q.data.last_check_at && q.data.last_check_at !== before) {
+          toast(q.data.last_error ? 'Check failed: ' + q.data.last_error : q.data.last_found ? `${q.data.last_found} new notice email${q.data.last_found > 1 ? 's' : ''} found` : 'Checked — no new notices', !!q.data.last_error);
+          return route();
+        }
+      }
+      toast('The mailbox script did not answer — is it running? (Settings → Notice watch)', true);
+    } catch (e) { toast(friendly(e), true); }
+    btn.disabled = false; lbl.textContent = 'Check now';
+  };
+}
+
+/* notice emails the tracker could not match to a client */
+async function noticeMailList(box) {
+  const r = await safe(sb.from('notice_mails').select('*').eq('result', 'unmatched').order('created_at', { ascending: false }).limit(50));
+  const list = r.data || [];
+  if (!list.length) { box.innerHTML = ''; return; }
+  box.innerHTML = `<div class="card nmail"><h3>From email — needs a client (${list.length})</h3>
+    <p class="muted small">These look like notices, but no client has that GSTIN / PAN / TAN / CIN or email. Choose the client to add the notice, or ignore it.</p>
+    <div class="table-wrap"><table><thead><tr><th>Received</th><th>Email</th><th>Read as</th><th></th></tr></thead><tbody>
+    ${list.map(m => `<tr><td>${fmtDate((m.received_at || m.created_at).slice(0, 10))}</td>
+      <td class="wrap"><b>${esc(m.subject || '(no subject)')}</b><div class="muted small">${esc(m.sender || '')}</div></td>
+      <td class="wrap">${esc([m.dept === 'ROC/MCA' ? 'MCA' : m.dept, m.notice_type].filter(Boolean).join(' · '))}<div class="muted small">${esc([m.ref_no, m.period, m.reply_due ? 'reply by ' + fmtDate(m.reply_due) : ''].filter(Boolean).join(' · '))}</div></td>
+      <td class="nowrap"><button class="btn sm primary" data-nmadd="${m.id}">Add as notice</button> <button class="btn sm ghost" data-nmign="${m.id}">Ignore</button></td></tr>`).join('')}
+    </tbody></table></div></div>`;
+  box.onclick = async e => {
+    const a = e.target.dataset.nmadd, g = e.target.dataset.nmign;
+    if (g) { try { await must(sb.from('notice_mails').update({ result: 'ignored', note: 'Ignored by ' + (me.full_name || me.email) }).eq('id', g)); noticeMailList(box); } catch (err) { toast(friendly(err), true); } }
+    if (a) { const m = list.find(x => x.id === a);
+      editNotice(null, { dept: NOTICE_DEPTS.includes(m.dept) ? m.dept : 'Other', notice_type: m.notice_type, ref_no: m.ref_no, period: m.period, reply_due: m.reply_due, amount: m.amount,
+        notice_date: (m.received_at || m.created_at).slice(0, 10), status: 'Open', remarks: 'From the email "' + (m.subject || '') + '" (' + (m.sender || '') + ')', source: 'email', mail_id: m.mail_id, auto: true }, m.id); }
+  };
+}
+function editNotice(n, prefill = null, mailRow = null) {
   const isNew = !n, admin = isManager();
-  n = n || { dept: 'GST', status: 'Open', notice_date: today() };
+  n = n || prefill || { dept: 'GST', status: 'Open', notice_date: today() };
   const can = admin || n.assigned_to === me.id, dis = admin ? '' : 'disabled', ro = can ? '' : 'disabled';
   const body = `<div class="form-grid">
     <label class="full">Client<select name="client_id" ${dis}>${isNew ? '<option value="">Select client…</option>' : ''}${opts(clients.filter(c => c.active || c.id === n.client_id), n.client_id, c => c.name, c => c.id)}</select></label>
     <label>Department<select name="dept" ${dis}>${opts(NOTICE_DEPTS, n.dept, d => d === 'ROC/MCA' ? 'MCA' : d)}</select></label>
-    <label>Notice type<input name="notice_type" list="dl-ntype" value="${esc(n.notice_type || '')}" placeholder="e.g. ASMT-10" ${dis}></label>
+    <label>Notice type<input autocomplete="off" name="notice_type" list="dl-ntype" value="${esc(n.notice_type || '')}" placeholder="e.g. ASMT-10" ${dis}></label>
     <datalist id="dl-ntype">${NOTICE_TYPES.map(x => `<option value="${esc(x)}"></option>`).join('')}</datalist>
     <label>Reference / DIN no.<input name="ref_no" value="${esc(n.ref_no || '')}" ${ro}></label>
     <label>Period / FY<input name="period" value="${esc(n.period || '')}" placeholder="e.g. FY 2023-24" ${ro}></label>
@@ -2245,18 +2387,27 @@ function editNotice(n) {
     <label>Status<select name="status" ${ro}>${opts(NOTICE_STATUSES, n.status)}</select></label>
     <label>Replied on<input type="date" name="replied_on" value="${esc(n.replied_on || '')}" ${ro}></label>
     <label>Reply acknowledgement no.<input name="ack_no" value="${esc(n.ack_no || '')}" ${ro}></label>
-    <label class="full">Remarks / next action<textarea name="remarks" ${ro}>${esc(n.remarks || '')}</textarea></label></div>`;
+    <label class="full">Remarks / next action<textarea name="remarks" ${ro}>${esc(n.remarks || '')}</textarea></label>
+    <div class="full nreply"><div class="toolbar"><b>Reply draft</b><span class="spacer"></span>${can ? '<button type="button" class="btn sm" id="nAi">✦ Draft reply with AI</button>' : ''}</div>
+      <textarea name="draft_reply" rows="${n.draft_reply ? 12 : 3}" placeholder="${can ? 'Write the reply here, or press “Draft reply with AI”. Paste the notice text in Remarks first for a better draft.' : ''}" ${ro}>${esc(n.draft_reply || '')}</textarea>
+      ${n.draft_at ? `<p class="muted small">Last drafted ${new Date(n.draft_at).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}</p>` : ''}</div></div>`;
   const m = modal(isNew ? 'Add notice' : 'Notice details', body, {
     extra: isPartner() && !isNew ? '<button class="btn danger" data-ndel>Delete</button>' : '',
     onSave: can ? async el => {
       const rec = {};
-      ['ref_no', 'period', 'notice_date', 'hearing_date', 'status', 'replied_on', 'ack_no', 'remarks'].forEach(k => rec[k] = fv(el, k) || null);
+      ['ref_no', 'period', 'notice_date', 'hearing_date', 'status', 'replied_on', 'ack_no', 'remarks', 'draft_reply'].forEach(k => rec[k] = fv(el, k) || null);
+      if ((rec.draft_reply || null) !== (n.draft_reply || null)) rec.draft_at = rec.draft_reply ? new Date().toISOString() : null;
+      if (isNew && prefill) Object.assign(rec, { source: prefill.source || null, mail_id: prefill.mail_id || null, auto: !!prefill.auto });
       if (admin) { ['client_id', 'dept', 'notice_type', 'reply_due', 'assigned_to'].forEach(k => rec[k] = fv(el, k) || null); rec.amount = fv(el, 'amount') === '' ? null : num(fv(el, 'amount')); }
       if (admin && (!rec.client_id || !rec.notice_type)) { toast('Client and notice type are required', true); return false; }
-      if (isNew) await must(sb.from('notices').insert(rec)); else await must(sb.from('notices').update(rec).eq('id', n.id));
+      if (isNew) { const { data } = await must(sb.from('notices').insert(rec).select('id').single());
+        if (mailRow) await safe(sb.from('notice_mails').update({ result: 'added', client_id: rec.client_id, notice_id: data && data.id }).eq('id', mailRow)); }
+      else await must(sb.from('notices').update(rec).eq('id', n.id));
       toast('Saved'); route();
     } : null
   });
+  const ai = $('#nAi', m.el);
+  if (ai) ai.onclick = () => aiNoticeDraft(m.el, n, ai);
   const d = $('[data-ndel]', m.el);
   if (d) d.onclick = async () => { if (!confirm('Delete this notice?')) return; try { await must(sb.from('notices').delete().eq('id', n.id)); m.close(); toast('Deleted'); route(); } catch (e) { toast(friendly(e), true); } };
 }
@@ -4688,7 +4839,7 @@ function editRenewal(x, preset = {}) {
   const cl = clients.filter(c => (c.active && (isManager() || c.default_staff === me.id)) || c.id === x.client_id);
   const body = `<div class="form-grid">
     <label class="full">Client<select name="client_id">${isNew && !x.client_id ? '<option value="">Select client…</option>' : ''}${opts(cl, x.client_id, c => c.name, c => c.id)}</select></label>
-    <label>Type<input name="kind" list="dl-rnk" value="${esc(x.kind || '')}" placeholder="Pick or type"></label>
+    <label>Type<input autocomplete="off" name="kind" list="dl-rnk" value="${esc(x.kind || '')}" placeholder="Pick or type"></label>
     <datalist id="dl-rnk">${Object.keys(RN_KINDS).map(k => `<option value="${esc(k)}"></option>`).join('')}</datalist>
     <label>Holder name<input name="holder" value="${esc(x.holder || '')}" placeholder="e.g. DSC holder (director)"></label>
     <label>Licence / registration no.<input name="ref_no" value="${esc(x.ref_no || '')}"></label>
@@ -5031,7 +5182,7 @@ async function openOnboarding(c, after = () => route()) {
   const itemRow = (it, i) => `<div class="ob-item ${it.done ? 'done' : ''} ${it.na ? 'na' : ''}"><label class="check"><input type="checkbox" data-ob="${i}" ${it.done ? 'checked' : ''} ${it.na ? 'disabled' : ''}> ${esc(it.label)}</label>
       <span class="muted small">${it.done && it.on ? `${fmtDate(it.on)}${it.by ? ' · ' + esc(profName(it.by)) : ''}` : ''}</span><span class="spacer"></span>
       <input class="ob-note" data-obn="${i}" value="${esc(it.note || '')}" placeholder="Note"><button type="button" class="link small" data-obna="${i}">${it.na ? 'Needed' : 'N/A'}</button></div>`;
-  const feeRows = () => fees.map((f, i) => `<tr data-fi="${i}"><td><input data-f="work" list="dl-obfee" value="${esc(f.work)}" placeholder="e.g. GSTR-3B"></td><td><select data-f="freq">${opts(FEE_FREQ, f.freq)}</select></td>
+  const feeRows = () => fees.map((f, i) => `<tr data-fi="${i}"><td><input autocomplete="off" data-f="work" list="dl-obfee" value="${esc(f.work)}" placeholder="e.g. GSTR-3B"></td><td><select data-f="freq">${opts(FEE_FREQ, f.freq)}</select></td>
       <td class="r"><input data-f="amount" type="number" min="0" step="1" value="${esc(f.amount || '')}" style="max-width:120px"></td><td><button type="button" class="link small danger-t" data-fdel="${i}">Remove</button></td></tr>`).join('');
   const body = `<div class="ob-head"><div><b>${esc(c.name)}</b> <span class="muted small">· started ${fmtDate(ob.started_on)}</span></div><span class="spacer"></span><span class="badge ${ob.status === 'Completed' ? 'ok' : ''}" data-obp></span></div>
     ${OB_GROUPS.map(g => `<h4 class="ob-g">${esc(g)}</h4>${items.map((it, i) => [it, i]).filter(([it]) => (it.grp || 'Set-up') === g || (g === 'Set-up' && !OB_GROUPS.includes(it.grp))).map(([it, i]) => itemRow(it, i)).join('')}
@@ -7615,7 +7766,7 @@ function bkEditor(body) {
       <td><input type="date" data-k="d" value="${esc(r.d || '')}" style="width:128px"></td><td><input data-k="n" value="${esc(r.n || '')}" style="width:300px" title="${esc(r.n || '')}"></td><td><input data-k="r" value="${esc(r.r || '')}" style="width:96px"></td>
       <td><input class="r" data-k="dr" value="${+r.dr ? bkFix(r.dr) : ''}" inputmode="decimal" style="width:96px"></td><td><input class="r" data-k="cr" value="${+r.cr ? bkFix(r.cr) : ''}" inputmode="decimal" style="width:96px"></td>
       <td><input class="r" data-k="b" value="${bkFix(r.b)}" inputmode="decimal" style="width:104px"></td>
-      <td><input data-k="p" value="${esc(r.p || '')}" style="width:140px"></td><td><input data-k="l" value="${esc(r.l || '')}" list="bkLed" style="width:150px" class="${r.lh === 'auto' ? 'bk-auto' : ''}" title="${r.lh === 'rule' ? 'From a ledger rule' : r.lh === 'auto' ? 'Suggested from the narration' : ''}"></td>
+      <td><input data-k="p" value="${esc(r.p || '')}" style="width:140px"></td><td><input autocomplete="off" data-k="l" value="${esc(r.l || '')}" list="bkLed" style="width:150px" class="${r.lh === 'auto' ? 'bk-auto' : ''}" title="${r.lh === 'rule' ? 'From a ledger rule' : r.lh === 'auto' ? 'Suggested from the narration' : ''}"></td>
       <td class="g1-auto small">${BANK.vtype(r, r.l)}</td><td class="g1-auto g1-chk ${f.ok === false ? 'bad' : 'ok'}" data-chk>${f.ok === false ? `✗ expected ${bkAmt(f.exp)}` : f.calc != null ? '<span class="muted">✓ (no balance)</span>' : '✓'}</td>
       <td><button class="link small danger-t" data-delrow="${i}" aria-label="Remove row ${i + 1}" title="Remove row">×</button></td></tr>`; };
   const stats = () => `<div class="mini blue"><span>Opening</span><b class="tp-amt">${bkInr(S.opening)}</b></div><div class="mini green"><span>Credits (${S.nCr})</span><b class="tp-amt">${bkInr(S.cr)}</b></div>
@@ -7687,7 +7838,7 @@ function bkEditor(body) {
     if (id === 'bkSetL') {
       const P = $$('[data-pick]', body).filter(x => x.checked).map(x => +x.dataset.pick);
       if (!P.length) { toast('Tick the rows first', true); return; }
-      modal(`Ledger for ${P.length} row${P.length > 1 ? 's' : ''}`, `<label>Ledger<input name="l" list="bkLed2" autofocus></label><datalist id="bkLed2">${ledgers().map(l => `<option value="${esc(l)}">`).join('')}</datalist>`,
+      modal(`Ledger for ${P.length} row${P.length > 1 ? 's' : ''}`, `<label>Ledger<input autocomplete="off" name="l" list="bkLed2" autofocus></label><datalist id="bkLed2">${ledgers().map(l => `<option value="${esc(l)}">`).join('')}</datalist>`,
         { saveText: 'Set', onSave: w => { const l = fv(w, 'l'); P.forEach(i => { S.rows[i].l = l; S.rows[i].lm = 1; S.rows[i].lh = ''; }); dirty(); draw(); } });
       return;
     }
@@ -7803,6 +7954,195 @@ async function bkExcel() {
   X.writeFile(wb, `${S.holder ? slug(S.holder).slice(0, 30) + '-' : ''}${slug(S.bank)}-${String(S.account || '').slice(-4)}-${S.period_from || ''}-to-${S.period_to || ''}.xlsx`.replace(/-+/g, '-'));
 }
 
-window.__tracker = { BANK, bankReadFile, TDSW, MCA, BILL, parseMcaSheets, mcaPlanAll, fillGstWorkings, G1, GR, RECO, gstr3bFromApi, periodToMonth, strongPassword, periodFor, dueDateFor, parseCSV, toCSV, gstLateFee, gstInterest, tdsCalc, rocCalc, monthsSpan, tdsDepositDue, g1json, clientReportHtml, clientReportMsg, rnStage, anyDate, parseRenewalRows, gstPayDue, tdsPayDue, advInstalment, advCurrent, advDue, recurringPlan, taxMsg, addMonths, fyEndOf, obProgress, rnKind };
+
+/* =====================================================================
+   v23  AI HELP CHAT  +  NOTICE REPLY DRAFT
+   Uses the Edge Function "assistant" (Claude key from Settings → Bill reading).
+   Without a key both still work: the chat answers from the built-in guide,
+   and the notice draft is a ready letter format with blanks to fill.
+   ===================================================================== */
+const HELP = {
+  noKey: false,
+  // offline guide: [keywords, answer, [ [label, route] ...] ]
+  topics: [
+    [['start', 'new', 'joiner', 'begin', 'first day', 'tour', 'features', 'what can', 'overview', 'menu', 'kya hai', 'enna'],
+      'Welcome! The menu on the left is grouped by work: **Overview** (Dashboard, calendar, all your work and notices), **GST**, **TDS** and **MCA** (each with its work list, working page and notices), **Tools** (bank statements, late fee calculator, checklists, law updates), **Clients**, and **Payments & billing**. Start each day on the Dashboard — it shows what is overdue and due this week.',
+      [['Dashboard', 'dashboard'], ['My work', 'work'], ['Due-date calendar', 'calendar']]],
+    [['my work', 'my task', 'assigned', 'today', 'pending', 'overdue', 'what should i do'],
+      'Your work is in **Overview → My work** (Managers see **All work**). Filter by month or status; click a row to update its status (Pending data → In progress → Ready to file → Filed), add the ARN and tick the checklist. The Dashboard shows your overdue and due-in-7-days items.',
+      [['My work', 'work'], ['Dashboard', 'dashboard']]],
+    [['gstr-1', 'gstr1', 'gstr 1', 'iff', 'sales', 'outward', 'json'],
+      'GSTR-1 work is created automatically each month for monthly clients (IFF / quarterly GSTR-1 for QRMP). To prepare it: **GST → GST review** → pick client and month → load the sales data (Excel template or bills) → check the summary → download the **GSTR-1 JSON** and upload it on the GST portal. Then mark the work Filed with the ARN in **GST → GST work**.',
+      [['GST review', 'gst'], ['GST work', 'work']]],
+    [['3b', 'gstr-3b', 'gstr3b', 'itc', 'input', '2b', 'reconcil', 'purchase'],
+      'For GSTR-3B open **GST → GST review**, pick the client and month, load purchases and the **GSTR-2B** — the Reconciliation tab shows matched, missing and mismatched bills. The summary gives the 3B figures. Purchase bills can be read with the bill reader (PDF or photo).',
+      [['GST review', 'gst']]],
+    [['tds', '26q', '24q', '27q', 'challan', 'deductee', '194', '393', 'form 16', 'traces', 'tcs'],
+      'TDS has two places: **TDS → TDS / TCS work** for the quarterly returns and due dates, and **TDS → TDS working** for deductee-wise entries, challans and return data. Sections show both the old (1961 Act) and new (2025 Act) numbers.',
+      [['TDS working', 'tds'], ['TDS work', 'work']]],
+    [['mca', 'roc', 'aoc', 'mgt', 'dir-3', 'kyc', 'company', 'llp', 'agm', 'director'],
+      '**MCA → Companies & LLPs** holds each company / LLP with its AGM date, ROC due dates (AOC-4, MGT-7, Form 11, Form 8) and directors with DIR-3 KYC. The filing work itself is in **MCA → MCA / ROC work**.',
+      [['Companies & LLPs', 'mca'], ['MCA work', 'work']]],
+    [['notice', 'scn', 'show cause', 'asmt', 'drc', 'demand', 'hearing', 'intimation', '143', '148', 'reply'],
+      'Notices are under **Overview → All notices** (or GST / TDS / MCA notices in each group). Notice emails from the portals are added automatically; press **Check now** to look right away. Open a notice and use **Draft reply with AI** for a first draft, then edit, save and set the status to Reply drafted / Replied.',
+      [['All notices', 'notices']]],
+    [['bank', 'statement', 'tally', 'excel', 'convert', 'passbook'],
+      '**Tools → Bank statements**: drop a bank statement (PDF, password PDF, Excel / CSV or a scan). Every row is checked against the running balance. Fill ledgers, then download **Excel** or **Tally XML** (ledgers first, then vouchers).',
+      [['Bank statements', 'bank']]],
+    [['late fee', 'interest', 'penalty', 'calculat', '234e', 'late'],
+      '**Tools → Late fee calculator** works out GST late fee and interest, TDS late filing fee (234E) and interest, and ROC additional fees.',
+      [['Late fee calculator', 'calc']]],
+    [['client', 'gstin', 'pan', 'add client', 'new client', 'contact', 'master'],
+      'Client details are in **Clients → Clients** (Managers) — GSTIN, PAN, TAN, CIN, email, phone, GST scheme, services and default staff. Use the top search box to find any client by name, GSTIN or PAN. New clients go through **Clients → Onboarding**.',
+      [['Clients', 'clients'], ['Onboarding', 'onboarding']]],
+    [['mail', 'email', 'attachment', 'data received', 'inbox', 'documents'],
+      'Files that clients email to the office mailbox arrive in **Clients → Client mail**, matched to the client. From there mark the data received or import it into GST review.',
+      [['Client mail', 'inbox']]],
+    [['dsc', 'renew', 'expiry', 'lut', 'licence', 'license'],
+      '**Clients → Renewals** tracks DSC, LUT, trade licences and other expiry dates, with reminders before they run out.',
+      [['Renewals', 'renewals']]],
+    [['bill', 'invoice', 'fee', 'payment received', 'outstanding', 'zoho'],
+      'Fees and invoices are in **Payments & billing → Billing & fees** (Managers): fee list, invoices, payments received and outstanding.',
+      [['Billing & fees', 'billing']]],
+    [['tax payment', 'intimation', 'advance tax', 'pay tax', 'how much to pay'],
+      '**Payments & billing → Tax payment intimation** sends clients the GST / TDS / advance tax amount to pay and the due date, by WhatsApp or email.',
+      [['Tax payment intimation', 'taxpay']]],
+    [['report', 'monthly report', 'performance', 'on time'],
+      '**Clients → Monthly client reports** makes a status report to send to each client. Partners see office performance in **Office → Reports**.',
+      [['Monthly client reports', 'clientreport']]],
+    [['checklist', 'steps', 'procedure'],
+      '**Tools → Checklists** has the step lists for each return; they appear inside each work item so you can tick them as you go.',
+      [['Checklists', 'checklists']]],
+    [['due date', 'calendar', 'when is', 'last date'],
+      '**Overview → Due-date calendar** shows every statutory due date month by month, and Managers can create the work for many clients from it.',
+      [['Due-date calendar', 'calendar']]],
+    [['password', 'login', 'theme', 'dark', 'layout', 'install', 'phone', 'mobile'],
+      'Click your name at the top right: **Theme & layout** (two layouts, light / dark), **Install app on this device** (works on phone too) and **Change password**.',
+      []],
+    [['whatsapp', 'reminder'],
+      'Staff get WhatsApp reminders of their pending work, and Managers / Partners get alerts for new notices. Your phone number must be saved in Team & logins — ask the Admin.',
+      []]
+  ],
+  find(q) {
+    const s = ' ' + q.toLowerCase() + ' ';
+    let best = null, score = 0;
+    for (const t of this.topics) { const sc = t[0].reduce((a, k) => a + (s.includes(k) ? k.length : 0), 0); if (sc > score) { score = sc; best = t; } }
+    return best;
+  },
+  md(t) {   // tiny, safe markdown: **bold**, [label](#/route), line breaks, numbered lines
+    return esc(t).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/\[([^\]]+)\]\((#\/[a-z0-9\-]+)\)/g, '<a href="$2">$1</a>').replace(/\n/g, '<br>');
+  }
+};
+
+function mountHelp() {
+  if ($('#helpFab')) return;
+  const fab = document.createElement('button');
+  fab.id = 'helpFab'; fab.className = 'help-fab'; fab.setAttribute('aria-label', 'Help — ask where to find things'); fab.title = 'Help';
+  fab.innerHTML = `${navIcon('chat')}<span>Help</span>`;
+  const pane = document.createElement('section');
+  pane.id = 'helpPane'; pane.className = 'help-pane'; pane.hidden = true; pane.setAttribute('aria-label', 'Help chat');
+  pane.innerHTML = `<header><b>Tracker help</b><span class="muted small" id="hpMode"></span><span class="spacer"></span><button class="icon-btn" id="hpX" aria-label="Close help">×</button></header>
+    <div class="hp-log" id="hpLog" aria-live="polite"></div>
+    <div class="hp-chips" id="hpChips">${['Show me around', 'Where is my work?', 'How do I file GSTR-1?', 'How do notices work?', 'Convert a bank statement'].map(q => `<button class="chip" data-q="${esc(q)}">${esc(q)}</button>`).join('')}</div>
+    <form id="hpForm"><input id="hpIn" autocomplete="off" placeholder="Ask anything about the tracker…" aria-label="Your question"><button class="btn primary sm">Ask</button></form>`;
+  document.body.append(fab, pane);
+  const log = $('#hpLog', pane), hist = [];
+  const say = (who, html) => { const d = document.createElement('div'); d.className = 'hp-msg ' + who; d.innerHTML = html; log.appendChild(d); log.scrollTop = log.scrollHeight; return d; };
+  const offline = q => {
+    const t = HELP.find(q);
+    if (!t) return say('bot', `I'm not sure about that one. Try words like <i>GST</i>, <i>notice</i>, <i>TDS</i>, <i>bank statement</i> or <i>client</i> — or ask your Manager.${HELP.noKey && isAdmin() ? '<div class="muted small">Tip: add a Claude key in Settings → Bill reading and I can answer any question.</div>' : ''}`);
+    say('bot', HELP.md(t[1]) + (t[2].length ? `<div class="hp-links">${t[2].filter(([, r]) => r !== 'clients' && r !== 'billing' || isManager()).map(([l, r]) => `<a class="btn sm" href="#/${r}">${esc(l)} →</a>`).join('')}</div>` : ''));
+  };
+  const ask = async q => {
+    q = q.trim(); if (!q) return;
+    $('#hpChips', pane).hidden = true;
+    say('me', esc(q)); hist.push({ role: 'user', content: q });
+    if (HELP.noKey) { offline(q); return; }
+    const wait = say('bot wait', '<span class="dots"><i></i><i></i><i></i></span>');
+    try {
+      const j = await fnCall('assistant', 'help', { mode: 'help', messages: hist, page: location.hash });
+      wait.remove(); say('bot', HELP.md(j.text || '…')); hist.push({ role: 'assistant', content: j.text || '' });
+      $('#hpMode', pane).textContent = '· AI';
+    } catch (e) {
+      wait.remove(); hist.pop();
+      if (/no_key|Could not reach|not found|404/i.test(e.message)) { HELP.noKey = true; $('#hpMode', pane).textContent = '· built-in guide'; }
+      else say('bot', `<span class="muted small">${esc(e.message)} — answering from the built-in guide:</span>`);
+      offline(q);
+    }
+  };
+  const open = on => { pane.hidden = !on; fab.classList.toggle('on', on); if (on) { if (!log.children.length) say('bot', `Hi ${esc((me.full_name || '').split(' ')[0] || '')}! I can tell you what each part of the tracker does and where to find it. Ask a question or pick one below.`); setTimeout(() => $('#hpIn', pane).focus(), 50); } };
+  fab.onclick = () => open(pane.hidden);
+  $('#hpX', pane).onclick = () => open(false);
+  $('#hpForm', pane).onsubmit = e => { e.preventDefault(); const i = $('#hpIn', pane); const q = i.value; i.value = ''; ask(q); };
+  $('#hpChips', pane).onclick = e => { const q = e.target.dataset.q; if (q) ask(q === 'Show me around' ? 'Give me a tour of the features' : q); };
+  log.addEventListener('click', e => { if (e.target.closest('a[href^="#/"]') && innerWidth < 700) open(false); });
+}
+
+/* ---------- notice reply draft ---------- */
+function noticeLetter(n) {          // ready letter format when AI is not available
+  const c = clientById(n.client_id) || {}, d = n.dept === 'ROC/MCA' ? 'MCA' : n.dept;
+  const idl = [c.gstin && 'GSTIN: ' + c.gstin, c.pan && 'PAN: ' + c.pan, c.tan && 'TAN: ' + c.tan, c.cin && 'CIN / LLPIN: ' + c.cin].filter(Boolean).join(' | ');
+  const to = { GST: 'The Proper Officer,\n[Designation, Range / Circle]\n[Office of the GST department]', TDS: 'The Assessing Officer (TDS) / CPC-TDS,\n[Ward / Circle]', 'MCA': 'The Registrar of Companies,\n[ROC, State]', Other: 'The Assessing Officer,\n[Ward / Circle]' }[d] || 'The Proper Officer';
+  const form = /ASMT-10/i.test(n.notice_type) ? 'Form GST ASMT-11' : /DRC-01A/i.test(n.notice_type) ? 'Form GST DRC-01A Part B' : /DRC-01|73|74/i.test(n.notice_type) ? 'Form GST DRC-06' : /REG/i.test(n.notice_type) ? 'the reply form on the GST portal (REG-04 / REG-18)' : /143|148|142|139|245/.test(n.notice_type) ? 'the e-Proceedings response on the Income-tax portal' : d === 'TDS' ? 'a correction statement on TRACES' : 'the portal';
+  return `Date: ${fmtDate(today())}
+
+To,
+${to}
+
+Subject: Reply to ${n.notice_type || 'notice'}${n.ref_no ? ' – Ref / DIN ' + n.ref_no : ''}${n.period ? ' – ' + n.period : ''}
+In the case of: ${c.name || '[Client name]'}${idl ? '\n' + idl : ''}
+
+Respected Sir / Madam,
+
+We refer to the above notice dated ${n.notice_date ? fmtDate(n.notice_date) : '[notice date]'}${n.amount ? ' involving an amount of Rs. ' + inr(n.amount).replace('₹', '') : ''}. On behalf of our client, we submit as follows:
+
+1. [Point raised in the notice] – [Our explanation, with figures from books / returns]
+2. [Point raised in the notice] – [Our explanation]
+3. [Any reconciliation or reason for difference]
+
+In view of the above, we request you to kindly accept this reply and drop the proceedings. If any further information is needed, we request an opportunity of personal hearing.
+
+Documents enclosed:
+a) [Reconciliation statement]
+b) [Copies of returns / invoices / ledgers]
+c) Authorisation letter
+
+Thanking you,
+Yours faithfully,
+For ${c.name || '[Client name]'}
+
+[Authorised signatory]
+${firmName()} (Authorised representative)
+
+---
+Points to check before filing:
+• Fill every [ … ] with facts from the books.
+• File through ${form} before ${n.reply_due ? fmtDate(n.reply_due) : 'the due date'}.
+• Attach the reconciliation and supporting documents.
+• Keep the acknowledgement number and enter it here.`;
+}
+async function aiNoticeDraft(el, n, btn) {
+  const ta = $('[name="draft_reply"]', el);
+  if (!n.id) { ta.value = noticeLetter({ ...n, client_id: fv(el, 'client_id'), notice_type: fv(el, 'notice_type'), ref_no: fv(el, 'ref_no'), period: fv(el, 'period'), notice_date: fv(el, 'notice_date'), reply_due: fv(el, 'reply_due'), amount: fv(el, 'amount'), dept: fv(el, 'dept') }); ta.rows = 14; toast('Letter format filled in — save the notice first to get an AI draft'); return; }
+  const m = modal('Draft reply with AI', `<p class="small" style="margin-top:0">Claude drafts the reply from the notice details. For a better draft paste the notice text and add your explanation. The draft is for a CA to check — it never files anything.</p>
+    <label class="full">Text of the notice (copy from the PDF / portal — optional)<textarea id="aiNt" rows="7" placeholder="Paste the notice here…"></textarea></label>
+    <label class="full">Your facts / explanation (optional)<textarea id="aiFc" rows="4" placeholder="e.g. Difference is due to credit notes of ₹2.1 lakh issued in March, shown in GSTR-1 of April…"></textarea></label>
+    ${ta.value.trim() ? '<label class="check"><input type="checkbox" id="aiImp" checked> Improve the current draft instead of starting again</label>' : ''}`, { saveText: 'Write the draft', onSave: async () => {
+      const go = $('[data-save]', m.el); go.disabled = true; go.textContent = 'Writing… (up to a minute)';
+      try {
+        if (ta.value.trim() !== (n.draft_reply || '').trim()) await must(sb.from('notices').update({ draft_reply: ta.value || null }).eq('id', n.id));
+        const j = await fnCall('assistant', 'notice_reply', { mode: 'notice_reply', notice_id: n.id, notice_text: $('#aiNt', m.el).value, facts: $('#aiFc', m.el).value, improve: !!($('#aiImp', m.el) || {}).checked });
+        ta.value = j.text || ''; ta.rows = 16;
+        await safe(sb.from('notices').update({ draft_reply: ta.value, draft_at: new Date().toISOString(), ...(n.status === 'Open' ? { status: 'Reply drafted' } : {}) }).eq('id', n.id));
+        n.draft_reply = ta.value; if (n.status === 'Open') { n.status = 'Reply drafted'; const st = $('[name="status"]', el); if (st) st.value = 'Reply drafted'; }
+        toast(`Draft written${j.cost_inr ? ` · cost ₹${(+j.cost_inr).toFixed(2)}` : ''} — check every point before use`);
+      } catch (e) {
+        if (/no_key|Could not reach/i.test(e.message)) { if (!ta.value.trim()) ta.value = noticeLetter(n); ta.rows = 16; toast('AI is not set up — the standard letter format is filled in instead' + (isAdmin() ? ' (add a Claude key in Settings → Bill reading)' : ''), true); }
+        else { toast(friendly(e), true); go.disabled = false; go.textContent = 'Write the draft'; return false; }
+      }
+    } });
+}
+
+window.__tracker = { HELP, noticeLetter, BANK, bankReadFile, TDSW, MCA, BILL, parseMcaSheets, mcaPlanAll, fillGstWorkings, G1, GR, RECO, gstr3bFromApi, periodToMonth, strongPassword, periodFor, dueDateFor, parseCSV, toCSV, gstLateFee, gstInterest, tdsCalc, rocCalc, monthsSpan, tdsDepositDue, g1json, clientReportHtml, clientReportMsg, rnStage, anyDate, parseRenewalRows, gstPayDue, tdsPayDue, advInstalment, advCurrent, advDue, recurringPlan, taxMsg, addMonths, fyEndOf, obProgress, rnKind };
 start();
 })();
