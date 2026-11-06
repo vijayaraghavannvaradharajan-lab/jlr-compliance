@@ -7307,7 +7307,7 @@ const BANK = (() => {
     const byIfsc = ifsc && BANKS.find(([, , pre]) => pre === ifsc.slice(0, 4).toUpperCase());
     const bank = (byIfsc || BANKS.find(([, re]) => re.test(head.slice(0, 600))) || BANKS.find(([, re]) => re.test(head)) || [''])[0];
     const acct = (t.match(/(?:a\/?c|account)\s*(?:no|number|num)?\.?\s*[:\-]?\s*([0-9Xx*]{6,20})\b/i) || t.match(/\(INR\)\s*-\s*(\d{9,18})/) || [])[1] || '';
-    const name = ((t.match(/(?:account\s*name|a\/c\s*name|customer\s*name|name)\s*[:\-]\s*([^\n]{3,60})/i) || [])[1] || '').trim();
+    const name = ((t.match(/(?:account\s*name|a\/c\s*name|customer\s*name|name)\s*[:\-]\s*([^\n]{3,80})/i) || [])[1] || '').split(/\s{2,}|\s+(?=(?:a\/c\s|branch|ifsc|address|cust|customer|account|micr|phone|mobile|e-?mail|date|period|statement|type|currency|jt\.?)\b[^:]{0,20}:)/i)[0].trim().slice(0, 60);
     const pm = t.match(/(?:period|from)\s*:?\s*([0-9A-Za-z\/\-. ]{6,12}?)\s*(?:to|-)\s*:?\s*([0-9A-Za-z\/\-. ]{6,12})(?:\s|$)/i);
     const g = re => { const m = t.match(re); return m ? amt(m[1]) : null; };
     const ob = g(/opening\s*bal(?:ance)?\s*:?\s*(?:rs\.?|inr|₹)?\s*([\d,]+\.\d{2})/i) || g(/balance\s*as\s*on[^:\n]{0,20}:\s*([\d,]+\.\d{2})/i);
@@ -7476,8 +7476,10 @@ async function bankReadAi(file, clientId) {
 const BK_GROUPS = ['Sundry Debtors', 'Sundry Creditors', 'Indirect Expenses', 'Direct Expenses', 'Indirect Incomes', 'Direct Incomes', 'Duties & Taxes', 'Cash-in-Hand', 'Bank Accounts', 'Bank OD A/c', 'Capital Account',
   'Loans (Liability)', 'Secured Loans', 'Unsecured Loans', 'Loans & Advances (Asset)', 'Deposits (Asset)', 'Current Liabilities', 'Current Assets', 'Provisions', 'Fixed Assets', 'Investments', 'Purchase Accounts', 'Sales Accounts', 'Suspense A/c'];
 const BK_PAGE = 200;
-let bkClient = '', bkCur = null, bkFile = null, bkDirty = false, bkFilter = 'all', bkQ = '', bkPg = 0, bkRules = [];
+let bkCur = null, bkFile = null, bkDirty = false, bkFilter = 'all', bkQ = '', bkPg = 0, bkRules = [];
 window.addEventListener('beforeunload', e => { if (bkDirty) { e.preventDefault(); e.returnValue = ''; } });
+const bkState = () => (bkDirty ? '● Not downloaded yet' : bkCur && bkCur.id ? `Saved to ${(clientById(bkCur.client_id) || {}).name || 'client'}` : 'Downloaded');
+function bkMarkDone() { bkDirty = false; const d = $('#bkDirty'); if (d) { d.textContent = bkState(); d.className = 'muted small'; } }
 const bkMask = a => { const s = String(a || ''); return s.length > 4 ? '••' + s.slice(-4) : s; };
 const bkInr = n => (+n < 0 ? '−₹' : '₹') + Math.abs(+n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const bkAmt = n => (+n ? bkInr(n).replace('₹', '') : '');
@@ -7489,41 +7491,48 @@ function bkApplyRules(all = false) {
   return n;
 }
 async function bkLoadRules(clientId) {
-  const r = await safe(sb.from('bank_rules').select('*').or(`client_id.is.null,client_id.eq.${clientId}`).limit(2000));
+  const q = sb.from('bank_rules').select('*');
+  const r = await safe((clientId ? q.or(`client_id.is.null,client_id.eq.${clientId}`) : q.is('client_id', null)).limit(2000));
   bkRules = r.error ? [] : r.data || [];
+}
+
+const bkTallyKey = a => 'jlr-bk-tally:' + String(a || '').replace(/\s/g, '');
+function bkTallyLoad(a) { try { return JSON.parse(localStorage.getItem(bkTallyKey(a)) || '{}') || {}; } catch (e) { return {}; } }
+function bkTallySave(a, t) { try { localStorage.setItem(bkTallyKey(a), JSON.stringify({ company: t.company, bank_ledger: t.bank_ledger, groups: t.groups, alloc: t.alloc })); } catch (e) { /* private window */ } }
+function bkPickClient(title, note, saveText) {
+  return new Promise(res => {
+    const list = myClients().filter(c => c.active !== false); let done = false;
+    if (!list.length) { toast('Add a client first', true); res(null); return; }
+    const m = modal(title, `<p class="small muted" style="margin-top:0">${esc(note)}</p><label>Client<select name="c">${opts(list, (bkCur && bkCur.client_id) || '', c => c.name, c => c.id)}</select></label>`,
+      { saveText, onSave: w => { done = true; res(fv(w, 'c') || null); } });
+    const obs = new MutationObserver(() => { if (!document.body.contains(m.el)) { obs.disconnect(); if (!done) res(null); } }); obs.observe(document.body, { childList: true });
+  });
 }
 
 VIEWS.bank = async v => {
   const probe = await safe(sb.from('bank_statements').select('id').limit(1));
   if (probe.error) return notReady(v, 'Bank statement converter', 'update-session5.sql');
-  const list = myClients().filter(c => c.active !== false);
-  if (!bkClient || !list.some(c => c.id === bkClient)) bkClient = (bkCur && bkCur.client_id) || (list[0] || {}).id || '';
-  v.innerHTML = `<div class="page-head"><h2>Bank statements</h2><span class="spacer"></span>
-      <select id="bkC" aria-label="Client">${list.length ? opts(list, bkClient, c => c.name, c => c.id) : '<option value="">No clients</option>'}</select></div>
-    <div id="bkBody"><div class="loading">Loading…</div></div>`;
-  $('#bkC', v).onchange = e => { if (bkCur && bkDirty && !confirm('The open statement has unsaved changes. Switch client and lose them?')) { e.target.value = bkClient; return; } bkClient = e.target.value; bkCur = null; bkDirty = false; route(); };
+  v.innerHTML = `<div class="page-head"><h2>Bank statement converter</h2></div><div id="bkBody"><div class="loading">Loading…</div></div>`;
   const body = $('#bkBody', v);
-  if (!bkClient) { body.innerHTML = '<div class="card"><p class="muted">Add a client first.</p></div>'; return; }
-  await bkLoadRules(bkClient);
-  if (bkCur && bkCur.client_id === bkClient) return bkEditor(body);
+  await bkLoadRules(bkCur && bkCur.client_id);
+  if (bkCur) return bkEditor(body);
   bkHome(body);
 };
 
 async function bkHome(body) {
-  const c = clientById(bkClient);
-  const { data } = await must(sb.from('bank_statements').select('id,bank,account,period_from,period_to,n_rows,bad,opening,closing,status,file_name,method,updated_at,created_by').eq('client_id', c.id).order('period_to', { ascending: false }).limit(200));
+  const r = await safe(sb.from('bank_statements').select('id,client_id,bank,account,period_from,period_to,n_rows,bad,opening,closing,status,file_name,updated_at,created_by').order('updated_at', { ascending: false }).limit(50));
+  const data = r.error ? [] : r.data || [];
   body.innerHTML = `<div class="card bk-drop" id="bkDrop" tabindex="0" role="button" aria-label="Choose a bank statement file">
       <div class="bk-drop-in"><svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
         <b>Drop a bank statement here, or click to choose</b>
         <span class="muted small">PDF (password-protected is fine) · Excel / CSV from net banking · scanned PDF or photo — any bank</span></div>
       <input type="file" id="bkFile" accept=".pdf,.xlsx,.xls,.csv,.jpg,.jpeg,.png,.webp,image/*,application/pdf" hidden></div>
-    <p class="muted small" style="margin:8px 2px 16px">Digital PDFs and Excel files are read on this computer for free. Scanned statements use text recognition (slower — check the figures). Every row is checked against the running balance before you export. The statement file itself is not stored.</p>
-    <div class="card"><h3 style="margin-top:0">Saved statements – ${esc(c.name)}</h3>
-      ${(data || []).length ? `<div class="table-wrap"><table><thead><tr><th>Bank</th><th>Account</th><th>Period</th><th class="r">Rows</th><th class="r">Opening</th><th class="r">Closing</th><th>Check</th><th>Status</th><th></th></tr></thead><tbody>
-        ${data.map(s => `<tr><td><b>${esc(s.bank || '—')}</b><div class="muted small">${esc(s.file_name || '')}</div></td><td>${esc(bkMask(s.account))}</td><td class="small">${s.period_from ? fmtDate(s.period_from) : ''} – ${s.period_to ? fmtDate(s.period_to) : ''}</td>
-          <td class="r">${s.n_rows}</td><td class="r">${bkInr(s.opening)}</td><td class="r">${bkInr(s.closing)}</td><td>${s.bad ? `<span class="late">✗ ${s.bad}</span>` : '<span style="color:var(--green)">✓</span>'}</td><td class="small">${esc(s.status)}</td>
-          <td class="row-btns"><button class="btn sm" data-open="${s.id}">Open</button>${isManager() || s.created_by === me.id ? `<button class="link small danger-t" data-del="${s.id}">Delete</button>` : ''}</td></tr>`).join('')}</tbody></table></div>` : '<p class="muted">No statements converted for this client yet.</p>'}
-      <div class="toolbar" style="margin-top:10px"><button class="btn sm ghost" id="bkRules">Ledger rules (${bkRules.filter(r => r.client_id).length} for this client · ${bkRules.filter(r => !r.client_id).length} for all)</button></div></div>`;
+    <p class="muted small" style="margin:8px 2px 16px">Convert → check → download Excel or Tally. Digital PDFs and Excel files are read on this computer for free; scanned statements use text recognition (slower — check the figures). Every row is checked against the running balance. The statement file is not stored.</p>
+    <div class="toolbar"><button class="btn sm ghost" id="bkRules">Ledger rules (${bkRules.length})</button></div>
+    ${data.length ? `<div class="card" style="margin-top:12px"><h3 style="margin-top:0">Saved to a client</h3><div class="table-wrap"><table><thead><tr><th>Client</th><th>Bank</th><th>Account</th><th>Period</th><th class="r">Rows</th><th class="r">Closing</th><th>Check</th><th>Status</th><th></th></tr></thead><tbody>
+        ${data.map(s => `<tr><td class="small">${esc((clientById(s.client_id) || {}).name || '—')}</td><td><b>${esc(s.bank || '—')}</b><div class="muted small">${esc(s.file_name || '')}</div></td><td>${esc(bkMask(s.account))}</td><td class="small">${s.period_from ? fmtDate(s.period_from) : ''} – ${s.period_to ? fmtDate(s.period_to) : ''}</td>
+          <td class="r">${s.n_rows}</td><td class="r">${bkInr(s.closing)}</td><td>${s.bad ? `<span class="late">✗ ${s.bad}</span>` : '<span style="color:var(--green)">✓</span>'}</td><td class="small">${esc(s.status)}</td>
+          <td class="row-btns"><button class="btn sm" data-open="${s.id}">Open</button>${isManager() || s.created_by === me.id ? `<button class="link small danger-t" data-del="${s.id}">Delete</button>` : ''}</td></tr>`).join('')}</tbody></table></div></div>` : ''}`;
   const pick = $('#bkFile', body), drop = $('#bkDrop', body);
   drop.onclick = () => pick.click();
   drop.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick.click(); } };
@@ -7532,11 +7541,11 @@ async function bkHome(body) {
   drop.ondrop = e => { e.preventDefault(); drop.classList.remove('on'); const f = e.dataTransfer.files[0]; if (f) bkStart(f); };
   pick.onchange = () => { if (pick.files[0]) bkStart(pick.files[0]); };
   $('#bkRules', body).onclick = () => bkRulesDialog(() => route());
-  body.addEventListener('click', async e => {
+  body.onclick = async e => {
     const o = e.target.closest('[data-open]'), d = e.target.closest('[data-del]');
     if (o) { const { data: s } = await must(sb.from('bank_statements').select('*').eq('id', o.dataset.open).single()); bkCur = { ...s, rows: s.rows || [], tally: s.tally || {}, notes: s.notes || [] }; bkFile = null; bkDirty = false; bkFilter = 'all'; bkPg = 0; bkQ = ''; bkRecheck(); route(); }
     if (d && confirm('Delete this saved statement? (The ledger rules stay.)')) { await must(sb.from('bank_statements').delete().eq('id', d.dataset.del)); toast('Deleted'); route(); }
-  });
+  };
 }
 function bkPassword(again) {
   return new Promise(res => {
@@ -7566,11 +7575,10 @@ async function bkStart(file) {
 }
 async function bkOpenResult(res, file) {
   const m = res.meta || {};
-  const prev = await safe(sb.from('bank_statements').select('tally,bank,account').eq('client_id', bkClient).eq('account', m.acct || '-').order('updated_at', { ascending: false }).limit(1));
-  const pt = (!prev.error && prev.data && prev.data[0] && prev.data[0].tally) || {};
+  const pt = bkTallyLoad(m.acct);
   const bank = m.bank || 'Bank';
   const dates = res.rows.map(r => r.d).filter(Boolean).sort();
-  bkCur = { client_id: bkClient, bank, account: m.acct || '', ifsc: m.ifsc || '', holder: m.name || '', period_from: m.from || dates[0] || null, period_to: m.to || dates[dates.length - 1] || null,
+  bkCur = { client_id: null, bank, account: m.acct || '', ifsc: m.ifsc || '', holder: m.name || '', period_from: m.from || dates[0] || null, period_to: m.to || dates[dates.length - 1] || null,
     opening: res.opening, file_name: file.name, method: res.method + (res.fixed ? ` · ${res.fixed} debit/credit swapped by balance` : ''), status: 'Draft', notes: res.notes || [],
     rows: res.rows.map(r => ({ ...r, p: BANK.party(r.n), l: '', lh: '', lm: 0 })), tally: { company: pt.company || '', bank_ledger: pt.bank_ledger || `${bank}${m.acct ? ' A/c ' + String(m.acct).slice(-4) : ''}`, groups: pt.groups || {}, alloc: !!pt.alloc } };
   bkFile = file; bkDirty = true; bkFilter = 'all'; bkPg = 0; bkQ = '';
@@ -7579,12 +7587,14 @@ async function bkOpenResult(res, file) {
   bkEditor($('#bkBody'));
 }
 async function bkAi(file) {
-  const ai = await aiAvailable(bkClient);
+  const cid = (bkCur && bkCur.client_id) || await bkPickClient('Read with AI', 'AI reading has a small cost, logged against a client. Which client is this statement for?', 'Continue');
+  if (!cid) return;
+  const ai = await aiAvailable(cid);
   if (!ai.ok) { toast(ai.why || 'AI reading is not set up — save a Claude key in Settings and deploy the bill-read function', true); return; }
   if (!confirm('Send this statement to Claude (Anthropic) to read? It costs a few rupees per statement and the file leaves this computer.')) return;
   const body = $('#bkBody');
   body.innerHTML = `<div class="card"><h3 style="margin-top:0">AI is reading ${esc(file.name)}</h3><p class="muted">This takes 20–60 seconds for a long statement…</p><div class="bk-bar"><i></i></div></div>`;
-  try { bkOpenResult(await bankReadAi(file, bkClient), file); }
+  try { await bkOpenResult(await bankReadAi(file, cid), file); bkCur.client_id = cid; }
   catch (err) { toast(friendly(err), true); route(); }
 }
 
@@ -7613,8 +7623,8 @@ function bkEditor(body) {
     const V = vis(), pages = Math.max(1, Math.ceil(V.length / BK_PAGE)); if (bkPg >= pages) bkPg = 0;
     const show = V.slice(bkPg * BK_PAGE, (bkPg + 1) * BK_PAGE), k = counts();
     body.innerHTML = `<div class="card bk-head"><div class="bk-title"><div><h3 style="margin:0">${esc(S.bank || 'Bank')} ${S.account ? '· A/c ' + esc(S.account) : ''}</h3>
-        <div class="muted small">${esc(c ? c.name : '')}${S.holder ? ' · ' + esc(S.holder) : ''}${S.ifsc ? ' · IFSC ' + esc(S.ifsc) : ''} · ${S.period_from ? fmtDate(S.period_from) : '?'} – ${S.period_to ? fmtDate(S.period_to) : '?'} · ${esc(S.file_name || '')} · <span class="badge">${esc(S.method || '')}</span></div></div>
-        <span class="spacer"></span><button class="btn sm ghost" id="bkMeta">Edit details</button><span class="${bkDirty ? 'late' : 'muted'} small" id="bkDirty">${bkDirty ? '● Not saved' : 'Saved'}</span></div>
+        <div class="muted small">${c ? esc(c.name) + ' · ' : ''}${S.holder ? esc(S.holder) + ' · ' : ''}${S.ifsc ? 'IFSC ' + esc(S.ifsc) + ' · ' : ''}${S.period_from ? fmtDate(S.period_from) : '?'} – ${S.period_to ? fmtDate(S.period_to) : '?'} · ${esc(S.file_name || '')} · <span class="badge">${esc(S.method || '')}</span></div></div>
+        <span class="spacer"></span><button class="btn sm ghost" id="bkMeta">Edit details</button><span class="${bkDirty ? 'late' : 'muted'} small" id="bkDirty">${bkState()}</span></div>
       <div class="bento-stats stats5" id="bkStats" style="margin-top:12px">${stats()}</div>
       ${(S.notes || []).length ? `<ul class="small" style="margin:10px 0 0;padding-left:18px">${S.notes.map(n => `<li class="late">⚠ ${esc(n)}</li>`).join('')}</ul>` : ''}
       ${S.bad ? `<p class="note warn small" style="margin:10px 0 0">${S.bad} row${S.bad > 1 ? 's do' : ' does'} not tally with the printed balance — a figure was misread or a row is missing just above. Fix the amount (the check updates as you type)${bkFile && /\.pdf$|\.(jpe?g|png|webp)$/i.test(bkFile.name) ? ', or try <button class="link" id="bkAi">Read with AI</button>' : ''}.</p>` : ''}</div>
@@ -7627,9 +7637,9 @@ function bkEditor(body) {
       <div class="toolbar" style="margin-top:8px">${pages > 1 ? `<button class="btn sm" data-pg="-1" ${bkPg ? '' : 'disabled'}>‹ Prev</button><span class="small">Rows ${bkPg * BK_PAGE + 1}–${Math.min(V.length, (bkPg + 1) * BK_PAGE)} of ${V.length}</span><button class="btn sm" data-pg="1" ${bkPg < pages - 1 ? '' : 'disabled'}>Next ›</button>` : ''}
         <button class="btn sm" id="bkAdd">+ Add row</button><label class="small">Opening balance <input id="bkOpen" class="r" value="${S.opening}" inputmode="decimal" style="width:120px"></label></div>
       <div class="card bk-foot"><div class="toolbar"><button class="btn" id="bkBack">← All statements</button><span class="spacer"></span>
-        <button class="btn" id="bkXl">Download Excel</button><button class="btn" id="bkTally">Tally XML…</button><button class="btn primary" id="bkSave">Save</button></div></div>`;
+        <button class="btn ghost" id="bkSave" title="Optional — keep this converted statement on a client's file">${S.client_id ? 'Save' : 'Save to client…'}</button><button class="btn primary" id="bkXl">Download Excel</button><button class="btn primary" id="bkTally">Tally XML…</button></div></div>`;
   };
-  const dirty = () => { bkDirty = true; const d = $('#bkDirty', body); if (d) { d.textContent = '● Not saved'; d.className = 'late small'; } };
+  const dirty = () => { bkDirty = true; const d = $('#bkDirty', body); if (d) { d.textContent = bkState(); d.className = 'late small'; } };
   let tm;
   const refresh = () => { clearTimeout(tm); tm = setTimeout(() => {
     bkRecheck();
@@ -7678,7 +7688,7 @@ function bkEditor(body) {
         { saveText: 'Set', onSave: w => { const l = fv(w, 'l'); P.forEach(i => { S.rows[i].l = l; S.rows[i].lm = 1; S.rows[i].lh = ''; }); dirty(); draw(); } });
       return;
     }
-    if (id === 'bkBack') { if (bkDirty && !confirm('Leave without saving this statement?')) return; bkCur = null; bkDirty = false; route(); return; }
+    if (id === 'bkBack') { if (bkDirty && !confirm('Leave this statement? It has not been downloaded or saved.')) return; bkCur = null; bkDirty = false; route(); return; }
     if (id === 'bkMeta') {
       modal('Statement details', `<div class="form-grid"><label>Bank<input name="bank" value="${esc(S.bank || '')}"></label><label>Account number<input name="acct" value="${esc(S.account || '')}"></label>
         <label>IFSC<input name="ifsc" value="${esc(S.ifsc || '')}" class="up"></label><label>Account holder<input name="holder" value="${esc(S.holder || '')}"></label>
@@ -7689,45 +7699,52 @@ function bkEditor(body) {
           dirty(); draw(); } });
       return;
     }
-    if (id === 'bkXl') { bkExcel().catch(err => toast(friendly(err), true)); return; }
+    if (id === 'bkXl') { bkExcel().then(() => { bkMarkDone(); bkLearn(); }).catch(err => toast(friendly(err), true)); return; }
     if (id === 'bkTally') { bkTallyDialog(); return; }
-    if (id === 'bkSave') { t.disabled = true; try { await bkSave(); draw(); } catch (err) { toast(friendly(err), true); } t.disabled = false; }
+    if (id === 'bkSave') {
+      if (!S.client_id) { const cid = await bkPickClient('Save to a client', 'Optional — keeps the converted rows and ledgers on the client so you can open them again later. Not needed to download.', 'Save'); if (!cid) return; S.client_id = cid; }
+      t.disabled = true; try { await bkSave(); await bkLoadRules(S.client_id); draw(); bkLearn(); } catch (err) { toast(friendly(err), true); } t.disabled = false; }
   };
   draw();
 }
-async function bkSave() {
-  const S = bkCur;
-  // ledgers typed by hand for a party → offer to remember them
+// ledgers typed by hand for a party → offer (once) to remember them for the next statement
+function bkLearn() {
+  const S = bkCur; if (!S || S.asked) return;
+  if (!S.client_id && !isManager()) return;                    // rules for all statements are kept by managers
   const learn = new Map();
   S.rows.forEach(r => { if (r.lm && r.l && r.p && r.p.length >= 4) { const k = lc(r.p) + '|' + (+r.dr ? 'dr' : 'cr'); if (!learn.has(k) && !bkRules.some(x => lc(x.match) === lc(r.p) && x.ledger === r.l)) learn.set(k, { match: r.p, dir: +r.dr ? 'dr' : 'cr', ledger: r.l }); } });
+  if (!learn.size) return;
+  S.asked = true;
+  const L = [...learn.values()].slice(0, 40), cn = (clientById(S.client_id) || {}).name;
+  modal('Remember these ledgers?', `<p class="small" style="margin-top:0">Next time a statement${cn ? ' for ' + esc(cn) : ''} has these parties, the ledger fills in by itself.</p>
+    <div class="table-wrap"><table><thead><tr><th></th><th>When the party is</th><th>Debit / credit</th><th>Ledger</th></tr></thead><tbody>${L.map((x, i) => `<tr><td><input type="checkbox" data-lr="${i}" checked aria-label="Remember"></td><td>${esc(x.match)}</td><td>${x.dir === 'dr' ? 'Debit' : 'Credit'}</td><td><b>${esc(x.ledger)}</b></td></tr>`).join('')}</tbody></table></div>`,
+    { saveText: 'Remember ticked', onSave: async w => { const pick = $$('[data-lr]', w).filter(x => x.checked).map(x => L[+x.dataset.lr]); if (!pick.length) return;
+      const { data: ins } = await must(sb.from('bank_rules').insert(pick.map(x => ({ client_id: S.client_id || null, match: x.match, dir: x.dir, ledger: x.ledger }))).select()); bkRules.push(...(ins || [])); toast(`${pick.length} rule${pick.length > 1 ? 's' : ''} saved`); } });
+}
+async function bkSave() {
+  const S = bkCur;
   const rec = { client_id: S.client_id, bank: S.bank, account: S.account || null, ifsc: S.ifsc || null, holder: S.holder || null, period_from: S.period_from || null, period_to: S.period_to || null,
     opening: S.opening, closing: S.closing, total_dr: S.dr, total_cr: S.cr, n_rows: S.rows.length, bad: S.bad, file_name: S.file_name, method: S.method, status: S.status === 'Exported' ? 'Exported' : S.bad ? 'Draft' : 'Checked',
     rows: S.rows.map(r => ({ d: r.d, vd: r.vd || '', n: r.n, r: r.r, dr: +r.dr || 0, cr: +r.cr || 0, b: r.b, p: r.p || '', l: r.l || '', lh: r.lh || '', lm: r.lm || 0 })), tally: S.tally, notes: S.notes || [] };
   if (S.id) rec.id = S.id;
   const { data } = await must(sb.from('bank_statements').upsert(rec).select('id,status').single());
-  S.id = data.id; S.status = data.status; bkDirty = false; toast('Statement saved');
-  if (learn.size) {
-    const L = [...learn.values()].slice(0, 40);
-    modal('Remember these ledgers?', `<p class="small" style="margin-top:0">Next time a statement for ${esc((clientById(S.client_id) || {}).name || 'this client')} has these parties, the ledger fills in by itself.</p>
-      <div class="table-wrap"><table><thead><tr><th></th><th>When the party is</th><th>Debit / credit</th><th>Ledger</th></tr></thead><tbody>${L.map((x, i) => `<tr><td><input type="checkbox" data-lr="${i}" checked aria-label="Remember"></td><td>${esc(x.match)}</td><td>${x.dir === 'dr' ? 'Debit' : 'Credit'}</td><td><b>${esc(x.ledger)}</b></td></tr>`).join('')}</tbody></table></div>`,
-      { saveText: 'Remember ticked', onSave: async w => { const pick = $$('[data-lr]', w).filter(x => x.checked).map(x => L[+x.dataset.lr]); if (!pick.length) return;
-        const { data: ins } = await must(sb.from('bank_rules').insert(pick.map(x => ({ client_id: S.client_id, match: x.match, dir: x.dir, ledger: x.ledger }))).select()); bkRules.push(...(ins || [])); toast(`${pick.length} rule${pick.length > 1 ? 's' : ''} saved`); } });
-  }
+  S.id = data.id; S.status = data.status; bkDirty = false; toast(`Saved to ${(clientById(S.client_id) || {}).name || 'the client'}`);
 }
 function bkRulesDialog(after) {
-  const c = clientById(bkClient);
+  const cid = bkCur && bkCur.client_id, c = clientById(cid), canAll = isManager();
   const draw = w => { const box = $('[data-rl]', w);
     box.innerHTML = `<div class="table-wrap" style="max-height:46vh"><table><thead><tr><th>Narration or party contains</th><th>Debit / credit</th><th>Ledger</th><th>For</th><th></th></tr></thead><tbody>
-      ${bkRules.length ? bkRules.slice().sort((a, b) => (a.client_id ? 0 : 1) - (b.client_id ? 0 : 1) || lc(a.match).localeCompare(lc(b.match))).map(r => `<tr><td><b>${esc(r.match)}</b></td><td>${r.dir === 'dr' ? 'Debit' : r.dir === 'cr' ? 'Credit' : 'Either'}</td><td>${esc(r.ledger)}</td><td class="small">${r.client_id ? 'This client' : 'All clients'}</td>
+      ${bkRules.length ? bkRules.slice().sort((a, b) => (a.client_id ? 0 : 1) - (b.client_id ? 0 : 1) || lc(a.match).localeCompare(lc(b.match))).map(r => `<tr><td><b>${esc(r.match)}</b></td><td>${r.dir === 'dr' ? 'Debit' : r.dir === 'cr' ? 'Credit' : 'Either'}</td><td>${esc(r.ledger)}</td><td class="small">${r.client_id ? esc((clientById(r.client_id) || {}).name || 'Client') : 'All statements'}</td>
         <td>${!r.client_id && !isManager() ? '' : `<button class="link small danger-t" data-rdel="${r.id}">Delete</button>`}</td></tr>`).join('') : '<tr><td colspan="5" class="muted">No rules yet.</td></tr>'}</tbody></table></div>`; };
-  const m = modal(`Ledger rules – ${c ? c.name : ''}`, `<p class="small muted" style="margin-top:0">A rule fills the ledger when the narration (or the party name) contains the text. Client rules win over “all clients” rules; built-in ones (cash, GST, TDS, bank charges, interest, salary) come last. Rows where you typed a ledger are never overwritten.</p>
+  const m = modal('Ledger rules', `<p class="small muted" style="margin-top:0">A rule fills the ledger when the narration (or the party name) contains the text. Built-in ones (cash, GST, TDS, bank charges, interest, salary) come last; rules for one client (when a statement is saved to a client) come first. Rows where you typed a ledger are never overwritten.${!cid && !canAll ? ' <b>Only a Manager can add rules for all statements.</b>' : ''}</p>
     <div data-rl></div>
     <div class="form-grid" style="margin-top:12px"><label>Narration / party contains<input name="m" placeholder="e.g. TNEB or SRI MURUGAN TRANSPORTS"></label><label>Ledger<input name="l" placeholder="e.g. Electricity charges"></label>
       <label>Debit / credit<select name="d"><option value="any">Either</option><option value="dr">Debit (payment)</option><option value="cr">Credit (receipt)</option></select></label>
-      <label>For<select name="f"><option value="c">This client</option>${isManager() ? '<option value="all">All clients</option>' : ''}</select></label></div>`,
+      <label>For<select name="f">${canAll ? '<option value="all">All statements</option>' : ''}${cid ? `<option value="c">Only ${esc(c ? c.name : 'this client')}</option>` : ''}</select></label></div>`,
     { saveText: 'Add rule', extra: '', onSave: async w => {
       const mt = fv(w, 'm'), l = fv(w, 'l'); if (!mt || !l) { toast('Type the text and the ledger', true); return false; }
-      const { data } = await must(sb.from('bank_rules').insert({ client_id: fv(w, 'f') === 'all' ? null : bkClient, match: mt, dir: fv(w, 'd'), ledger: l }).select().single());
+      if (!fv(w, 'f')) { toast('Only a Manager can add rules for all statements', true); return false; }
+      const { data } = await must(sb.from('bank_rules').insert({ client_id: fv(w, 'f') === 'all' ? null : cid, match: mt, dir: fv(w, 'd'), ledger: l }).select().single());
       bkRules.push(data); $('[name=m]', w).value = ''; $('[name=l]', w).value = ''; draw(w); toast('Rule added'); return false; } });
   draw(m.el);
   m.el.addEventListener('click', async e => { const d = e.target.closest('[data-rdel]'); if (!d) return; await must(sb.from('bank_rules').delete().eq('id', d.dataset.rdel)); bkRules = bkRules.filter(r => r.id !== d.dataset.rdel); draw(m.el); });
@@ -7755,13 +7772,13 @@ function bkTallyDialog() {
       <li><b>Vouchers file</b> — Payment for debits, Receipt for credits, Contra for cash.</li>
       <li>Tally Prime: Alt+O Import → Masters (ledgers file), then Transactions (vouchers file). ERP 9: Gateway → Import Data → Masters / Vouchers.</li></ol>`,
     { wide: true, extra: '<button class="btn" data-dl="led">Download ledgers XML</button><button class="btn primary" data-dl="vch">Download vouchers XML</button>' });
-  const read = () => { T.company = fv(m.el, 'co'); T.bank_ledger = fv(m.el, 'bl') || 'Bank'; T.alloc = $('[name=al]', m.el).checked; $$('[data-g]', m.el).forEach(s => { T.groups[s.dataset.g] = s.value; }); bkDirty = true; };
+  const read = () => { T.company = fv(m.el, 'co'); T.bank_ledger = fv(m.el, 'bl') || 'Bank'; T.alloc = $('[name=al]', m.el).checked; $$('[data-g]', m.el).forEach(s => { T.groups[s.dataset.g] = s.value; }); bkTallySave(S.account, T); };
   m.el.addEventListener('click', e => {
     const b = e.target.closest('[data-dl]'); if (!b) return; read();
     const base = `${slug(S.bank)}-${String(S.account || '').slice(-4)}-${S.period_from || ''}-${S.period_to || ''}`.replace(/-+/g, '-');
     if (b.dataset.dl === 'led') { const g = {}; Object.keys(use).forEach(l => { g[l] = T.groups[l] || G[l]; }); download(`tally-ledgers-${base}.xml`, BANK.tallyLedgers({ company: T.company, bankLedger: T.bank_ledger, bankGroup: S.closing < 0 ? 'Bank OD A/c' : 'Bank Accounts', ledgers: g }), 'application/xml'); }
     else { download(`tally-vouchers-${base}.xml`, BANK.tallyVouchers({ company: T.company, bankLedger: T.bank_ledger, rows: S.rows.filter(r => +r.dr || +r.cr), bankAlloc: T.alloc }), 'application/xml'); S.status = 'Exported'; }
-    toast('Downloaded — remember to Save the statement');
+    toast('Downloaded'); if (b.dataset.dl === 'vch') { bkMarkDone(); setTimeout(bkLearn, 300); }
   });
 }
 async function bkExcel() {
@@ -7773,14 +7790,14 @@ async function bkExcel() {
   ws['!cols'] = [{ wch: 11 }, { wch: 11 }, { wch: 60 }, { wch: 16 }, { wch: 13 }, { wch: 13 }, { wch: 14 }, { wch: 26 }, { wch: 22 }, { wch: 10 }, { wch: 26 }];
   ws['!autofilter'] = { ref: `A1:K${S.rows.length + 1}` };
   X.utils.book_append_sheet(wb, ws, 'Transactions');
-  const sum = X.utils.aoa_to_sheet([['Client', (clientById(S.client_id) || {}).name || ''], ['Bank', S.bank], ['Account', S.account], ['IFSC', S.ifsc], ['Account holder', S.holder], ['Period', `${S.period_from || ''} to ${S.period_to || ''}`], [],
+  const sum = X.utils.aoa_to_sheet([...(S.client_id ? [['Client', (clientById(S.client_id) || {}).name || '']] : []), ['Bank', S.bank], ['Account', S.account], ['IFSC', S.ifsc], ['Account holder', S.holder], ['Period', `${S.period_from || ''} to ${S.period_to || ''}`], [],
     ['Opening balance', S.opening], ['Total credits', S.cr], ['Total debits', S.dr], ['Closing balance', S.closing], ['Credits (count)', S.nCr], ['Debits (count)', S.nDr], [],
     ['Balance check', S.bad ? `${S.bad} row(s) do not tally` : 'All rows tally'], ['Read by', S.method], ['File', S.file_name], ['Converted by', me.full_name || me.email], ['On', today()], ...(S.notes || []).map(n => ['Note', n])]);
   sum['!cols'] = [{ wch: 18 }, { wch: 60 }];
   X.utils.book_append_sheet(wb, sum, 'Summary');
   const { use, G } = bkLedgerGroups();
   X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet([['Ledger', 'Tally group', 'Rows', 'Debits', 'Credits'], ...Object.entries(use).map(([l, u]) => [l, G[l], u.n, Math.round(u.dr * 100) / 100, Math.round(u.cr * 100) / 100])]), 'Ledger summary');
-  X.writeFile(wb, `${slug((clientById(S.client_id) || {}).name || 'client')}-${slug(S.bank)}-${String(S.account || '').slice(-4)}-${S.period_from || ''}-to-${S.period_to || ''}.xlsx`.replace(/-+/g, '-'));
+  X.writeFile(wb, `${S.holder ? slug(S.holder).slice(0, 30) + '-' : ''}${slug(S.bank)}-${String(S.account || '').slice(-4)}-${S.period_from || ''}-to-${S.period_to || ''}.xlsx`.replace(/-+/g, '-'));
 }
 
 window.__tracker = { BANK, bankReadFile, TDSW, MCA, BILL, parseMcaSheets, mcaPlanAll, fillGstWorkings, G1, GR, RECO, gstr3bFromApi, periodToMonth, strongPassword, periodFor, dueDateFor, parseCSV, toCSV, gstLateFee, gstInterest, tdsCalc, rocCalc, monthsSpan, tdsDepositDue, g1json, clientReportHtml, clientReportMsg, rnStage, anyDate, parseRenewalRows, gstPayDue, tdsPayDue, advInstalment, advCurrent, advDue, recurringPlan, taxMsg, addMonths, fyEndOf, obProgress, rnKind };
