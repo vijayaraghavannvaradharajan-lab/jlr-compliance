@@ -6957,6 +6957,7 @@ const BANK = (() => {
     return isFinite(n) ? { v: neg ? -n : n, sfx } : null;
   }
   const isAmt = (s, o) => !!amt(s, o);
+  const dateIn = s => { const t = String(s || '').trim(); if (!t) return ''; const d = date(t); if (d) return d; const w = t.split(' '); for (let j = Math.min(3, w.length); j >= 1; j--) { const x = date(w.slice(0, j).join(' ')); if (x) return x; } return ''; };
   const SFX_ONLY = /^\(?(cr|dr)\.?\)?$/i;
   // header word → column role
   function role(t) {
@@ -7000,14 +7001,10 @@ const BANK = (() => {
     return L;
   }
   // header columns from one line (+ the next line when the header wraps)
-  function headerAt(L, i) {
-    const l = L[i]; if (!l) return null;
-    const words = [...l.w], nx = L[i + 1];
-    if (nx && nx.p === l.p && nx.y - l.y < 1.9 * l.h && !nx.w.some(w => isAmt(w.s) || date(w.s))) words.push(...nx.w.map(w => ({ ...w, l2: 1 })));
-    words.sort((a, b) => a.x0 - b.x0);
-    const cells = [];
+  function headerCells(words, h) {
+    words = [...words].sort((a, b) => (a.l2 || 0) - (b.l2 || 0) || a.x0 - b.x0);   // first-line titles first, then the wrapped parts join them
+    const cells = [], g = 0.42 * h;
     for (const w of words) {
-      const g = 0.5 * l.h;
       const c = w.l2 ? cells.find(c => w.x0 <= c.x1 + g && w.x1 >= c.x0 - g) : cells.find(c => c.l1 && w.x0 - c.x1 < g && w.x0 >= c.x0);
       if (c) { c.parts.push(w); c.x0 = Math.min(c.x0, w.x0); c.x1 = Math.max(c.x1, w.x1); if (!w.l2) c.l1 = 1; }
       else cells.push({ x0: w.x0, x1: w.x1, parts: [w], l1: w.l2 ? 0 : 1 });
@@ -7027,14 +7024,27 @@ const BANK = (() => {
       cells.splice(k + 1, 0, c2);
     }
     for (const c of cells) c.xc = (c.x0 + c.x1) / 2;
-    let roles = cells.map(c => c.role).filter(Boolean);
-    const dates = cells.filter(c => c.role === 'date'); if (dates.length > 1) dates.slice(1).forEach(c => { c.role = 'vdate'; });
-    roles = cells.map(c => c.role).filter(Boolean);
+    return cells;
+  }
+  const nRoles = cells => cells.filter(c => c.role).length;
+  function headerAt(L, i) {
+    const l = L[i]; if (!l) return null;
+    if (new Set(l.w.map(w => role(w.s)).filter(Boolean)).size < 2) return null;
+    let words = [...l.w], used = 1, cells = headerCells(words, l.h);
+    for (let k = 1; k <= 2; k++) {                              // titles that wrap onto 2–3 lines ("Transaction / Posted / Date")
+      const nx = L[i + k], pv = L[i + k - 1];
+      if (!(nx && nx.p === l.p && nx.y - pv.y < 1.9 * l.h && nx.w.every(w => w.s.length <= 18 && !/\d{2,}/.test(w.s) && !(/[\/\\]/.test(w.s) && /\d/.test(w.s)) && !isAmt(w.s) && !date(w.s)))) break;
+      const w2 = [...words, ...nx.w.map(w => ({ ...w, l2: 1 }))], c2 = headerCells(w2, l.h);
+      if (nRoles(c2) <= nRoles(cells) && !c2.some(c => c.role && !cells.some(o => o.role === c.role))) break;   // must complete a title
+      words = w2; cells = c2; used++;
+    }
+    const dates = cells.filter(c => c.role === 'date'); if (dates.length > 1) dates.slice(1).forEach(c => { c.role = cells.some(x => x.role === 'vdate') ? 'pdate' : 'vdate'; });
+    const roles = cells.map(c => c.role).filter(Boolean);
     const has = r => roles.includes(r), n = new Set(roles).size;
     const ok = n >= 3 && (has('date') || has('vdate')) && (has('bal') || (has('dr') && has('cr')) || has('amt'));
     if (!ok) return null;
     if (!has('date')) cells.find(c => c.role === 'vdate').role = 'date';
-    return { cols: cells.filter(c => c.role), used: words.some(w => w.l2) ? 2 : 1 };
+    return { cols: cells.filter(c => c.role && c.role !== 'pdate'), used };
   }
   const overlap = (a0, a1, b0, b1) => Math.max(0, Math.min(a1, b1) - Math.max(a0, b0));
   function colOf(w, cols, h) {
@@ -7057,7 +7067,7 @@ const BANK = (() => {
   function fromLines(L, { ocr = false } = {}) {
     const ao = { ocr };
     let cols = null, hdrFound = false;
-    const anchors = [], cont = [];
+    const anchors = [], cont = [], recs = [];
     let skipTo = -1;
     const hdrs = {}; L.forEach((l, i) => { if (!(l.p in hdrs) && headerAt(L, i)) hdrs[l.p] = i; });
     for (let i = 0; i < L.length; i++) {
@@ -7078,7 +7088,8 @@ const BANK = (() => {
       l.w = W;
       for (const w of l.w) { const c = colOf(w, cols, l.h); if (!c) continue; (by[c.role] = by[c.role] || []).push(w); }
       const txt = r => (by[r] || []).map(w => w.s).join(' ').trim();
-      const dt = date(txt('date')) || (ocr ? date(txt('date').replace(/[oO]/g, '0').replace(/[lI|]/g, '1')) : '');
+      const dt = dateIn(txt('date')) || (ocr ? dateIn(txt('date').replace(/[oO]/g, '0').replace(/[lI|]/g, '1')) : '');
+      recs.push({ p: l.p, y: l.y, h: l.h, by, x: l.w.length ? l.w[0].x0 : 0, start: /^\d{1,2}([\/\-. ]|[A-Za-z]{3})/.test(txt('date')) || !!dt });
       const nums = r => (by[r] || []).map(w => amt(w.s, ao)).filter(Boolean);
       const hasAmt = AMT_ROLES.some(r => nums(r).length);
       if (dt && hasAmt) {
@@ -7089,8 +7100,9 @@ const BANK = (() => {
         const dw = by.desc || []; if (dw.length) a.dx = Math.min(...dw.map(w => w.x0));
         anchors.push(a); continue;
       }
-      if (JUNK.test(l.text)) continue;
+      if (JUNK.test(l.text) || /^\s*(grand\s*)?total\b/i.test(l.text)) { recs.pop(); continue; }
       if (OPEN_RE.test(l.text) || CLOSE_RE.test(l.text)) {
+        recs.pop();
         const f = re => { const m = l.text.match(re); return m ? amt(m[1] + (m[2] ? ' ' + m[2] : ''), ao) : null; };
         const ob = f(/(?:opening\s*balance|balance\s*b\/?f|brought\s*forward|b\/f|balance\s*forward)[^\d\-]{0,30}(-?[\d,]+\.\d{2})\s*(cr|dr)?/i), cb = f(/(?:closing\s*balance|carried\s*forward|c\/f|balance\s*c\/?f)[^\d\-]{0,30}(-?[\d,]+\.\d{2})\s*(cr|dr)?/i);
         if (ob || cb) cont.push({ p: l.p, y: l.y, ob, cb });
@@ -7100,7 +7112,7 @@ const BANK = (() => {
       const roles = Object.keys(by);
       if (roles.length && roles.every(r => r === 'desc' || r === 'ref') && !l.w.some(w => isAmt(w.s, ao))) cont.push({ p: l.p, y: l.y, h: l.h, x: l.w[0].x0, desc: txt('desc'), ref: txt('ref') });
     }
-    if (!hdrFound) return null;
+    if (!hdrFound) return [];
     // vertically centred rows (text above the date line)? → attach each text line to the nearest row; else to the row above
     const firstA = anchors[0];
     const centred = !!firstA && cont.filter(c => c.desc != null && /[A-Za-z0-9]{3}/.test(c.desc) && c.p === firstA.p && c.y < firstA.y && (firstA.dx == null || Math.abs(c.x - firstA.dx) < 2 * c.h)).length > 0;
@@ -7113,6 +7125,35 @@ const BANK = (() => {
       text.push(c);
     }
     const add = (a, c) => { if (c.desc) a.desc.push([c.y, c.desc]); if (c.ref) a.ref.push([c.y, c.ref]); };
+    let band = null;
+    {
+      const B = []; let cur = null;
+      for (const r of recs) {
+        if (r.start) { cur = { lines: [r] }; B.push(cur); continue; }
+        if (!cur || cur.closed) continue;
+        const pv = cur.lines[cur.lines.length - 1];
+        if (r.p === pv.p && r.y - pv.y > 2.6 * r.h) { cur.closed = true; continue; }     // table ended (summary / legend below)
+        if (r.p !== pv.p) { const roles = Object.keys(r.by); if (!roles.every(x => x === 'desc' || x === 'ref') || (dx != null && r.x < dx - 1.2 * r.h)) continue; }
+        cur.lines.push(r);
+      }
+      const frags = (b, role) => b.lines.flatMap(r => (r.by[role] || []).length ? [{ t: r.by[role].map(w => w.s).join(' '), x1: Math.max(...r.by[role].map(w => w.x1)) }] : []);
+      const x1s = B.flatMap(b => frags(b, 'desc').map(f => f.x1)).sort((a, b) => a - b), right = x1s.length ? x1s[Math.floor(x1s.length * 0.95)] : 0;
+      const tight = (F, ok) => { let t = ''; for (const f of F) { if (!t) t = f.t; else if (!ok(t)) t += f.t; else break; } return t; };
+      const dJoin = F => { let t = ''; for (const f of F) { if (!t) t = f.t; else if (/^\d{1,4}\b/.test(f.t) && (!dateIn(t) || dateIn(t + f.t)) && /[\/\-.]\d{0,3}$/.test(t)) t += f.t; else break; } return t; };
+      // does this bank cut words at the column edge (ICICI) or wrap at spaces? look at lines that continue on the next line
+      const wrapped = B.flatMap(b => { const F = frags(b, 'desc'); return F.slice(0, -1).map(f => f.x1); }), hh = (B[0] && B[0].lines[0].h) || 8;
+      const wrapped2 = B.flatMap(b => { const F = frags(b, 'desc'); return F.slice(0, -1).filter(f => !/[\/\-:]$/.test(f.t)).map(f => f.x1); });
+      const cutWords = right && wrapped2.length >= 5 && wrapped2.filter(x => x > right - 0.6 * hh).length / wrapped2.length > 0.6;
+      const smart = (F, h) => F.reduce((t, f, k) => !t ? f.t : (/[\/\-:]$/.test(t) || /^[\/\-]/.test(f.t) || (cutWords && F[k - 1].x1 > right - 0.6 * h)) ? t + f.t : t + ' ' + f.t, '');
+      const out = [];
+      for (const b of B) {
+        const h = b.lines[0].h, dT = dJoin(frags(b, 'date')), d = dateIn(dT) || (ocr ? dateIn(dT.replace(/[oO]/g, '0').replace(/[lI|]/g, '1')) : '');
+        const o = { date: d, vdate: dateIn(dJoin(frags(b, 'vdate'))), desc: smart(frags(b, 'desc'), h), ref: smart(frags(b, 'ref'), h), type: frags(b, 'type').map(f => f.t).join(' ') };
+        for (const r of AMT_ROLES) { const t = tight(frags(b, r).map(f => ({ t: f.t.replace(/\s+/g, '') })), x => isAmt(x, ao)); const a = amt(t, ao); if (a) o[r] = a; }
+        if (d && AMT_ROLES.some(r => o[r])) out.push(o);
+      }
+      if (out.length) band = { rows: out, opening, closing, mode: 'table-rows' };
+    }
     if (!centred) {
       for (const c of text) {
         let tgt = null;
@@ -7150,7 +7191,7 @@ const BANK = (() => {
     }
     const join = arr => arr.sort((a, b) => a[0] - b[0]).map(x => x[1]).filter(Boolean).reduce((s, t) => !s ? t : /[\/\-:]$/.test(s) || /^[\/\-]/.test(t) ? s + t : s + ' ' + t, '');
     const rows = anchors.map(a => ({ date: a.date, vdate: a.vdate, desc: join(a.desc), ref: join(a.ref), dr: a.dr, cr: a.cr, amt: a.amt, bal: a.bal, type: a.type }));
-    return { rows, opening, closing, mode: centred ? 'table-centred' : 'table' };
+    return [band, rows.length ? { rows, opening, closing, mode: centred ? 'table-centred' : 'table' } : null].filter(Boolean);
   }
   // no header found: a row = a line that starts with a date and ends with amounts
   function fromLinesLoose(L, { ocr = false } = {}) {
@@ -7287,9 +7328,9 @@ const BANK = (() => {
   function parseLines(L, o = {}) {
     const hi = L.findIndex((l, i) => headerAt(L, i));
     const text = L.map(l => l.text).join('\n'), m = meta(text, hi > 0 ? L.slice(0, hi).map(l => l.text).join('\n') : text.slice(0, 600));
-    const tries = [fromLines(L, o), fromLinesLoose(L, o)].filter(Boolean).map(x => ({ x, f: finish(x.rows, { opening: x.opening != null ? (x.opening.sfx === 'dr' ? -x.opening.v : x.opening.v) : null }) }));
+    const tries = [...fromLines(L, o), fromLinesLoose(L, o)].filter(Boolean).map(x => ({ x, f: finish(x.rows, { opening: x.opening != null ? (x.opening.sfx === 'dr' ? -x.opening.v : x.opening.v) : null }) }));
     if (!tries.length) return null;
-    const sc = t => t.f.rows.length - 3 * t.f.bad;
+    const sc = t => t.f.rows.filter(r => r.b != null).length + 0.5 * t.f.rows.filter(r => r.b == null).length - 3 * t.f.bad + (t.x.mode === 'table-centred' ? 0.5 : t.x.mode === 'table' ? 0.25 : 0);
     tries.sort((a, b) => sc(b) - sc(a));
     const best = tries[0];
     return { ...best.f, mode: best.x.mode, meta: m, notes: summaryNotes(best.f, m) };
@@ -7518,7 +7559,7 @@ async function bkStart(file) {
     bkOpenResult(res, file);
   } catch (err) {
     body.innerHTML = `<div class="card"><h3 style="margin-top:0">Could not convert ${esc(file.name)}</h3><p class="late">${esc(friendly(err))}</p>
-      <div class="toolbar"><button class="btn" id="bkBack">← Back</button>${/\.pdf$|^image/i.test(file.name + ' ' + file.type) ? '<button class="btn primary" id="bkAi">Read with AI</button>' : ''}</div></div>`;
+      <div class="toolbar"><button class="btn" id="bkBack">← Back</button>${/\.(pdf|jpe?g|png|webp)$/i.test(file.name) || /^(application\/pdf|image\/)/i.test(file.type) ? '<button class="btn primary" id="bkAi">Read with AI</button>' : ''}</div></div>`;
     $('#bkBack', body).onclick = () => route();
     const ai = $('#bkAi', body); if (ai) ai.onclick = () => bkAi(file);
   }
