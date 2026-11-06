@@ -6943,7 +6943,7 @@ const BANK = (() => {
     if (typeof v === 'number') return isFinite(v) ? { v, sfx: '' } : null;
     let t = String(v ?? '').trim(); if (!t) return null;
     let sfx = '';
-    const m = t.match(/[\s(]*\b(cr|dr)\b\.?\s*\)?$/i);
+    const m = t.match(/[\s(]*\b(cr|dr)\b\.?\s*\)?$/i) || t.match(/(?<=\d)\s*\(?\s*(cr|dr)\.?\s*\)?$/i);
     if (m && m.index > 0) { sfx = m[1].toLowerCase(); t = t.slice(0, m.index).trim(); }
     let neg = false;
     if (/^\(.*\)$/.test(t)) { neg = true; t = t.slice(1, -1).trim(); }
@@ -6972,7 +6972,7 @@ const BANK = (() => {
     if (/^(txn |transaction |tran )?amount|amount\s*\(|^amt\b/.test(s)) return 'amt';
     if (/value\s*(date|dt)|val\.?\s*dt/.test(s)) return 'vdate';
     if (/narration|naration|description|particulars|details|remarks|transaction remarks/.test(s)) return 'desc';
-    if (/chq|cheque|check no|ref|instrument|inst\.?\s*no|utr/.test(s)) return 'ref';
+    if (/chq|cheque|check no|ref|instrument|inst\.?\s*no|utr|tran(saction)?\s*id|txn\s*id/.test(s)) return 'ref';
     if (/date|\bdt\b\.?/.test(s)) return 'date';
     if (/^(s\.?\s*no|sl\.?\s*no|sr\.?\s*no|#|no\.?)\.?$/.test(s)) return 'sno';
     if (/branch|init|\bbr\b|sol/.test(s)) return 'br';
@@ -7044,6 +7044,8 @@ const BANK = (() => {
     const ok = n >= 3 && (has('date') || has('vdate')) && (has('bal') || (has('dr') && has('cr')) || has('amt'));
     if (!ok) return null;
     if (!has('date')) cells.find(c => c.role === 'vdate').role = 'date';
+    // titles we don't know (e.g. "Init. Br", "Tran Type") stay as columns so their contents don't spill into the narration
+    cells.forEach(c => { if (!c.role && c.text.length <= 25 && /[a-z]/i.test(c.text)) c.role = 'x'; });
     return { cols: cells.filter(c => c.role && c.role !== 'pdate'), used };
   }
   const overlap = (a0, a1, b0, b1) => Math.max(0, Math.min(a1, b1) - Math.max(a0, b0));
@@ -7317,7 +7319,8 @@ const BANK = (() => {
   }
   // compare with the bank's own summary
   function summaryNotes(res, m) {
-    const n = [];
+    const n = [], noB = res.rows.filter(r => r.b == null).length;
+    if (res.rows.length && noB > res.rows.length / 2) n.push(`The balance column could not be read for ${noB} of ${res.rows.length} rows, so those rows cannot be checked. Use Read with AI, or send this statement to Claude to add its layout.`);
     if (m.ob != null && !near(m.ob, res.opening)) n.push(`Opening balance on the statement is ${m.ob.toFixed(2)}, worked out ${res.opening.toFixed(2)} — a row at the start may be missing.`);
     if (m.cb != null && !near(m.cb, res.closing)) n.push(`Closing balance on the statement is ${m.cb.toFixed(2)}, last row shows ${res.closing.toFixed(2)} — rows at the end may be missing.`);
     if (m.td != null && !near(m.td, res.dr)) n.push(`Total debits on the statement ${m.td.toFixed(2)}, rows add up to ${res.dr.toFixed(2)}.`);
