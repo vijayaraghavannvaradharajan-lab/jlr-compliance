@@ -1,7 +1,7 @@
 /* JLR Tracker service worker: makes the app installable and opens fast.
    Pages and scripts: network first, always re-checked with the server (no stale copy after an upload);
    the cached copy is used only when offline. Data (Supabase) is never cached. */
-const CACHE = 'jlr-shell-v14';
+const CACHE = 'jlr-shell-v15';
 const SHELL = ['./', './style.css', './theme.js', './supabase.js', './config.js', './app.js', './manifest.webmanifest', './icons/icon-192.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL.map(u => new Request(u, { cache: 'reload' })))).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => {

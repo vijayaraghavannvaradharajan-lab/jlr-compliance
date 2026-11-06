@@ -965,3 +965,23 @@ input.bad{border-color:var(--red)!important;background:var(--red-soft)}
 @media (max-width:600px){.bill-f label.wide{grid-column:1/-1}}
 [data-layout="b"] .bill{border-radius:0;clip-path:polygon(0 0,calc(100% - 10px) 0,100% 10px,100% 100%,10px 100%,0 calc(100% - 10px))}
 [data-layout="b"] .mca-f{border-radius:0;text-transform:uppercase;letter-spacing:.03em}
+
+/* bank statement converter (v22) */
+.bento-stats.stats5{grid-template-columns:repeat(5,minmax(0,1fr))}
+@media (max-width:900px){.bento-stats.stats5{grid-template-columns:repeat(2,minmax(0,1fr))}.bento-stats.stats5 .mini b.tp-amt{font-size:1rem;white-space:nowrap}}
+.bk-drop{border:2px dashed var(--line);cursor:pointer;text-align:center;padding:34px 16px;transition:border-color .15s,background .15s}
+.bk-drop:hover,.bk-drop.on,.bk-drop:focus-visible{border-color:var(--blue);background:var(--blue-soft);outline:none}
+:root[data-layout="b"] .bk-drop{border:2px dashed var(--line)}
+:root[data-layout="b"] .bk-drop:hover,:root[data-layout="b"] .bk-drop.on{border-color:var(--blue)}
+.bk-drop-in{display:flex;flex-direction:column;align-items:center;gap:6px}
+.bk-drop-in svg{color:var(--blue)}
+.bk-bar{height:6px;border-radius:6px;background:var(--grey-soft);overflow:hidden;margin-top:10px}
+.bk-bar i{display:block;height:100%;width:40%;background:var(--blue);border-radius:6px;animation:bkbar 1.2s ease-in-out infinite}
+@keyframes bkbar{0%{transform:translateX(-100%)}100%{transform:translateX(250%)}}
+:root[data-anim="off"] .bk-bar i{animation:none;width:100%;opacity:.5}
+@media (prefers-reduced-motion:reduce){.bk-bar i{animation:none;width:100%;opacity:.5}}
+.bk-title{display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap}
+table.bk-grid tr.bk-bad td{background:var(--red-soft)}
+table.bk-grid input.bk-auto{font-style:italic}
+.bk-foot{margin-top:12px;position:sticky;bottom:8px;z-index:3;padding:10px 14px}
+@media (max-width:700px){.bk-foot{position:static}.bento-stats.stats5 .mini b{font-size:1.15rem}.bk-tools input[type=search]{min-width:0!important;flex:1 1 100%}}

@@ -367,6 +367,7 @@ const NI = {   // menu icons (stroke SVG paths)
   work: '<path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01"></path>',
   gst: '<path d="M6 2h12v20l-3-2-3 2-3-2-3 2z"></path><path d="M9 7h6M9 11h6"></path>',
   tds: '<circle cx="7" cy="7" r="2.5"></circle><circle cx="17" cy="17" r="2.5"></circle><path d="M19 5L5 19"></path>',
+  bank: '<path d="M3 10h18M12 3l9 5H3z"></path><path d="M5 10v8M9.5 10v8M14.5 10v8M19 10v8M3 21h18"></path>',
   tdsw: '<path d="M4 3h16v18H4zM8 7h8M8 11h3M13 11h3M8 15h3M13 15h3"></path>',
   mca: '<path d="M3 21h18M5 21V8l7-5 7 5v13"></path><path d="M9 21v-5h6v5"></path>',
   companies: '<path d="M4 21V4h10v17M14 9h6v12M4 21h18M8 8h2M8 12h2M8 16h2M17 13h1M17 17h1"></path>',
@@ -390,7 +391,7 @@ const navIcon = k => `<svg aria-hidden="true" width="18" height="18" viewBox="0 
 function navGroups() {
   const G = [
     ['Overview', [['dashboard', 'Dashboard'], ['calendar', 'Due-date calendar']]],
-    ['Compliance work', [['work', isManager() ? 'All work' : 'My work'], ['gst', 'GST review', 'gst'], ['tds', 'TDS working', 'tdsw'], ['work-tds', 'TDS / TCS work', 'tds'], ['work-mca', 'MCA / ROC work', 'mca'], ['mca', 'Companies & LLPs', 'companies'], ['notices', 'Notices']]],
+    ['Compliance work', [['work', isManager() ? 'All work' : 'My work'], ['gst', 'GST review', 'gst'], ['bank', 'Bank statements', 'bank'], ['tds', 'TDS working', 'tdsw'], ['work-tds', 'TDS / TCS work', 'tds'], ['work-mca', 'MCA / ROC work', 'mca'], ['mca', 'Companies & LLPs', 'companies'], ['notices', 'Notices']]],
     ['Clients', [isManager() && ['clients', 'Clients'], ['onboarding', 'Onboarding'], ['renewals', 'Renewals (DSC, LUT…)'], ['inbox', 'Client mail'], ['clientreport', 'Monthly client reports']]],
     ['Payments & billing', [['taxpay', 'Tax payment intimation'], isManager() && ['billing', 'Billing & fees']]],
     ['Office', [isManager() && ['workload', 'Team workload'], isPartner() && ['reports', 'Reports'], ['updates', 'Law updates'], ['checklists', 'Checklists'], ['calc', 'Late fee calculator']]],
@@ -6912,6 +6913,835 @@ function tdsYear(body, ctx) {
 }
 const TDSW = { TDS_SEC, TDS_BY, tdsRate, tdsCalcRows, tdsInterest, parseTdsSec, panType, tdsRetDue, tdsCertDue, tdsQMonths, tdsFyMonths, tdsFormName, tdsCertName, tdsQOf, tdsFyOf };
 
-window.__tracker = { TDSW, MCA, BILL, parseMcaSheets, mcaPlanAll, fillGstWorkings, G1, GR, RECO, gstr3bFromApi, periodToMonth, strongPassword, periodFor, dueDateFor, parseCSV, toCSV, gstLateFee, gstInterest, tdsCalc, rocCalc, monthsSpan, tdsDepositDue, g1json, clientReportHtml, clientReportMsg, rnStage, anyDate, parseRenewalRows, gstPayDue, tdsPayDue, advInstalment, advCurrent, advDue, recurringPlan, taxMsg, addMonths, fyEndOf, obProgress, rnKind };
+/* =====================================================================
+   BANK STATEMENT CONVERTER (Session 5, v22)  #/bank
+   PDF (text, password-protected) · scanned PDF / photo (text recognition) · Excel / CSV
+   → one clean table, running-balance check on every row, ledger rules, Excel + Tally XML.
+   AI (Claude, through the bill-read function) only when asked and a key is saved.
+   ===================================================================== */
+const BANK = (() => {
+  const MON = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, sept: 9, oct: 10, nov: 11, dec: 12 };
+  const p2 = n => String(n).padStart(2, '0');
+  const okYmd = (y, m, d) => { if (y < 100) y += 2000; if (!(y >= 1990 && y <= 2100 && m >= 1 && m <= 12 && d >= 1 && d <= 31)) return ''; const t = new Date(Date.UTC(y, m - 1, d)); return t.getUTCDate() === d ? `${y}-${p2(m)}-${p2(d)}` : ''; };
+  // date from text / Excel serial / Date → 'YYYY-MM-DD' or ''
+  function date(v) {
+    if (v instanceof Date && !isNaN(v)) return okYmd(v.getFullYear(), v.getMonth() + 1, v.getDate());
+    if (typeof v === 'number') { if (v > 20000 && v < 80000) { const t = new Date(Math.round((v - 25569) * 864e5)); return okYmd(t.getUTCFullYear(), t.getUTCMonth() + 1, t.getUTCDate()); } return ''; }
+    const s = String(v ?? '').trim().replace(/\s+/g, ' ');
+    let m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4}|\d{2})(?:\s+\d{1,2}:\d{2}(?::\d{2})?\s*(?:[AP]M)?)?$/i);
+    if (m) return okYmd(+m[3], +m[2], +m[1]);
+    m = s.match(/^(\d{1,2})[\s\-\/.]?([A-Za-z]{3,9})[\s\-\/.,']*(\d{4}|\d{2})$/);
+    if (m && MON[m[2].toLowerCase().slice(0, 3)]) return okYmd(+m[3], MON[m[2].toLowerCase().slice(0, 3)], +m[1]);
+    m = s.match(/^([A-Za-z]{3,9})\s(\d{1,2}),?\s(\d{4})$/);
+    if (m && MON[m[1].toLowerCase().slice(0, 3)]) return okYmd(+m[3], MON[m[1].toLowerCase().slice(0, 3)], +m[2]);
+    m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (m) return okYmd(+m[1], +m[2], +m[3]);
+    return '';
+  }
+  // amount → {v, sfx:'cr'|'dr'|''} or null.  strict: PDF/OCR text needs paise (".00"); Excel cells may be whole numbers
+  function amt(v, { loose = false, ocr = false } = {}) {
+    if (typeof v === 'number') return isFinite(v) ? { v, sfx: '' } : null;
+    let t = String(v ?? '').trim(); if (!t) return null;
+    let sfx = '';
+    const m = t.match(/[\s(]*\b(cr|dr)\b\.?\s*\)?$/i);
+    if (m && m.index > 0) { sfx = m[1].toLowerCase(); t = t.slice(0, m.index).trim(); }
+    let neg = false;
+    if (/^\(.*\)$/.test(t)) { neg = true; t = t.slice(1, -1).trim(); }
+    t = t.replace(/^(₹|rs\.?|inr)\s*/i, '');
+    if (t.startsWith('-')) { neg = true; t = t.slice(1).trim(); }
+    if (t.endsWith('-')) { neg = true; t = t.slice(0, -1).trim(); }
+    if (ocr) { t = t.replace(/[oO]/g, '0').replace(/[lI|]/g, '1').replace(/\s/g, ''); if (/^[\d,]+,\d{2}$/.test(t) && !t.includes('.')) t = t.replace(/,(\d{2})$/, '.$1'); t = t.replace(/\.(?=.*\.)/g, ','); }
+    const dec = /^\d{1,3}(,\d{2,3})*\.\d{1,2}$|^\d+\.\d{1,2}$/.test(t), whole = /^\d{1,3}(,\d{2,3})+$|^\d+$/.test(t);
+    if (!dec && !(loose && whole)) return null;
+    const n = +t.replace(/,/g, '');
+    return isFinite(n) ? { v: neg ? -n : n, sfx } : null;
+  }
+  const isAmt = (s, o) => !!amt(s, o);
+  const SFX_ONLY = /^\(?(cr|dr)\.?\)?$/i;
+  // header word → column role
+  function role(t) {
+    const s = String(t || '').toLowerCase().replace(/\s+/g, ' ').trim();
+    if (!s || s.length > 40) return '';
+    if (/balance|\bbal\b\.?/.test(s)) return 'bal';
+    if (/^(dr\s*\/\s*cr|cr\s*\/\s*dr|d\/c|c\/d|type|txn type|cr\/dr\s*ind)\.?$/.test(s)) return 'type';
+    const dr = /withdraw|debit|\bdr\b|paid out|payments?\b/.test(s), cr = /deposit|credit|\bcr\b|paid in|receipts?\b/.test(s);
+    if (dr && cr) return 'amt';
+    if (dr) return 'dr';
+    if (cr) return 'cr';
+    if (/^(txn |transaction |tran )?amount|amount\s*\(|^amt\b/.test(s)) return 'amt';
+    if (/value\s*(date|dt)|val\.?\s*dt/.test(s)) return 'vdate';
+    if (/narration|naration|description|particulars|details|remarks|transaction remarks/.test(s)) return 'desc';
+    if (/chq|cheque|check no|ref|instrument|inst\.?\s*no|utr/.test(s)) return 'ref';
+    if (/date|\bdt\b\.?/.test(s)) return 'date';
+    if (/^(s\.?\s*no|sl\.?\s*no|sr\.?\s*no|#|no\.?)\.?$/.test(s)) return 'sno';
+    if (/branch|init|\bbr\b|sol/.test(s)) return 'br';
+    return '';
+  }
+  const AMT_ROLES = ['dr', 'cr', 'amt', 'bal'];
+  // items: [{s, x0, x1, y (baseline, grows downwards), h, p}] → lines
+  function toLines(items) {
+    const L = [], by = [...items].filter(i => /[A-Za-z0-9]/.test(String(i.s))).sort((a, b) => a.p - b.p || a.y - b.y || a.x0 - b.x0);
+    for (const it of by) {
+      const last = L[L.length - 1], tol = Math.max(1.5, 0.45 * (it.h || 8));
+      if (last && last.p === it.p && Math.abs(last.y - it.y) <= tol) { last.w.push(it); last.h = Math.max(last.h, it.h || 8); }
+      else L.push({ p: it.p, y: it.y, h: it.h || 8, w: [it] });
+    }
+    for (const l of L) {
+      l.w.sort((a, b) => a.x0 - b.x0);
+      const W = [];                                 // glue touching pieces ("17.70" + "(Dr)", split numbers)
+      for (const it of l.w) {
+        const pv = W[W.length - 1], s = String(it.s).trim();
+        if (pv && (it.x0 - pv.x1) < 0.25 * l.h && /^[-(₹]?[\d,]+\.?$/.test(pv.s) && /^[\d,]*\.?\d*\)?$/.test(s) && !(isAmt(pv.s) && isAmt(s))) { pv.s = pv.s + (it.x0 - pv.x1 > 0.12 * l.h ? ' ' : '') + s; pv.x1 = Math.max(pv.x1, it.x1); }
+        else if (pv && SFX_ONLY.test(s) && isAmt(pv.s) && it.x0 - pv.x1 < 2 * l.h) { pv.s += ' ' + s; pv.x1 = it.x1; }
+        else W.push({ s, x0: it.x0, x1: it.x1 });
+      }
+      l.w = W; l.text = W.map(w => w.s).join(' ');
+    }
+    return L;
+  }
+  // header columns from one line (+ the next line when the header wraps)
+  function headerAt(L, i) {
+    const l = L[i]; if (!l) return null;
+    const words = [...l.w], nx = L[i + 1];
+    if (nx && nx.p === l.p && nx.y - l.y < 1.9 * l.h && !nx.w.some(w => isAmt(w.s) || date(w.s))) words.push(...nx.w.map(w => ({ ...w, l2: 1 })));
+    words.sort((a, b) => a.x0 - b.x0);
+    const cells = [];
+    for (const w of words) {
+      const g = 0.5 * l.h;
+      const c = w.l2 ? cells.find(c => w.x0 <= c.x1 + g && w.x1 >= c.x0 - g) : cells.find(c => c.l1 && w.x0 - c.x1 < g && w.x0 >= c.x0);
+      if (c) { c.parts.push(w); c.x0 = Math.min(c.x0, w.x0); c.x1 = Math.max(c.x1, w.x1); if (!w.l2) c.l1 = 1; }
+      else cells.push({ x0: w.x0, x1: w.x1, parts: [w], l1: w.l2 ? 0 : 1 });
+    }
+    for (const c of cells) { c.text = c.parts.sort((a, b) => (a.l2 || 0) - (b.l2 || 0) || a.x0 - b.x0).map(p => p.s).join(' '); c.role = role(c.text); }
+    for (let k = 0; k < cells.length; k++) {                  // PDF text sometimes runs two titles together
+      const c = cells[k]; if (c.role === 'amt' || c.parts.some(p => p.l2)) continue;
+      const ws = c.text.split(' '); let cut = null;
+      for (let j = 1; j < ws.length && !cut; j++) {
+        const a = role(ws.slice(0, j).join(' ')), b = role(ws.slice(j).join(' '));
+        if (a && b && a !== b && !(['dr', 'cr'].includes(a) && b === 'amt') && !(['dr', 'cr'].includes(b) && a === 'amt')) cut = j;
+      }
+      if (!cut) continue;
+      const left = ws.slice(0, cut).join(' '), right = ws.slice(cut).join(' '), cw = (c.x1 - c.x0) / Math.max(1, c.text.length);
+      const c2 = { x0: c.x0 + (left.length + 1) * cw, x1: c.x1, parts: [], text: right, role: role(right), l1: 1 };
+      c.x1 = c.x0 + left.length * cw; c.text = left; c.role = role(left);
+      cells.splice(k + 1, 0, c2);
+    }
+    for (const c of cells) c.xc = (c.x0 + c.x1) / 2;
+    let roles = cells.map(c => c.role).filter(Boolean);
+    const dates = cells.filter(c => c.role === 'date'); if (dates.length > 1) dates.slice(1).forEach(c => { c.role = 'vdate'; });
+    roles = cells.map(c => c.role).filter(Boolean);
+    const has = r => roles.includes(r), n = new Set(roles).size;
+    const ok = n >= 3 && (has('date') || has('vdate')) && (has('bal') || (has('dr') && has('cr')) || has('amt'));
+    if (!ok) return null;
+    if (!has('date')) cells.find(c => c.role === 'vdate').role = 'date';
+    return { cols: cells.filter(c => c.role), used: words.some(w => w.l2) ? 2 : 1 };
+  }
+  const overlap = (a0, a1, b0, b1) => Math.max(0, Math.min(a1, b1) - Math.max(a0, b0));
+  function colOf(w, cols, h) {
+    const a = isAmt(w.s) || isAmt(w.s, { ocr: true });
+    const C = a ? cols.filter(c => AMT_ROLES.includes(c.role)) : cols;
+    let best = null, bs = 0;
+    for (const c of C) { const s = overlap(w.x0, w.x1, c.x0 - 0.6 * h, c.x1 + 0.6 * h); if (s > bs) { bs = s; best = c; } }
+    if (best) return best;
+    if (!a) {                                                    // left-aligned text: the column whose title starts at or before the word
+      const L = cols.filter(c => !AMT_ROLES.includes(c.role) && c.x0 <= w.x0 + 0.5 * h).sort((x, y) => y.x0 - x.x0)[0];
+      if (L) return L;
+    }
+    let bd = 1e9;
+    for (const c of C) { const d = a ? Math.min(Math.abs(w.x1 - c.x1), Math.abs((w.x0 + w.x1) / 2 - c.xc)) : Math.abs(w.x0 - c.x0); if (d < bd) { bd = d; best = c; } }
+    return best;
+  }
+  const JUNK = /page\s*\d+\s*(of\s*\d+)?|computer generated|does not require|statement summary|generated on|end of statement|customer care|registered office|please (note|contact)|unless the constituent|\*{3,}|abbreviations/i;
+  const OPEN_RE = /opening\s*balance|balance\s*b\/?f|brought\s*forward|b\/f\b|balance\s*forward/i, CLOSE_RE = /closing\s*balance|carried\s*forward|c\/f\b|balance\s*c\/?f/i;
+  // table mode: rows from lines using the header columns
+  function fromLines(L, { ocr = false } = {}) {
+    const ao = { ocr };
+    let cols = null, hdrFound = false;
+    const anchors = [], cont = [];
+    let skipTo = -1;
+    const hdrs = {}; L.forEach((l, i) => { if (!(l.p in hdrs) && headerAt(L, i)) hdrs[l.p] = i; });
+    for (let i = 0; i < L.length; i++) {
+      if (i <= skipTo) continue;
+      const l = L[i];
+      if (l.p in hdrs && i < hdrs[l.p]) continue;                // page title / address above the header
+      const hd = i === hdrs[l.p] || (l.p in hdrs && i > hdrs[l.p]) ? headerAt(L, i) : null;
+      if (hd) { cols = hd.cols; hdrFound = true; skipTo = i + hd.used - 1; continue; }
+      if (!cols) continue;
+      const by = {}, edges = cols.filter(c => !AMT_ROLES.includes(c.role)).map(c => c.x0);
+      const W = [];
+      for (const w of l.w) {
+        const crosses = / /.test(w.s) && !isAmt(w.s, ao) && edges.some(e => w.x0 < e - 0.5 * l.h && w.x1 > e + l.h);
+        if (!crosses) { W.push(w); continue; }
+        const cw = (w.x1 - w.x0) / w.s.length; let pos = 0;
+        for (const part of w.s.split(' ')) { if (part) W.push({ s: part, x0: w.x0 + pos * cw, x1: w.x0 + (pos + part.length) * cw }); pos += part.length + 1; }
+      }
+      l.w = W;
+      for (const w of l.w) { const c = colOf(w, cols, l.h); if (!c) continue; (by[c.role] = by[c.role] || []).push(w); }
+      const txt = r => (by[r] || []).map(w => w.s).join(' ').trim();
+      const dt = date(txt('date')) || (ocr ? date(txt('date').replace(/[oO]/g, '0').replace(/[lI|]/g, '1')) : '');
+      const nums = r => (by[r] || []).map(w => amt(w.s, ao)).filter(Boolean);
+      const hasAmt = AMT_ROLES.some(r => nums(r).length);
+      if (dt && hasAmt) {
+        const a = { p: l.p, y: l.y, h: l.h, date: dt, vdate: date(txt('vdate')), desc: [[l.y, txt('desc')]], ref: [[l.y, txt('ref')]], type: txt('type') };
+        for (const r of AMT_ROLES) { const n = nums(r); if (n.length) a[r] = n[n.length - 1]; }
+        // text that fell into other text columns (sno/br/unknown) is dropped; desc fallback: any non-amount text left of amounts
+        if (!a.desc[0][1]) a.desc[0][1] = l.w.filter(w => !isAmt(w.s, ao) && !date(w.s) && colOf(w, cols, l.h) && !['date', 'vdate', 'sno', 'br', 'type', 'ref'].includes(colOf(w, cols, l.h).role)).map(w => w.s).join(' ');
+        const dw = by.desc || []; if (dw.length) a.dx = Math.min(...dw.map(w => w.x0));
+        anchors.push(a); continue;
+      }
+      if (JUNK.test(l.text)) continue;
+      if (OPEN_RE.test(l.text) || CLOSE_RE.test(l.text)) {
+        const f = re => { const m = l.text.match(re); return m ? amt(m[1] + (m[2] ? ' ' + m[2] : ''), ao) : null; };
+        const ob = f(/(?:opening\s*balance|balance\s*b\/?f|brought\s*forward|b\/f|balance\s*forward)[^\d\-]{0,30}(-?[\d,]+\.\d{2})\s*(cr|dr)?/i), cb = f(/(?:closing\s*balance|carried\s*forward|c\/f|balance\s*c\/?f)[^\d\-]{0,30}(-?[\d,]+\.\d{2})\s*(cr|dr)?/i);
+        if (ob || cb) cont.push({ p: l.p, y: l.y, ob, cb });
+        continue;
+      }
+      // continuation: only text in narration / ref columns
+      const roles = Object.keys(by);
+      if (roles.length && roles.every(r => r === 'desc' || r === 'ref') && !l.w.some(w => isAmt(w.s, ao))) cont.push({ p: l.p, y: l.y, h: l.h, x: l.w[0].x0, desc: txt('desc'), ref: txt('ref') });
+    }
+    if (!hdrFound) return null;
+    // vertically centred rows (text above the date line)? → attach each text line to the nearest row; else to the row above
+    const firstA = anchors[0];
+    const centred = !!firstA && cont.filter(c => c.desc != null && /[A-Za-z0-9]{3}/.test(c.desc) && c.p === firstA.p && c.y < firstA.y && (firstA.dx == null || Math.abs(c.x - firstA.dx) < 2 * c.h)).length > 0;
+    let opening = null, closing = null;
+    const dxs = anchors.map(a => a.dx).filter(x => x != null).sort((a, b) => a - b), dx = dxs.length ? dxs[Math.floor(dxs.length * 0.1)] : null;
+    const text = [];
+    for (const c of cont) {
+      if (c.ob || c.cb) { if (c.ob && opening == null) opening = c.ob; if (c.cb) closing = c.cb; continue; }
+      if (dx != null && c.x < dx - 1.2 * c.h) continue;        // starts left of the narration column → not narration
+      text.push(c);
+    }
+    const add = (a, c) => { if (c.desc) a.desc.push([c.y, c.desc]); if (c.ref) a.ref.push([c.y, c.ref]); };
+    if (!centred) {
+      for (const c of text) {
+        let tgt = null;
+        for (const a of anchors) { if (a.p < c.p || (a.p === c.p && a.y < c.y)) tgt = a; else break; }
+        if (tgt) add(tgt, c);
+      }
+    } else {
+      // each row's text is centred on its date line: split the lines between two rows so every row has (about) as many lines below as above
+      for (const p of [...new Set(anchors.map(a => a.p))]) {
+        const A = anchors.filter(a => a.p === p), T = text.filter(c => c.p === p);
+        const gaps = A.map((a, j) => T.filter(c => c.y > a.y && (j === A.length - 1 || c.y < A[j + 1].y)));
+        const pre = T.filter(c => c.y < A[0].y); pre.forEach(c => add(A[0], c));
+        // dp[j][u] = best cost with anchor j having u lines above
+        const forced = gaps.map((g, j) => {
+          if (j === A.length - 1 || !g.length) return null;
+          const ys = [A[j].y, ...g.map(c => c.y), A[j + 1].y], df = ys.slice(1).map((y, i) => y - ys[i]);
+          const mx = Math.max(...df), srt = [...df].sort((a, b) => a - b), med = srt[Math.floor(srt.length / 2)];
+          return mx > med + 0.2 * A[j].h && df.filter(x => x > mx - 0.1).length === 1 ? df.indexOf(mx) : null;
+        });
+        let J = 0;
+        const cost = (d, u) => (forced[J] != null ? (d === forced[J] ? 0 : 5) : 0) + (d === u + 1 ? 0 : d === u ? 0.001 : 1 + Math.abs(d - u) * 0.1);
+        let best = new Map([[pre.length, { c: 0, path: [] }]]);
+        for (let j = 0; j < A.length; j++) {
+          J = j;
+          const k = gaps[j].length, next = new Map(), last = j === A.length - 1;
+          for (const [u, st] of best) for (let d = last ? k : 0; d <= k; d++) {
+            const c2 = st.c + cost(d, u), u2 = k - d, cur = next.get(u2);
+            if (!cur || c2 < cur.c) next.set(u2, { c: c2, path: [...st.path, d] });
+          }
+          best = next;
+        }
+        const path = [...best.values()].sort((a, b) => a.c - b.c)[0].path;
+        A.forEach((a, j) => { const g = gaps[j], d = path[j]; g.slice(0, d).forEach(c => add(a, c)); if (j + 1 < A.length) g.slice(d).forEach(c => add(A[j + 1], c)); });
+      }
+    }
+    const join = arr => arr.sort((a, b) => a[0] - b[0]).map(x => x[1]).filter(Boolean).reduce((s, t) => !s ? t : /[\/\-:]$/.test(s) || /^[\/\-]/.test(t) ? s + t : s + ' ' + t, '');
+    const rows = anchors.map(a => ({ date: a.date, vdate: a.vdate, desc: join(a.desc), ref: join(a.ref), dr: a.dr, cr: a.cr, amt: a.amt, bal: a.bal, type: a.type }));
+    return { rows, opening, closing, mode: centred ? 'table-centred' : 'table' };
+  }
+  // no header found: a row = a line that starts with a date and ends with amounts
+  function fromLinesLoose(L, { ocr = false } = {}) {
+    const ao = { ocr }, rows = []; let last = null, descX = null;
+    for (const l of L) {
+      const w = l.w;
+      let k = 0, dt = '';
+      for (let j = 1; j <= Math.min(3, w.length); j++) { const d = date(w.slice(0, j).map(x => x.s).join(' ')); if (d) { dt = d; k = j; } }
+      const nums = []; let e = w.length;
+      while (e > k && (amt(w[e - 1].s, ao) || /^[-–]$/.test(w[e - 1].s))) { e--; const a = amt(w[e].s, ao); if (a) nums.unshift(a); }
+      if (dt && nums.length) {
+        let s = k; const vd = s < e ? date(w[s].s) : ''; if (vd) s++;
+        const mid = w.slice(s, e); if (mid.length) descX = mid[0].x0;
+        const refI = mid.length > 1 ? mid.findIndex((x, j) => j > 0 && /^[A-Z0-9\/\-]{6,}$/i.test(x.s) && /\d/.test(x.s) && !/\s/.test(x.s)) : -1;
+        const ref = refI > 0 ? mid[refI].s : '';
+        const desc = mid.filter((x, j) => j !== refI).map(x => x.s).join(' ');
+        const bal = nums[nums.length - 1], rest = nums.slice(0, -1).filter(n => n.v !== 0);
+        last = { date: dt, vdate: vd, desc, ref, bal, amt: rest.length === 1 ? rest[0] : undefined, dr: rest.length === 2 ? rest[0] : undefined, cr: rest.length === 2 ? rest[1] : undefined, p: l.p };
+        if (!rest.length && nums.length === 2 && nums[0].v === 0) last.amt = undefined;
+        rows.push(last); continue;
+      }
+      if (JUNK.test(l.text) || !last || last.p !== l.p) continue;
+      if (!w.some(x => isAmt(x.s, ao)) && descX != null && w[0].x0 >= descX - l.h) last.desc += (/[\/\-]$/.test(last.desc) ? '' : ' ') + l.text;
+    }
+    return rows.length >= 2 ? { rows, mode: 'loose' } : null;
+  }
+  // Excel / CSV rows (arrays of cells)
+  function fromSheet(rows) {
+    let hi = -1, map = null;
+    for (let i = 0; i < Math.min(rows.length, 60); i++) {
+      const m = {}; (rows[i] || []).forEach((c, j) => { const r = role(c); if (r && !(r in m)) m[r] = j; else if (r === 'date' && 'date' in m && !('vdate' in m)) m.vdate = j; });
+      const n = Object.keys(m).length;
+      if (n >= 3 && ('date' in m || 'vdate' in m) && ('bal' in m || ('dr' in m && 'cr' in m) || 'amt' in m)) { hi = i; map = m; if (!('date' in m)) { m.date = m.vdate; delete m.vdate; } break; }
+    }
+    if (hi < 0) return null;
+    const out = []; let last = null, opening = null;
+    for (const r of rows.slice(hi + 1)) {
+      const g = k => k in map ? r[map[k]] : '';
+      const dt = date(g('date'));
+      const A = k => { const v = g(k); return v === '' || v == null ? null : amt(v, { loose: true }); };
+      const desc = String(g('desc') ?? '').replace(/\s+/g, ' ').trim();
+      if (dt && (A('bal') || A('dr') || A('cr') || A('amt'))) {
+        if (OPEN_RE.test(desc) && !A('dr') && !A('cr') && !A('amt')) { opening = A('bal'); continue; }
+        last = { date: dt, vdate: date(g('vdate')), desc, ref: String(g('ref') ?? '').trim(), dr: A('dr') || undefined, cr: A('cr') || undefined, amt: A('amt') || undefined, bal: A('bal') || undefined, type: String(g('type') ?? '') };
+        out.push(last); continue;
+      }
+      if (last && desc && !dt && !A('dr') && !A('cr') && !A('bal') && !/^\*+$/.test(desc)) last.desc += ' ' + desc;
+    }
+    return out.length ? { rows: out, opening, mode: 'sheet', hi } : null;
+  }
+  const r2 = n => Math.round(n * 100) / 100;
+  const near = (a, b) => Math.abs(a - b) < 0.011;
+  // turn raw rows into final rows: sides, signs, order, opening, checks
+  function finish(raw, { opening: op0 = null, meta = {} } = {}) {
+    let rows = raw.map(r => {
+      const o = { date: r.date, vdate: r.vdate || '', desc: (r.desc || '').replace(/\s+/g, ' ').trim(), ref: (r.ref || '').trim(), dr: 0, cr: 0, bal: null, side: '' };
+      if (r.bal) o.bal = r.bal.sfx === 'dr' ? -Math.abs(r.bal.v) : r.bal.v;
+      const t = String(r.type || '').trim().toLowerCase();
+      if (r.dr && r.dr.v) { o.dr = Math.abs(r.dr.v); o.side = 'dr'; }
+      if (r.cr && r.cr.v) { o.cr = Math.abs(r.cr.v); o.side = o.side ? 'both' : 'cr'; }
+      if (!o.side && r.amt && r.amt.v) {
+        const s = r.amt.sfx || (/^(dr|d|debit|withdrawal)\.?$/.test(t) ? 'dr' : /^(cr|c|credit|deposit)\.?$/.test(t) ? 'cr' : r.amt.v < 0 ? 'dr' : '');
+        o.amt = Math.abs(r.amt.v); if (s) { o[s] = o.amt; o.side = s; } else o.side = '?';
+      }
+      return o;
+    });
+    // newest first? compare how many rows tally forward vs backward
+    const score = R => { let s = 0; for (let i = 1; i < R.length; i++) { const a = R[i - 1], b = R[i]; if (a.bal == null || b.bal == null) continue; const d = b.bal - a.bal, m = b.amt || b.dr || b.cr; if (b.side === '?' ? near(Math.abs(d), m) : near(d, b.cr - b.dr)) s++; } return s; };
+    const desc = rows.length > 2 && rows[0].date > rows[rows.length - 1].date;
+    const rev = [...rows].reverse();
+    if (desc || score(rev) > score(rows)) rows = rev;
+    // sides from the balance; fix swapped debit/credit
+    let fixed = 0;
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i], pb = i ? rows[i - 1].bal : op0;
+      if (r.bal == null || pb == null) continue;
+      const d = r2(r.bal - pb);
+      if (r.side === '?') { if (near(d, r.amt)) { r.cr = r.amt; r.side = 'cr'; } else if (near(d, -r.amt)) { r.dr = r.amt; r.side = 'dr'; } }
+      else if (!near(d, r.cr - r.dr) && near(d, r.dr - r.cr) && r.side !== 'both') { [r.dr, r.cr] = [r.cr, r.dr]; r.side = r.side === 'dr' ? 'cr' : 'dr'; fixed++; }
+    }
+    if (rows[0] && rows[0].side === '?') { const c = /\bby\b|deposit|credit|\bcr\b|received|int\.?\s*pd|interest|refund|rev/i.test(rows[0].desc); rows[0][c ? 'cr' : 'dr'] = rows[0].amt; rows[0].side = c ? 'cr' : 'dr'; }
+    rows.forEach(r => { delete r.amt; if (r.side === '?') r.side = ''; });
+    const first = rows[0];
+    const opening = op0 != null ? op0 : first && first.bal != null ? r2(first.bal - first.cr + first.dr) : 0;
+    const out = rows.map(r => ({ d: r.date, vd: r.vdate, n: r.desc, r: r.ref, dr: r2(r.dr), cr: r2(r.cr), b: r.bal == null ? null : r2(r.bal) }));
+    const res = check(out, opening);
+    return { rows: out, opening, fixed, ...res, meta };
+  }
+  // running balance check: every printed balance must equal the previous balance + credit − debit
+  function check(rows, opening) {
+    let run = opening, bad = 0; const flags = [];
+    rows.forEach((r, i) => {
+      const exp = r2(run + (+r.cr || 0) - (+r.dr || 0));
+      if (r.b == null || r.b === '') { flags[i] = { ok: true, calc: exp }; run = exp; return; }
+      const ok = near(exp, +r.b); if (!ok) bad++;
+      flags[i] = { ok, exp, diff: r2(+r.b - exp) }; run = +r.b;
+    });
+    const dr = r2(rows.reduce((s, r) => s + (+r.dr || 0), 0)), cr = r2(rows.reduce((s, r) => s + (+r.cr || 0), 0));
+    const lastB = [...rows].reverse().find(r => r.b != null && r.b !== '');
+    const closing = rows.length ? (lastB ? +lastB.b : r2(opening + cr - dr)) : opening;
+    return { flags, bad, dr, cr, closing, nDr: rows.filter(r => +r.dr).length, nCr: rows.filter(r => +r.cr).length, sumOk: near(r2(opening + cr - dr), closing) };
+  }
+  const BANKS = [['State Bank of India', /state bank of india|\bsbi\b/i, 'SBIN'], ['HDFC Bank', /hdfc bank/i, 'HDFC'], ['ICICI Bank', /icici bank/i, 'ICIC'], ['Axis Bank', /axis bank/i, 'UTIB'],
+    ['Kotak Mahindra Bank', /kotak/i, 'KKBK'], ['Indian Bank', /\bindian bank\b/i, 'IDIB'], ['Indian Overseas Bank', /indian overseas/i, 'IOBA'], ['Canara Bank', /canara/i, 'CNRB'], ['Bank of Baroda', /bank of baroda/i, 'BARB'],
+    ['Union Bank of India', /union bank/i, 'UBIN'], ['Punjab National Bank', /punjab national/i, 'PUNB'], ['Bank of India', /(?<!state |central )bank of india\b/i, 'BKID'], ['Central Bank of India', /central bank of india/i, 'CBIN'],
+    ['IDFC FIRST Bank', /idfc/i, 'IDFB'], ['Yes Bank', /yes bank/i, 'YESB'], ['IndusInd Bank', /indusind/i, 'INDB'], ['Federal Bank', /federal bank/i, 'FDRL'], ['Karur Vysya Bank', /karur vysya/i, 'KVBL'],
+    ['City Union Bank', /city union/i, 'CIUB'], ['Tamilnad Mercantile Bank', /tamilnad mercantile/i, 'TMBL'], ['South Indian Bank', /south indian bank/i, 'SIBL'], ['UCO Bank', /\buco bank/i, 'UCBA'],
+    ['Bandhan Bank', /bandhan/i, 'BDBL'], ['AU Small Finance Bank', /au small finance/i, 'AUBL'], ['RBL Bank', /\brbl bank/i, 'RATN'], ['DBS Bank', /dbs bank/i, 'DBSS'], ['Equitas', /equitas/i, 'ESFB']];
+  function meta(text, headText) {
+    const t = String(text || '');
+    const head = String(headText == null ? t : headText).slice(0, 1500);
+    const ifsc = (t.match(/IFS(?:C)?\s*(?:code)?\s*[:\-]?\s*([A-Z]{4}0[A-Z0-9]{6})\b/i) || head.match(/\b([A-Z]{4}0[A-Z0-9]{6})\b/) || [])[1] || '';
+    const byIfsc = ifsc && BANKS.find(([, , pre]) => pre === ifsc.slice(0, 4).toUpperCase());
+    const bank = (byIfsc || BANKS.find(([, re]) => re.test(head.slice(0, 600))) || BANKS.find(([, re]) => re.test(head)) || [''])[0];
+    const acct = (t.match(/(?:a\/?c|account)\s*(?:no|number|num)?\.?\s*[:\-]?\s*([0-9Xx*]{6,20})\b/i) || t.match(/\(INR\)\s*-\s*(\d{9,18})/) || [])[1] || '';
+    const name = ((t.match(/(?:account\s*name|a\/c\s*name|customer\s*name|name)\s*[:\-]\s*([^\n]{3,60})/i) || [])[1] || '').trim();
+    const pm = t.match(/(?:period|from)\s*:?\s*([0-9A-Za-z\/\-. ]{6,12}?)\s*(?:to|-)\s*:?\s*([0-9A-Za-z\/\-. ]{6,12})(?:\s|$)/i);
+    const g = re => { const m = t.match(re); return m ? amt(m[1]) : null; };
+    const ob = g(/opening\s*bal(?:ance)?\s*:?\s*(?:rs\.?|inr|₹)?\s*([\d,]+\.\d{2})/i) || g(/balance\s*as\s*on[^:\n]{0,20}:\s*([\d,]+\.\d{2})/i);
+    const cb = g(/closing\s*bal(?:ance)?\s*:?\s*(?:rs\.?|inr|₹)?\s*([\d,]+\.\d{2})/i);
+    const td = g(/total\s*(?:debits?|withdrawals?)\s*:?\s*([\d,]+\.\d{2})/i), tc = g(/total\s*(?:credits?|deposits?)\s*:?\s*([\d,]+\.\d{2})/i);
+    return { bank, ifsc, acct, name, from: pm ? date(pm[1].trim()) : '', to: pm ? date(pm[2].trim()) : '', ob: ob && ob.v, cb: cb && cb.v, td: td && td.v, tc: tc && tc.v };
+  }
+  // compare with the bank's own summary
+  function summaryNotes(res, m) {
+    const n = [];
+    if (m.ob != null && !near(m.ob, res.opening)) n.push(`Opening balance on the statement is ${m.ob.toFixed(2)}, worked out ${res.opening.toFixed(2)} — a row at the start may be missing.`);
+    if (m.cb != null && !near(m.cb, res.closing)) n.push(`Closing balance on the statement is ${m.cb.toFixed(2)}, last row shows ${res.closing.toFixed(2)} — rows at the end may be missing.`);
+    if (m.td != null && !near(m.td, res.dr)) n.push(`Total debits on the statement ${m.td.toFixed(2)}, rows add up to ${res.dr.toFixed(2)}.`);
+    if (m.tc != null && !near(m.tc, res.cr)) n.push(`Total credits on the statement ${m.tc.toFixed(2)}, rows add up to ${res.cr.toFixed(2)}.`);
+    return n;
+  }
+  // best of table mode and line mode
+  function parseLines(L, o = {}) {
+    const hi = L.findIndex((l, i) => headerAt(L, i));
+    const text = L.map(l => l.text).join('\n'), m = meta(text, hi > 0 ? L.slice(0, hi).map(l => l.text).join('\n') : text.slice(0, 600));
+    const tries = [fromLines(L, o), fromLinesLoose(L, o)].filter(Boolean).map(x => ({ x, f: finish(x.rows, { opening: x.opening != null ? (x.opening.sfx === 'dr' ? -x.opening.v : x.opening.v) : null }) }));
+    if (!tries.length) return null;
+    const sc = t => t.f.rows.length - 3 * t.f.bad;
+    tries.sort((a, b) => sc(b) - sc(a));
+    const best = tries[0];
+    return { ...best.f, mode: best.x.mode, meta: m, notes: summaryNotes(best.f, m) };
+  }
+  function parseSheet(sheets) {
+    for (const sh of sheets) {
+      const x = fromSheet(sh.rows); if (!x || !x.rows.length) continue;
+      const text = sh.rows.slice(0, 40).map(r => r.join(' ')).join('\n'), m = meta(text, sh.rows.slice(0, x.hi).map(r => r.join(' ')).join('\n'));
+      const f = finish(x.rows, { opening: x.opening ? x.opening.v : null });
+      return { ...f, mode: 'sheet', meta: m, notes: summaryNotes(f, m) };
+    }
+    return null;
+  }
+  /* ---------- party, ledger rules, vouchers ---------- */
+  const STOP = /^(neft|rtgs|imps|upi|ach|nach|ecs|by|to|transfer|trf|inb|mb|ib|clg|chq|cheque|dep|deposit|wdl|withdrawal|atm|pos|p2a|p2p|p2m|cr|dr|payment|payments|from|phone|ref|inv|bill|settlement|cms|int|pd|cash|self|branch|the|of|for|and|at|tp|d|c|okaxis|oksbi|okhdfcbank|okicici|ybl|paytm|ibl|axl|upi|na|txn|mobile|ft|imp|nft|rtg|outward|inward|fund|funds|on|via|in|no)$/i;
+  function party(n) {
+    const s = String(n || '');
+    if (!/[\/*|:]|\b(neft|rtgs|imps|upi|chq|clg|transfer|trf|by|to)\b/i.test(s)) return '';
+    for (const ch of s.split(/[\/*|:]+|\s-\s/)) {
+      const junk = w => STOP.test(w) || /\d{3,}/.test(w) || /^[A-Z]{4}0[A-Z0-9]{6}$/i.test(w) || !/[a-z]/i.test(w);
+      const words = ch.trim().split(/\s+/).filter(Boolean);
+      while (words.length && junk(words[0])) words.shift();
+      while (words.length && junk(words[words.length - 1])) words.pop();
+      if (words.some(w => /\d{3,}/.test(w))) continue;
+      const letters = words.join('').replace(/[^a-z]/gi, '').length;
+      if (letters >= 4 && (words.length >= 2 || letters >= 5) && !/^(neft|rtgs|imps|upi)/i.test(ch.trim())) return words.join(' ').replace(/^(by|to)\s+/i, '').slice(0, 60);
+    }
+    return '';
+  }
+  const BUILTIN = [
+    { re: /\b(atm|cash\s*w(?:i)?d(?:l|rawal)?|self\s*chq|cash\s*paid|nwd|atw)\b/i, dir: 'dr', ledger: 'Cash', group: 'Cash-in-Hand' },
+    { re: /cash\s*dep|\bcdm\b|by\s*cash/i, dir: 'cr', ledger: 'Cash', group: 'Cash-in-Hand' },
+    { re: /\b(gst\s*pay\w*|cpin|gstn|gst\s*challan|cbic)\b/i, dir: 'dr', ledger: 'GST Payable', group: 'Duties & Taxes' },
+    { re: /\b(cbdt|oltas|tds\s*challan|itns\s*28[01]|tin\s*nsdl|income\s*tax\s*challan)\b/i, dir: 'dr', ledger: 'TDS Payable', group: 'Duties & Taxes' },
+    { re: /\b(charges?|chrgs?|chgs|sms\s*alert|amc|annual\s*fee|min(?:imum)?\s*bal|service\s*fee|commission)\b/i, dir: 'dr', ledger: 'Bank Charges', group: 'Indirect Expenses' },
+    { re: /\b(int\.?\s*pd|interest\s*(?:paid|credit|cr)|int\s*credit|sb\s*int|int\.?\s*coll)\b/i, dir: 'cr', ledger: 'Interest Received', group: 'Indirect Incomes' },
+    { re: /\bsalary\b|\bsal\s+\w+\s+\d{4}/i, dir: 'dr', ledger: 'Salary', group: 'Indirect Expenses' }];
+  const DEFAULT_GROUP = Object.fromEntries(BUILTIN.map(b => [b.ledger, b.group]));
+  // rules: [{match, dir, ledger}] most specific first; returns {ledger, how}
+  function ledgerFor(r, rules) {
+    const n = lc(r.n), side = +r.dr ? 'dr' : 'cr', p = lc(r.p || party(r.n));
+    const R = [...rules].sort((a, b) => (a.client_id ? 0 : 1) - (b.client_id ? 0 : 1) || String(b.match).length - String(a.match).length);
+    for (const x of R) { const m = lc(x.match).trim(); if (m && (n.includes(m) || (p && p === m)) && (!x.dir || x.dir === 'any' || x.dir === side)) return { ledger: x.ledger, how: 'rule' }; }
+    for (const b of BUILTIN) if (b.dir === side && b.re.test(r.n)) return { ledger: b.ledger, how: 'auto' };
+    return { ledger: '', how: '' };
+  }
+  const vtype = (r, ledger) => (lc(ledger) === 'cash' ? 'Contra' : +r.dr ? 'Payment' : 'Receipt');
+  const xe = s => String(s ?? '').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+  const ymd = d => String(d || '').replace(/-/g, '');
+  const env = (company, body) => `<ENVELOPE>\n <HEADER><TALLYREQUEST>Import Data</TALLYREQUEST></HEADER>\n <BODY><IMPORTDATA>\n  <REQUESTDESC><REPORTNAME>All Masters</REPORTNAME>${company ? `<STATICVARIABLES><SVCURRENTCOMPANY>${xe(company)}</SVCURRENTCOMPANY></STATICVARIABLES>` : ''}</REQUESTDESC>\n  <REQUESTDATA>\n${body}  </REQUESTDATA>\n </IMPORTDATA></BODY>\n</ENVELOPE>\n`;
+  function tallyLedgers({ company, bankLedger, bankGroup = 'Bank Accounts', ledgers }) {
+    const L = [[bankLedger, bankGroup], ...Object.entries(ledgers)];
+    return env(company, L.map(([n, g]) => `   <TALLYMESSAGE xmlns:UDF="TallyUDF"><LEDGER NAME="${xe(n)}" ACTION="Create"><NAME.LIST><NAME>${xe(n)}</NAME></NAME.LIST><PARENT>${xe(g)}</PARENT><ISBILLWISEON>No</ISBILLWISEON><AFFECTSSTOCK>No</AFFECTSSTOCK></LEDGER></TALLYMESSAGE>\n`).join('')).replace('All Masters', 'All Masters');
+  }
+  function tallyVouchers({ company, bankLedger, rows, bankAlloc = false }) {
+    const f = n => (+n).toFixed(2);
+    const body = rows.map(r => {
+      const a = +r.dr || +r.cr, isDr = +r.dr > 0, led = r.l || 'Suspense A/c', vt = vtype(r, led), dt = ymd(r.d);
+      const narr = [r.n, r.r && `Ref: ${r.r}`].filter(Boolean).join(' · ').slice(0, 900);
+      const other = `<ALLLEDGERENTRIES.LIST><LEDGERNAME>${xe(led)}</LEDGERNAME><ISDEEMEDPOSITIVE>${isDr ? 'Yes' : 'No'}</ISDEEMEDPOSITIVE><AMOUNT>${isDr ? '-' : ''}${f(a)}</AMOUNT></ALLLEDGERENTRIES.LIST>`;
+      const alloc = bankAlloc ? `<BANKALLOCATIONS.LIST><DATE>${dt}</DATE><INSTRUMENTDATE>${dt}</INSTRUMENTDATE><TRANSACTIONTYPE>Others</TRANSACTIONTYPE>${r.r ? `<INSTRUMENTNUMBER>${xe(String(r.r).slice(0, 30))}</INSTRUMENTNUMBER>` : ''}<AMOUNT>${isDr ? '' : '-'}${f(a)}</AMOUNT></BANKALLOCATIONS.LIST>` : '';
+      const bank = `<ALLLEDGERENTRIES.LIST><LEDGERNAME>${xe(bankLedger)}</LEDGERNAME><ISDEEMEDPOSITIVE>${isDr ? 'No' : 'Yes'}</ISDEEMEDPOSITIVE><AMOUNT>${isDr ? '' : '-'}${f(a)}</AMOUNT>${alloc}</ALLLEDGERENTRIES.LIST>`;
+      return `   <TALLYMESSAGE xmlns:UDF="TallyUDF"><VOUCHER VCHTYPE="${vt}" ACTION="Create" OBJVIEW="Accounting Voucher View"><DATE>${dt}</DATE><EFFECTIVEDATE>${dt}</EFFECTIVEDATE><VOUCHERTYPENAME>${vt}</VOUCHERTYPENAME><PARTYLEDGERNAME>${xe(led)}</PARTYLEDGERNAME><NARRATION>${xe(narr)}</NARRATION><PERSISTEDVIEW>Accounting Voucher View</PERSISTEDVIEW>${isDr ? other + bank : bank + other}</VOUCHER></TALLYMESSAGE>\n`;
+    }).join('');
+    return env(company, body).replace('All Masters', 'Vouchers');
+  }
+  return { date, amt, role, toLines, headerAt, fromLines, fromLinesLoose, fromSheet, finish, check, meta, parseLines, parseSheet, party, ledgerFor, vtype, tallyLedgers, tallyVouchers, BUILTIN, DEFAULT_GROUP, summaryNotes };
+})();
+
+/* ---------- reading a file ---------- */
+async function pdfItems(doc, maxPages) {
+  const items = []; let chars = 0;
+  for (let p = 1; p <= Math.min(doc.numPages, maxPages); p++) {
+    const pg = await doc.getPage(p), vp = pg.getViewport({ scale: 1 }), tc = await pg.getTextContent();
+    for (const it of tc.items) { const s = it.str; if (!s || !s.trim()) continue; const x = it.transform[4], y = vp.height - it.transform[5], h = Math.abs(it.transform[3]) || it.height || 8; items.push({ s, x0: x, x1: x + (it.width || s.length * h * 0.5), y, h, p }); chars += s.trim().length; }
+  }
+  return { items, chars };
+}
+async function ocrItems(canvases, note) {
+  const w = await ocrWorker(note), items = [];
+  for (let i = 0; i < canvases.length; i++) {
+    note(`Text recognition: page ${i + 1} of ${canvases.length}…`);
+    const r = await w.recognize(canvases[i], {}, { blocks: true, text: true });
+    const D = r.data || {};
+    const words = D.words && D.words.length ? D.words : (D.blocks || []).flatMap(b => (b.paragraphs || []).flatMap(p => (p.lines || []).flatMap(l => l.words || [])));
+    for (const wd of words) { const b = wd.bbox; if (!wd.text || !wd.text.trim() || (wd.confidence != null && wd.confidence < 15)) continue; items.push({ s: wd.text.trim(), x0: b.x0, x1: b.x1, y: b.y1, h: b.y1 - b.y0, p: i + 1 }); }
+  }
+  return items;
+}
+const BANK_FMT = /\.(pdf|xlsx|xls|csv|jpe?g|png|webp|bmp)$/i;
+async function bankReadFile(file, { note = () => {}, askPassword } = {}) {
+  const name = file.name || 'statement';
+  if (/\.(xlsx|xls|csv)$/i.test(name)) {
+    note('Reading the spreadsheet…');
+    const res = BANK.parseSheet(await readSheets(file));
+    if (!res) throw new Error('Could not find the transaction table (Date / Narration / Debit / Credit / Balance) in this file');
+    return { ...res, method: 'Excel / CSV' };
+  }
+  let canvases = [];
+  if (/\.pdf$/i.test(name) || /pdf$/i.test(file.type)) {
+    const pdfjs = await pdfLib(), bytes = new Uint8Array(await file.arrayBuffer());
+    let doc = null, password = '';
+    for (let tries = 0; !doc; tries++) {
+      try { note('Opening PDF…'); doc = await pdfjs.getDocument({ data: bytes.slice(), password, isEvalSupported: false }).promise; }
+      catch (e) {
+        if (e && (e.name === 'PasswordException' || /password/i.test(e.message || ''))) {
+          if (!askPassword || tries > 5) throw new Error('This PDF is locked with a password');
+          password = await askPassword(tries > 0);
+          if (password == null) throw new Error('Cancelled — the PDF needs its password');
+        } else throw e;
+      }
+    }
+    const { items, chars } = await pdfItems(doc, 80);
+    if (chars > 80) {
+      const res = BANK.parseLines(BANK.toLines(items));
+      if (res && res.rows.length) return { ...res, method: password ? 'PDF text (unlocked)' : 'PDF text', pages: doc.numPages };
+    }
+    note('No text in the PDF — it looks scanned. Preparing pages…');
+    for (let p = 1; p <= Math.min(doc.numPages, 15); p++) { const pg = await doc.getPage(p), vp = pg.getViewport({ scale: 2.4 }), cv = document.createElement('canvas'); cv.width = Math.round(vp.width); cv.height = Math.round(vp.height); await pg.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise; canvases.push(cv); }
+  } else if (/^image\//i.test(file.type) || /\.(jpe?g|png|webp|bmp)$/i.test(name)) {
+    canvases.push(canvasOf(await createImageBitmap(file), 3000));
+  } else throw new Error('Use a PDF, Excel / CSV or a photo of the statement');
+  const res = BANK.parseLines(BANK.toLines(await ocrItems(canvases, note)), { ocr: true });
+  if (!res || !res.rows.length) throw new Error('Could not read transactions from the scanned pages — try a clearer scan, or Read with AI');
+  return { ...res, method: 'Text recognition (scanned)', pages: canvases.length };
+}
+async function bankReadAi(file, clientId) {
+  if (file.size > 9e6) throw new Error('File is over 9 MB — too big for AI reading');
+  if (!/\.pdf$/i.test(file.name) && !/^image\//i.test(file.type)) throw new Error('AI reads PDF or photo statements only');
+  const f = await fileB64(file, 2400);
+  const j = await fnCall('bill-read', 'statement', { kind: 'statement', client_id: clientId, name: file.name, ...f });
+  const s = j.statement || {};
+  const raw = (s.transactions || []).map(t => ({ date: BANK.date(t.date) || '', desc: t.narration || '', ref: t.ref || '', dr: +t.debit ? { v: +t.debit } : undefined, cr: +t.credit ? { v: +t.credit } : undefined, bal: t.balance === '' || t.balance == null ? undefined : { v: +t.balance } })).filter(r => r.date);
+  if (!raw.length) throw new Error('AI could not find transactions in this file');
+  const res = BANK.finish(raw, { opening: s.opening_balance == null || s.opening_balance === '' ? null : +s.opening_balance });
+  const meta = { bank: s.bank || '', acct: s.account_number || '', ifsc: s.ifsc || '', name: s.account_name || '', from: BANK.date(s.period_from) || '', to: BANK.date(s.period_to) || '', cb: +s.closing_balance || null };
+  const notes = BANK.summaryNotes(res, meta);
+  if (j.truncated) notes.unshift('The statement was too long for one AI reading — rows near the end may be missing. Check the closing balance.');
+  return { ...res, meta, notes, method: `AI (${j.model || 'Claude'}) · about ₹${(+j.cost_inr || 0).toFixed(2)}` };
+}
+
+/* ---------- page ---------- */
+const BK_GROUPS = ['Sundry Debtors', 'Sundry Creditors', 'Indirect Expenses', 'Direct Expenses', 'Indirect Incomes', 'Direct Incomes', 'Duties & Taxes', 'Cash-in-Hand', 'Bank Accounts', 'Bank OD A/c', 'Capital Account',
+  'Loans (Liability)', 'Secured Loans', 'Unsecured Loans', 'Loans & Advances (Asset)', 'Deposits (Asset)', 'Current Liabilities', 'Current Assets', 'Provisions', 'Fixed Assets', 'Investments', 'Purchase Accounts', 'Sales Accounts', 'Suspense A/c'];
+const BK_PAGE = 200;
+let bkClient = '', bkCur = null, bkFile = null, bkDirty = false, bkFilter = 'all', bkQ = '', bkPg = 0, bkRules = [];
+window.addEventListener('beforeunload', e => { if (bkDirty) { e.preventDefault(); e.returnValue = ''; } });
+const bkMask = a => { const s = String(a || ''); return s.length > 4 ? '••' + s.slice(-4) : s; };
+const bkInr = n => (+n < 0 ? '−₹' : '₹') + Math.abs(+n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const bkAmt = n => (+n ? bkInr(n).replace('₹', '') : '');
+const bkFix = n => (n == null || n === '' ? '' : (+n).toFixed(2));
+function bkRecheck() { const c = BANK.check(bkCur.rows, +bkCur.opening || 0); Object.assign(bkCur, { flags: c.flags, bad: c.bad, dr: c.dr, cr: c.cr, closing: c.closing, nDr: c.nDr, nCr: c.nCr, sumOk: c.sumOk }); }
+function bkApplyRules(all = false) {
+  let n = 0;
+  bkCur.rows.forEach(r => { if (!r.p) r.p = BANK.party(r.n); if (r.lm && !all) return; const x = BANK.ledgerFor(r, bkRules); if (x.ledger && (all || !r.l)) { if (r.l !== x.ledger) n++; r.l = x.ledger; r.lh = x.how; r.lm = 0; } });
+  return n;
+}
+async function bkLoadRules(clientId) {
+  const r = await safe(sb.from('bank_rules').select('*').or(`client_id.is.null,client_id.eq.${clientId}`).limit(2000));
+  bkRules = r.error ? [] : r.data || [];
+}
+
+VIEWS.bank = async v => {
+  const probe = await safe(sb.from('bank_statements').select('id').limit(1));
+  if (probe.error) return notReady(v, 'Bank statement converter', 'update-session5.sql');
+  const list = myClients().filter(c => c.active !== false);
+  if (!bkClient || !list.some(c => c.id === bkClient)) bkClient = (bkCur && bkCur.client_id) || (list[0] || {}).id || '';
+  v.innerHTML = `<div class="page-head"><h2>Bank statements</h2><span class="spacer"></span>
+      <select id="bkC" aria-label="Client">${list.length ? opts(list, bkClient, c => c.name, c => c.id) : '<option value="">No clients</option>'}</select></div>
+    <div id="bkBody"><div class="loading">Loading…</div></div>`;
+  $('#bkC', v).onchange = e => { if (bkCur && bkDirty && !confirm('The open statement has unsaved changes. Switch client and lose them?')) { e.target.value = bkClient; return; } bkClient = e.target.value; bkCur = null; bkDirty = false; route(); };
+  const body = $('#bkBody', v);
+  if (!bkClient) { body.innerHTML = '<div class="card"><p class="muted">Add a client first.</p></div>'; return; }
+  await bkLoadRules(bkClient);
+  if (bkCur && bkCur.client_id === bkClient) return bkEditor(body);
+  bkHome(body);
+};
+
+async function bkHome(body) {
+  const c = clientById(bkClient);
+  const { data } = await must(sb.from('bank_statements').select('id,bank,account,period_from,period_to,n_rows,bad,opening,closing,status,file_name,method,updated_at,created_by').eq('client_id', c.id).order('period_to', { ascending: false }).limit(200));
+  body.innerHTML = `<div class="card bk-drop" id="bkDrop" tabindex="0" role="button" aria-label="Choose a bank statement file">
+      <div class="bk-drop-in"><svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
+        <b>Drop a bank statement here, or click to choose</b>
+        <span class="muted small">PDF (password-protected is fine) · Excel / CSV from net banking · scanned PDF or photo — any bank</span></div>
+      <input type="file" id="bkFile" accept=".pdf,.xlsx,.xls,.csv,.jpg,.jpeg,.png,.webp,image/*,application/pdf" hidden></div>
+    <p class="muted small" style="margin:8px 2px 16px">Digital PDFs and Excel files are read on this computer for free. Scanned statements use text recognition (slower — check the figures). Every row is checked against the running balance before you export. The statement file itself is not stored.</p>
+    <div class="card"><h3 style="margin-top:0">Saved statements – ${esc(c.name)}</h3>
+      ${(data || []).length ? `<div class="table-wrap"><table><thead><tr><th>Bank</th><th>Account</th><th>Period</th><th class="r">Rows</th><th class="r">Opening</th><th class="r">Closing</th><th>Check</th><th>Status</th><th></th></tr></thead><tbody>
+        ${data.map(s => `<tr><td><b>${esc(s.bank || '—')}</b><div class="muted small">${esc(s.file_name || '')}</div></td><td>${esc(bkMask(s.account))}</td><td class="small">${s.period_from ? fmtDate(s.period_from) : ''} – ${s.period_to ? fmtDate(s.period_to) : ''}</td>
+          <td class="r">${s.n_rows}</td><td class="r">${bkInr(s.opening)}</td><td class="r">${bkInr(s.closing)}</td><td>${s.bad ? `<span class="late">✗ ${s.bad}</span>` : '<span style="color:var(--green)">✓</span>'}</td><td class="small">${esc(s.status)}</td>
+          <td class="row-btns"><button class="btn sm" data-open="${s.id}">Open</button>${isManager() || s.created_by === me.id ? `<button class="link small danger-t" data-del="${s.id}">Delete</button>` : ''}</td></tr>`).join('')}</tbody></table></div>` : '<p class="muted">No statements converted for this client yet.</p>'}
+      <div class="toolbar" style="margin-top:10px"><button class="btn sm ghost" id="bkRules">Ledger rules (${bkRules.filter(r => r.client_id).length} for this client · ${bkRules.filter(r => !r.client_id).length} for all)</button></div></div>`;
+  const pick = $('#bkFile', body), drop = $('#bkDrop', body);
+  drop.onclick = () => pick.click();
+  drop.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick.click(); } };
+  drop.ondragover = e => { e.preventDefault(); drop.classList.add('on'); };
+  drop.ondragleave = () => drop.classList.remove('on');
+  drop.ondrop = e => { e.preventDefault(); drop.classList.remove('on'); const f = e.dataTransfer.files[0]; if (f) bkStart(f); };
+  pick.onchange = () => { if (pick.files[0]) bkStart(pick.files[0]); };
+  $('#bkRules', body).onclick = () => bkRulesDialog(() => route());
+  body.addEventListener('click', async e => {
+    const o = e.target.closest('[data-open]'), d = e.target.closest('[data-del]');
+    if (o) { const { data: s } = await must(sb.from('bank_statements').select('*').eq('id', o.dataset.open).single()); bkCur = { ...s, rows: s.rows || [], tally: s.tally || {}, notes: s.notes || [] }; bkFile = null; bkDirty = false; bkFilter = 'all'; bkPg = 0; bkQ = ''; bkRecheck(); route(); }
+    if (d && confirm('Delete this saved statement? (The ledger rules stay.)')) { await must(sb.from('bank_statements').delete().eq('id', d.dataset.del)); toast('Deleted'); route(); }
+  });
+}
+function bkPassword(again) {
+  return new Promise(res => {
+    let done = false;
+    const m = modal('Statement password', `<p class="small" style="margin-top:0">${again ? '<b class="late">That password did not open the file.</b> ' : ''}This PDF is locked. Banks usually use a mix of the name, date of birth, customer ID or mobile number — see the bank's email.</p>
+      <label>Password<input type="password" name="pw" autocomplete="off" autofocus></label><p class="muted small">The password is used only on this computer to open the file. It is not saved.</p>`,
+      { saveText: 'Open', onSave: w => { done = true; res(fv(w, 'pw')); } });
+    const inp = $('[name=pw]', m.el); setTimeout(() => inp.focus(), 50);
+    inp.onkeydown = e => { if (e.key === 'Enter') $('[data-save]', m.el).click(); };
+    const obs = new MutationObserver(() => { if (!document.body.contains(m.el)) { obs.disconnect(); if (!done) res(null); } }); obs.observe(document.body, { childList: true });
+  });
+}
+async function bkStart(file) {
+  if (!BANK_FMT.test(file.name)) { toast('Use a PDF, Excel / CSV or a photo of the statement', true); return; }
+  const body = $('#bkBody'); if (!body) return;
+  body.innerHTML = `<div class="card"><h3 style="margin-top:0">Reading ${esc(file.name)}</h3><p id="bkNote" class="muted">Starting…</p><div class="bk-bar"><i></i></div></div>`;
+  const note = t => { const n = $('#bkNote'); if (n) n.textContent = t; };
+  try {
+    const res = await bankReadFile(file, { note, askPassword: bkPassword });
+    bkOpenResult(res, file);
+  } catch (err) {
+    body.innerHTML = `<div class="card"><h3 style="margin-top:0">Could not convert ${esc(file.name)}</h3><p class="late">${esc(friendly(err))}</p>
+      <div class="toolbar"><button class="btn" id="bkBack">← Back</button>${/\.pdf$|^image/i.test(file.name + ' ' + file.type) ? '<button class="btn primary" id="bkAi">Read with AI</button>' : ''}</div></div>`;
+    $('#bkBack', body).onclick = () => route();
+    const ai = $('#bkAi', body); if (ai) ai.onclick = () => bkAi(file);
+  }
+}
+async function bkOpenResult(res, file) {
+  const m = res.meta || {};
+  const prev = await safe(sb.from('bank_statements').select('tally,bank,account').eq('client_id', bkClient).eq('account', m.acct || '-').order('updated_at', { ascending: false }).limit(1));
+  const pt = (!prev.error && prev.data && prev.data[0] && prev.data[0].tally) || {};
+  const bank = m.bank || 'Bank';
+  const dates = res.rows.map(r => r.d).filter(Boolean).sort();
+  bkCur = { client_id: bkClient, bank, account: m.acct || '', ifsc: m.ifsc || '', holder: m.name || '', period_from: m.from || dates[0] || null, period_to: m.to || dates[dates.length - 1] || null,
+    opening: res.opening, file_name: file.name, method: res.method + (res.fixed ? ` · ${res.fixed} debit/credit swapped by balance` : ''), status: 'Draft', notes: res.notes || [],
+    rows: res.rows.map(r => ({ ...r, p: BANK.party(r.n), l: '', lh: '', lm: 0 })), tally: { company: pt.company || '', bank_ledger: pt.bank_ledger || `${bank}${m.acct ? ' A/c ' + String(m.acct).slice(-4) : ''}`, groups: pt.groups || {}, alloc: !!pt.alloc } };
+  bkFile = file; bkDirty = true; bkFilter = 'all'; bkPg = 0; bkQ = '';
+  bkApplyRules(); bkRecheck();
+  if (bkCur.bad) bkFilter = 'bad';
+  bkEditor($('#bkBody'));
+}
+async function bkAi(file) {
+  const ai = await aiAvailable(bkClient);
+  if (!ai.ok) { toast(ai.why || 'AI reading is not set up — save a Claude key in Settings and deploy the bill-read function', true); return; }
+  if (!confirm('Send this statement to Claude (Anthropic) to read? It costs a few rupees per statement and the file leaves this computer.')) return;
+  const body = $('#bkBody');
+  body.innerHTML = `<div class="card"><h3 style="margin-top:0">AI is reading ${esc(file.name)}</h3><p class="muted">This takes 20–60 seconds for a long statement…</p><div class="bk-bar"><i></i></div></div>`;
+  try { bkOpenResult(await bankReadAi(file, bkClient), file); }
+  catch (err) { toast(friendly(err), true); route(); }
+}
+
+function bkEditor(body) {
+  const S = bkCur, c = clientById(S.client_id);
+  const ledgers = () => [...new Set([...S.rows.map(r => r.l).filter(Boolean), ...bkRules.map(r => r.ledger), ...BANK.BUILTIN.map(b => b.ledger), 'Suspense A/c'])].sort((a, b) => a.localeCompare(b));
+  const vis = () => {
+    const q = lc(bkQ);
+    return S.rows.map((r, i) => i).filter(i => { const r = S.rows[i], f = S.flags[i] || {};
+      if (bkFilter === 'bad' && f.ok !== false) return false; if (bkFilter === 'nol' && r.l) return false; if (bkFilter === 'dr' && !+r.dr) return false; if (bkFilter === 'cr' && !+r.cr) return false;
+      return !q || lc(r.n + ' ' + r.r + ' ' + r.p + ' ' + r.l).includes(q) || String(r.dr).includes(q) || String(r.cr).includes(q); });
+  };
+  const rowHtml = i => { const r = S.rows[i], f = S.flags[i] || {};
+    return `<tr data-i="${i}" class="${f.ok === false ? 'bk-bad' : ''}"><td><input type="checkbox" data-pick="${i}" aria-label="Select row ${i + 1}"></td><td class="muted small">${i + 1}</td>
+      <td><input type="date" data-k="d" value="${esc(r.d || '')}" style="width:128px"></td><td><input data-k="n" value="${esc(r.n || '')}" style="width:300px" title="${esc(r.n || '')}"></td><td><input data-k="r" value="${esc(r.r || '')}" style="width:96px"></td>
+      <td><input class="r" data-k="dr" value="${+r.dr ? bkFix(r.dr) : ''}" inputmode="decimal" style="width:96px"></td><td><input class="r" data-k="cr" value="${+r.cr ? bkFix(r.cr) : ''}" inputmode="decimal" style="width:96px"></td>
+      <td><input class="r" data-k="b" value="${bkFix(r.b)}" inputmode="decimal" style="width:104px"></td>
+      <td><input data-k="p" value="${esc(r.p || '')}" style="width:140px"></td><td><input data-k="l" value="${esc(r.l || '')}" list="bkLed" style="width:150px" class="${r.lh === 'auto' ? 'bk-auto' : ''}" title="${r.lh === 'rule' ? 'From a ledger rule' : r.lh === 'auto' ? 'Suggested from the narration' : ''}"></td>
+      <td class="g1-auto small">${BANK.vtype(r, r.l)}</td><td class="g1-auto g1-chk ${f.ok === false ? 'bad' : 'ok'}" data-chk>${f.ok === false ? `✗ expected ${bkAmt(f.exp)}` : f.calc != null ? '<span class="muted">✓ (no balance)</span>' : '✓'}</td>
+      <td><button class="link small danger-t" data-delrow="${i}" aria-label="Remove row ${i + 1}" title="Remove row">×</button></td></tr>`; };
+  const stats = () => `<div class="mini blue"><span>Opening</span><b class="tp-amt">${bkInr(S.opening)}</b></div><div class="mini green"><span>Credits (${S.nCr})</span><b class="tp-amt">${bkInr(S.cr)}</b></div>
+      <div class="mini amber"><span>Debits (${S.nDr})</span><b class="tp-amt">${bkInr(S.dr)}</b></div><div class="mini"><span>Closing</span><b class="tp-amt">${bkInr(S.closing)}</b></div>
+      <div class="mini ${S.bad ? 'red' : 'green'}"><span>Balance check</span><b>${S.bad ? `✗ ${S.bad} row${S.bad > 1 ? 's' : ''}` : `✓ all ${S.rows.length}`}</b></div>`;
+  const counts = () => ({ bad: S.flags.filter(f => f && f.ok === false).length, nol: S.rows.filter(r => !r.l).length });
+  const draw = () => {
+    const V = vis(), pages = Math.max(1, Math.ceil(V.length / BK_PAGE)); if (bkPg >= pages) bkPg = 0;
+    const show = V.slice(bkPg * BK_PAGE, (bkPg + 1) * BK_PAGE), k = counts();
+    body.innerHTML = `<div class="card bk-head"><div class="bk-title"><div><h3 style="margin:0">${esc(S.bank || 'Bank')} ${S.account ? '· A/c ' + esc(S.account) : ''}</h3>
+        <div class="muted small">${esc(c ? c.name : '')}${S.holder ? ' · ' + esc(S.holder) : ''}${S.ifsc ? ' · IFSC ' + esc(S.ifsc) : ''} · ${S.period_from ? fmtDate(S.period_from) : '?'} – ${S.period_to ? fmtDate(S.period_to) : '?'} · ${esc(S.file_name || '')} · <span class="badge">${esc(S.method || '')}</span></div></div>
+        <span class="spacer"></span><button class="btn sm ghost" id="bkMeta">Edit details</button><span class="${bkDirty ? 'late' : 'muted'} small" id="bkDirty">${bkDirty ? '● Not saved' : 'Saved'}</span></div>
+      <div class="bento-stats stats5" id="bkStats" style="margin-top:12px">${stats()}</div>
+      ${(S.notes || []).length ? `<ul class="small" style="margin:10px 0 0;padding-left:18px">${S.notes.map(n => `<li class="late">⚠ ${esc(n)}</li>`).join('')}</ul>` : ''}
+      ${S.bad ? `<p class="note warn small" style="margin:10px 0 0">${S.bad} row${S.bad > 1 ? 's do' : ' does'} not tally with the printed balance — a figure was misread or a row is missing just above. Fix the amount (the check updates as you type)${bkFile && /\.pdf$|\.(jpe?g|png|webp)$/i.test(bkFile.name) ? ', or try <button class="link" id="bkAi">Read with AI</button>' : ''}.</p>` : ''}</div>
+      <div class="toolbar bk-tools"><div class="seg">${[['all', `All ${S.rows.length}`], ['bad', `Not tallying ${k.bad}`], ['nol', `No ledger ${k.nol}`], ['dr', 'Debits'], ['cr', 'Credits']].map(([f, l]) => `<button data-f="${f}" class="${bkFilter === f ? 'on' : ''}">${l}</button>`).join('')}</div>
+        <input type="search" id="bkQ" placeholder="Search narration, party, amount…" value="${esc(bkQ)}" style="min-width:200px"><span class="spacer"></span>
+        <button class="btn sm" id="bkSetL">Set ledger for ticked</button><button class="btn sm" id="bkRe">Re-apply rules</button><button class="btn sm ghost" id="bkRules">Rules</button></div>
+      <datalist id="bkLed">${ledgers().map(l => `<option value="${esc(l)}">`).join('')}</datalist>
+      <div class="table-wrap g1-wrap"><table class="g1-grid bk-grid"><thead><tr><th><input type="checkbox" id="bkAll" aria-label="Tick all shown"></th><th>#</th><th>Date</th><th>Narration</th><th>Ref / Chq</th><th>Debit</th><th>Credit</th><th>Balance</th><th>Party</th><th>Ledger</th><th class="g1-auto">Voucher</th><th class="g1-auto">Check</th><th></th></tr></thead>
+        <tbody>${show.length ? show.map(rowHtml).join('') : `<tr><td colspan="13" class="empty">${bkFilter === 'bad' ? '✓ Every row tallies with the balance.' : 'Nothing to show.'}</td></tr>`}</tbody></table></div>
+      <div class="toolbar" style="margin-top:8px">${pages > 1 ? `<button class="btn sm" data-pg="-1" ${bkPg ? '' : 'disabled'}>‹ Prev</button><span class="small">Rows ${bkPg * BK_PAGE + 1}–${Math.min(V.length, (bkPg + 1) * BK_PAGE)} of ${V.length}</span><button class="btn sm" data-pg="1" ${bkPg < pages - 1 ? '' : 'disabled'}>Next ›</button>` : ''}
+        <button class="btn sm" id="bkAdd">+ Add row</button><label class="small">Opening balance <input id="bkOpen" class="r" value="${S.opening}" inputmode="decimal" style="width:120px"></label></div>
+      <div class="card bk-foot"><div class="toolbar"><button class="btn" id="bkBack">← All statements</button><span class="spacer"></span>
+        <button class="btn" id="bkXl">Download Excel</button><button class="btn" id="bkTally">Tally XML…</button><button class="btn primary" id="bkSave">Save</button></div></div>`;
+  };
+  const dirty = () => { bkDirty = true; const d = $('#bkDirty', body); if (d) { d.textContent = '● Not saved'; d.className = 'late small'; } };
+  let tm;
+  const refresh = () => { clearTimeout(tm); tm = setTimeout(() => {
+    bkRecheck();
+    $$('tbody tr[data-i]', body).forEach(tr => { const i = +tr.dataset.i, f = S.flags[i] || {}, td = $('[data-chk]', tr); tr.classList.toggle('bk-bad', f.ok === false);
+      if (td) { td.className = `g1-auto g1-chk ${f.ok === false ? 'bad' : 'ok'}`; td.innerHTML = f.ok === false ? `✗ expected ${bkAmt(f.exp)}` : f.calc != null ? '<span class="muted">✓ (no balance)</span>' : '✓'; }
+      const vt = tr.children[10]; if (vt) vt.textContent = BANK.vtype(S.rows[i], S.rows[i].l); });
+    const st = $('#bkStats', body); if (st) st.innerHTML = stats();
+    const k = counts(); const sb2 = $$('.bk-tools .seg button', body); if (sb2[1]) sb2[1].textContent = `Not tallying ${k.bad}`; if (sb2[2]) sb2[2].textContent = `No ledger ${k.nol}`;
+  }, 150); };
+  const setVal = (i, k, v) => {
+    const r = S.rows[i]; if (!r) return;
+    if (k === 'dr' || k === 'cr') { r[k] = v === '' ? 0 : Math.abs(num(v)); }
+    else if (k === 'b') r.b = v === '' ? null : num(v);
+    else if (k === 'l') { r.l = v.trim(); r.lm = 1; r.lh = ''; }
+    else r[k] = v;
+  };
+  body.oninput = e => {
+    const k = e.target.dataset.k;
+    if (e.target.id === 'bkQ') { bkQ = e.target.value; clearTimeout(tm); tm = setTimeout(() => { bkPg = 0; draw(); const q = $('#bkQ', body); q.focus(); q.setSelectionRange(q.value.length, q.value.length); }, 250); return; }
+    if (e.target.id === 'bkOpen') { S.opening = num(e.target.value); dirty(); refresh(); return; }
+    if (!k) return;
+    const i = +e.target.closest('tr').dataset.i; setVal(i, k, e.target.value); dirty(); if (k !== 'l') refresh();
+  };
+  body.onchange = e => {
+    if (e.target.dataset.k !== 'l') return;
+    const i = +e.target.closest('tr').dataset.i, r = S.rows[i]; refresh();
+    if (r.l && r.p) {                                       // same party, no ledger yet → same ledger
+      let n = 0; S.rows.forEach((x, j) => { if (j !== i && !x.l && lc(x.p) === lc(r.p)) { x.l = r.l; x.lm = 1; n++; } });
+      if (n) { toast(`Also set “${r.l}” on ${n} other row${n > 1 ? 's' : ''} for ${r.p}`); draw(); }
+    }
+  };
+  body.onclick = async e => {
+    const t = e.target, id = t.id;
+    const f = t.closest('[data-f]'); if (f && f.closest('.bk-tools')) { bkFilter = f.dataset.f; bkPg = 0; draw(); return; }
+    const pg = t.closest('[data-pg]'); if (pg) { bkPg += +pg.dataset.pg; draw(); body.scrollIntoView({ block: 'start' }); return; }
+    const del = t.closest('[data-delrow]'); if (del) { S.rows.splice(+del.dataset.delrow, 1); dirty(); bkRecheck(); draw(); return; }
+    if (id === 'bkAll') { $$('[data-pick]', body).forEach(x => { x.checked = t.checked; }); return; }
+    if (id === 'bkAdd') { const last = S.rows[S.rows.length - 1] || {}; S.rows.push({ d: last.d || '', n: '', r: '', dr: 0, cr: 0, b: null, p: '', l: '', lm: 1 }); bkFilter = 'all'; bkPg = Math.floor((S.rows.length - 1) / BK_PAGE); dirty(); bkRecheck(); draw(); return; }
+    if (id === 'bkAi' && bkFile) { bkAi(bkFile); return; }
+    if (id === 'bkRe') { const n = bkApplyRules(); bkRecheck(); draw(); toast(n ? `${n} ledger${n > 1 ? 's' : ''} filled from the rules` : 'No new matches — rows you typed a ledger for are kept'); if (n) dirty(); return; }
+    if (id === 'bkRules') { bkRulesDialog(() => { const n = bkApplyRules(); draw(); if (n) { dirty(); toast(`${n} ledger${n > 1 ? 's' : ''} filled`); } }); return; }
+    if (id === 'bkSetL') {
+      const P = $$('[data-pick]', body).filter(x => x.checked).map(x => +x.dataset.pick);
+      if (!P.length) { toast('Tick the rows first', true); return; }
+      modal(`Ledger for ${P.length} row${P.length > 1 ? 's' : ''}`, `<label>Ledger<input name="l" list="bkLed2" autofocus></label><datalist id="bkLed2">${ledgers().map(l => `<option value="${esc(l)}">`).join('')}</datalist>`,
+        { saveText: 'Set', onSave: w => { const l = fv(w, 'l'); P.forEach(i => { S.rows[i].l = l; S.rows[i].lm = 1; S.rows[i].lh = ''; }); dirty(); draw(); } });
+      return;
+    }
+    if (id === 'bkBack') { if (bkDirty && !confirm('Leave without saving this statement?')) return; bkCur = null; bkDirty = false; route(); return; }
+    if (id === 'bkMeta') {
+      modal('Statement details', `<div class="form-grid"><label>Bank<input name="bank" value="${esc(S.bank || '')}"></label><label>Account number<input name="acct" value="${esc(S.account || '')}"></label>
+        <label>IFSC<input name="ifsc" value="${esc(S.ifsc || '')}" class="up"></label><label>Account holder<input name="holder" value="${esc(S.holder || '')}"></label>
+        <label>Period from<input type="date" name="from" value="${esc(S.period_from || '')}"></label><label>Period to<input type="date" name="to" value="${esc(S.period_to || '')}"></label></div>`,
+        { saveText: 'Apply', onSave: w => { const oldL = S.tally.bank_ledger, autoL = `${S.bank}${S.account ? ' A/c ' + String(S.account).slice(-4) : ''}`;
+          S.bank = fv(w, 'bank') || 'Bank'; S.account = fv(w, 'acct'); S.ifsc = fv(w, 'ifsc').toUpperCase(); S.holder = fv(w, 'holder'); S.period_from = fv(w, 'from') || null; S.period_to = fv(w, 'to') || null;
+          if (!oldL || oldL === autoL) S.tally.bank_ledger = `${S.bank}${S.account ? ' A/c ' + String(S.account).slice(-4) : ''}`;
+          dirty(); draw(); } });
+      return;
+    }
+    if (id === 'bkXl') { bkExcel().catch(err => toast(friendly(err), true)); return; }
+    if (id === 'bkTally') { bkTallyDialog(); return; }
+    if (id === 'bkSave') { t.disabled = true; try { await bkSave(); draw(); } catch (err) { toast(friendly(err), true); } t.disabled = false; }
+  };
+  draw();
+}
+async function bkSave() {
+  const S = bkCur;
+  // ledgers typed by hand for a party → offer to remember them
+  const learn = new Map();
+  S.rows.forEach(r => { if (r.lm && r.l && r.p && r.p.length >= 4) { const k = lc(r.p) + '|' + (+r.dr ? 'dr' : 'cr'); if (!learn.has(k) && !bkRules.some(x => lc(x.match) === lc(r.p) && x.ledger === r.l)) learn.set(k, { match: r.p, dir: +r.dr ? 'dr' : 'cr', ledger: r.l }); } });
+  const rec = { client_id: S.client_id, bank: S.bank, account: S.account || null, ifsc: S.ifsc || null, holder: S.holder || null, period_from: S.period_from || null, period_to: S.period_to || null,
+    opening: S.opening, closing: S.closing, total_dr: S.dr, total_cr: S.cr, n_rows: S.rows.length, bad: S.bad, file_name: S.file_name, method: S.method, status: S.status === 'Exported' ? 'Exported' : S.bad ? 'Draft' : 'Checked',
+    rows: S.rows.map(r => ({ d: r.d, vd: r.vd || '', n: r.n, r: r.r, dr: +r.dr || 0, cr: +r.cr || 0, b: r.b, p: r.p || '', l: r.l || '', lh: r.lh || '', lm: r.lm || 0 })), tally: S.tally, notes: S.notes || [] };
+  if (S.id) rec.id = S.id;
+  const { data } = await must(sb.from('bank_statements').upsert(rec).select('id,status').single());
+  S.id = data.id; S.status = data.status; bkDirty = false; toast('Statement saved');
+  if (learn.size) {
+    const L = [...learn.values()].slice(0, 40);
+    modal('Remember these ledgers?', `<p class="small" style="margin-top:0">Next time a statement for ${esc((clientById(S.client_id) || {}).name || 'this client')} has these parties, the ledger fills in by itself.</p>
+      <div class="table-wrap"><table><thead><tr><th></th><th>When the party is</th><th>Debit / credit</th><th>Ledger</th></tr></thead><tbody>${L.map((x, i) => `<tr><td><input type="checkbox" data-lr="${i}" checked aria-label="Remember"></td><td>${esc(x.match)}</td><td>${x.dir === 'dr' ? 'Debit' : 'Credit'}</td><td><b>${esc(x.ledger)}</b></td></tr>`).join('')}</tbody></table></div>`,
+      { saveText: 'Remember ticked', onSave: async w => { const pick = $$('[data-lr]', w).filter(x => x.checked).map(x => L[+x.dataset.lr]); if (!pick.length) return;
+        const { data: ins } = await must(sb.from('bank_rules').insert(pick.map(x => ({ client_id: S.client_id, match: x.match, dir: x.dir, ledger: x.ledger }))).select()); bkRules.push(...(ins || [])); toast(`${pick.length} rule${pick.length > 1 ? 's' : ''} saved`); } });
+  }
+}
+function bkRulesDialog(after) {
+  const c = clientById(bkClient);
+  const draw = w => { const box = $('[data-rl]', w);
+    box.innerHTML = `<div class="table-wrap" style="max-height:46vh"><table><thead><tr><th>Narration or party contains</th><th>Debit / credit</th><th>Ledger</th><th>For</th><th></th></tr></thead><tbody>
+      ${bkRules.length ? bkRules.slice().sort((a, b) => (a.client_id ? 0 : 1) - (b.client_id ? 0 : 1) || lc(a.match).localeCompare(lc(b.match))).map(r => `<tr><td><b>${esc(r.match)}</b></td><td>${r.dir === 'dr' ? 'Debit' : r.dir === 'cr' ? 'Credit' : 'Either'}</td><td>${esc(r.ledger)}</td><td class="small">${r.client_id ? 'This client' : 'All clients'}</td>
+        <td>${!r.client_id && !isManager() ? '' : `<button class="link small danger-t" data-rdel="${r.id}">Delete</button>`}</td></tr>`).join('') : '<tr><td colspan="5" class="muted">No rules yet.</td></tr>'}</tbody></table></div>`; };
+  const m = modal(`Ledger rules – ${c ? c.name : ''}`, `<p class="small muted" style="margin-top:0">A rule fills the ledger when the narration (or the party name) contains the text. Client rules win over “all clients” rules; built-in ones (cash, GST, TDS, bank charges, interest, salary) come last. Rows where you typed a ledger are never overwritten.</p>
+    <div data-rl></div>
+    <div class="form-grid" style="margin-top:12px"><label>Narration / party contains<input name="m" placeholder="e.g. TNEB or SRI MURUGAN TRANSPORTS"></label><label>Ledger<input name="l" placeholder="e.g. Electricity charges"></label>
+      <label>Debit / credit<select name="d"><option value="any">Either</option><option value="dr">Debit (payment)</option><option value="cr">Credit (receipt)</option></select></label>
+      <label>For<select name="f"><option value="c">This client</option>${isManager() ? '<option value="all">All clients</option>' : ''}</select></label></div>`,
+    { saveText: 'Add rule', extra: '', onSave: async w => {
+      const mt = fv(w, 'm'), l = fv(w, 'l'); if (!mt || !l) { toast('Type the text and the ledger', true); return false; }
+      const { data } = await must(sb.from('bank_rules').insert({ client_id: fv(w, 'f') === 'all' ? null : bkClient, match: mt, dir: fv(w, 'd'), ledger: l }).select().single());
+      bkRules.push(data); $('[name=m]', w).value = ''; $('[name=l]', w).value = ''; draw(w); toast('Rule added'); return false; } });
+  draw(m.el);
+  m.el.addEventListener('click', async e => { const d = e.target.closest('[data-rdel]'); if (!d) return; await must(sb.from('bank_rules').delete().eq('id', d.dataset.rdel)); bkRules = bkRules.filter(r => r.id !== d.dataset.rdel); draw(m.el); });
+  const obs = new MutationObserver(() => { if (!document.body.contains(m.el)) { obs.disconnect(); if (after) after(); } }); obs.observe(document.body, { childList: true });
+}
+function bkLedgerGroups() {
+  const S = bkCur, use = {};
+  S.rows.forEach(r => { const l = r.l || 'Suspense A/c'; const u = use[l] = use[l] || { n: 0, dr: 0, cr: 0 }; u.n++; u.dr += +r.dr || 0; u.cr += +r.cr || 0; });
+  const G = {};
+  for (const [l, u] of Object.entries(use)) G[l] = S.tally.groups[l] || BANK.DEFAULT_GROUP[l] || (l === 'Suspense A/c' ? 'Suspense A/c' : u.cr > u.dr ? 'Sundry Debtors' : 'Sundry Creditors');
+  return { use, G };
+}
+function bkTallyDialog() {
+  const S = bkCur, T = S.tally, { use, G } = bkLedgerGroups();
+  const noL = S.rows.filter(r => !r.l).length;
+  const m = modal('Export to Tally (Tally Prime / ERP 9)', `${S.bad ? `<p class="note warn small" style="margin-top:0">${S.bad} row${S.bad > 1 ? 's do' : ' does'} not tally with the balance. Fix them first, or the books will not match the bank.</p>` : ''}
+    ${noL ? `<p class="note small">${noL} row${noL > 1 ? 's have' : ' has'} no ledger — they go to <b>Suspense A/c</b>.</p>` : ''}
+    <div class="form-grid"><label>Tally company name <span class="muted small">(blank = the company open in Tally)</span><input name="co" value="${esc(T.company || '')}"></label>
+      <label>Bank ledger name in Tally<input name="bl" value="${esc(T.bank_ledger || '')}"></label>
+      <label class="full"><span><input type="checkbox" name="al" ${T.alloc ? 'checked' : ''}> Add cheque / reference details for bank reconciliation (turn off if Tally reports an error)</span></label></div>
+    <h4 style="margin:14px 0 6px">Ledgers and their Tally groups</h4>
+    <div class="table-wrap" style="max-height:40vh"><table><thead><tr><th>Ledger</th><th class="r">Rows</th><th class="r">Debits</th><th class="r">Credits</th><th>Group (used when the ledger is created)</th></tr></thead><tbody>
+      ${Object.entries(use).sort((a, b) => b[1].n - a[1].n).map(([l, u]) => `<tr><td><b>${esc(l)}</b></td><td class="r">${u.n}</td><td class="r">${bkAmt(u.dr)}</td><td class="r">${bkAmt(u.cr)}</td><td><select data-g="${esc(l)}">${opts(BK_GROUPS, G[l])}</select></td></tr>`).join('')}</tbody></table></div>
+    <ol class="small muted" style="margin:12px 0 0;padding-left:18px"><li><b>Ledgers file</b> first — creates the bank ledger and any missing ledgers (ones that already exist are skipped by Tally).</li>
+      <li><b>Vouchers file</b> — Payment for debits, Receipt for credits, Contra for cash.</li>
+      <li>Tally Prime: Alt+O Import → Masters (ledgers file), then Transactions (vouchers file). ERP 9: Gateway → Import Data → Masters / Vouchers.</li></ol>`,
+    { wide: true, extra: '<button class="btn" data-dl="led">Download ledgers XML</button><button class="btn primary" data-dl="vch">Download vouchers XML</button>' });
+  const read = () => { T.company = fv(m.el, 'co'); T.bank_ledger = fv(m.el, 'bl') || 'Bank'; T.alloc = $('[name=al]', m.el).checked; $$('[data-g]', m.el).forEach(s => { T.groups[s.dataset.g] = s.value; }); bkDirty = true; };
+  m.el.addEventListener('click', e => {
+    const b = e.target.closest('[data-dl]'); if (!b) return; read();
+    const base = `${slug(S.bank)}-${String(S.account || '').slice(-4)}-${S.period_from || ''}-${S.period_to || ''}`.replace(/-+/g, '-');
+    if (b.dataset.dl === 'led') { const g = {}; Object.keys(use).forEach(l => { g[l] = T.groups[l] || G[l]; }); download(`tally-ledgers-${base}.xml`, BANK.tallyLedgers({ company: T.company, bankLedger: T.bank_ledger, bankGroup: S.closing < 0 ? 'Bank OD A/c' : 'Bank Accounts', ledgers: g }), 'application/xml'); }
+    else { download(`tally-vouchers-${base}.xml`, BANK.tallyVouchers({ company: T.company, bankLedger: T.bank_ledger, rows: S.rows.filter(r => +r.dr || +r.cr), bankAlloc: T.alloc }), 'application/xml'); S.status = 'Exported'; }
+    toast('Downloaded — remember to Save the statement');
+  });
+}
+async function bkExcel() {
+  const S = bkCur, X = await loadXlsxFull(), wb = X.utils.book_new();
+  const D = d => { const m = String(d || '').match(/^(\d{4})-(\d{2})-(\d{2})$/); return m ? new Date(+m[1], +m[2] - 1, +m[3]) : d; };
+  const ws = X.utils.aoa_to_sheet([['Date', 'Value date', 'Narration', 'Ref / Chq no.', 'Debit', 'Credit', 'Balance', 'Party', 'Ledger', 'Voucher type', 'Check'],
+    ...S.rows.map((r, i) => { const f = S.flags[i] || {}; return [D(r.d), r.vd ? D(r.vd) : '', r.n, r.r, +r.dr || null, +r.cr || null, r.b == null ? null : +r.b, r.p || '', r.l || '', BANK.vtype(r, r.l), f.ok === false ? `Does not tally – expected ${f.exp}` : 'OK']; })],
+    { cellDates: true, dateNF: 'dd-mm-yyyy' });
+  ws['!cols'] = [{ wch: 11 }, { wch: 11 }, { wch: 60 }, { wch: 16 }, { wch: 13 }, { wch: 13 }, { wch: 14 }, { wch: 26 }, { wch: 22 }, { wch: 10 }, { wch: 26 }];
+  ws['!autofilter'] = { ref: `A1:K${S.rows.length + 1}` };
+  X.utils.book_append_sheet(wb, ws, 'Transactions');
+  const sum = X.utils.aoa_to_sheet([['Client', (clientById(S.client_id) || {}).name || ''], ['Bank', S.bank], ['Account', S.account], ['IFSC', S.ifsc], ['Account holder', S.holder], ['Period', `${S.period_from || ''} to ${S.period_to || ''}`], [],
+    ['Opening balance', S.opening], ['Total credits', S.cr], ['Total debits', S.dr], ['Closing balance', S.closing], ['Credits (count)', S.nCr], ['Debits (count)', S.nDr], [],
+    ['Balance check', S.bad ? `${S.bad} row(s) do not tally` : 'All rows tally'], ['Read by', S.method], ['File', S.file_name], ['Converted by', me.full_name || me.email], ['On', today()], ...(S.notes || []).map(n => ['Note', n])]);
+  sum['!cols'] = [{ wch: 18 }, { wch: 60 }];
+  X.utils.book_append_sheet(wb, sum, 'Summary');
+  const { use, G } = bkLedgerGroups();
+  X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet([['Ledger', 'Tally group', 'Rows', 'Debits', 'Credits'], ...Object.entries(use).map(([l, u]) => [l, G[l], u.n, Math.round(u.dr * 100) / 100, Math.round(u.cr * 100) / 100])]), 'Ledger summary');
+  X.writeFile(wb, `${slug((clientById(S.client_id) || {}).name || 'client')}-${slug(S.bank)}-${String(S.account || '').slice(-4)}-${S.period_from || ''}-to-${S.period_to || ''}.xlsx`.replace(/-+/g, '-'));
+}
+
+window.__tracker = { BANK, bankReadFile, TDSW, MCA, BILL, parseMcaSheets, mcaPlanAll, fillGstWorkings, G1, GR, RECO, gstr3bFromApi, periodToMonth, strongPassword, periodFor, dueDateFor, parseCSV, toCSV, gstLateFee, gstInterest, tdsCalc, rocCalc, monthsSpan, tdsDepositDue, g1json, clientReportHtml, clientReportMsg, rnStage, anyDate, parseRenewalRows, gstPayDue, tdsPayDue, advInstalment, advCurrent, advDue, recurringPlan, taxMsg, addMonths, fyEndOf, obProgress, rnKind };
 start();
 })();
