@@ -1200,7 +1200,7 @@ const PORTALS = [
   ['ROC/MCA', 'MCA V3', 'https://www.mca.gov.in/content/mca/global/en/home.html']
 ];
 const WT_TONE = { 'GST': ['#E3EEFC', '#1D5FC2'], 'TDS': ['#EFE8FB', '#5B3CC4'], 'Income Tax': ['#E2F4EF', '#0F6B5C'], 'ROC/MCA': ['#FDF0E1', '#9A4A00'], 'Other': ['#EEF1F5', '#526174'] };
-VIEWS.dashboard = async v => {
+const dashFull = async v => {      // the full dashboard (Admin → System tab)
   const now = new Date(), t = today(), in7 = iso(addDays(now, 7));
   const y = now.getFullYear(), m = now.getMonth() + 1;
   const mStart = iso(new Date(y, m - 1, 1)), mEnd = iso(new Date(y, m, 0));
@@ -8517,6 +8517,241 @@ async function showHistory(kind, id, title) {
     : '<p class="muted">No changes recorded yet. Changes are recorded from the day the activity log was switched on.</p>';
 }
 
-window.__tracker = { AUDIT, IDLE, clientProblems, HEALTH, HELP, noticeLetter, BANK, bankReadFile, TDSW, MCA, BILL, parseMcaSheets, mcaPlanAll, fillGstWorkings, G1, GR, RECO, gstr3bFromApi, periodToMonth, strongPassword, periodFor, dueDateFor, parseCSV, toCSV, gstLateFee, gstInterest, tdsCalc, rocCalc, monthsSpan, tdsDepositDue, g1json, clientReportHtml, clientReportMsg, rnStage, anyDate, parseRenewalRows, gstPayDue, tdsPayDue, advInstalment, advCurrent, advDue, recurringPlan, taxMsg, addMonths, fyEndOf, obProgress, rnKind };
+
+/* =====================================================================
+   v27  DASHBOARDS BY ROLE + WORK REQUESTS
+   Team member: "My day"  ·  Manager / Partner: "Office"  ·  Admin: Office | My work | System
+   ===================================================================== */
+const WR_PRI = ['Normal', 'High', 'Urgent'];
+const WR_ST = ['New', 'In progress', 'Done', 'Cancelled'];
+const dashTabs = () => isAdmin() ? [['office', 'Office'], ['mine', 'My work'], ['system', 'System']]
+  : (isManager() || isPartner()) ? [['office', 'Office']] : [['mine', 'My day']];
+
+VIEWS.dashboard = async v => {
+  const tabs = dashTabs();
+  let tab = ''; try { tab = localStorage.getItem('jlr-dash-tab') || ''; } catch (e) {}
+  if (!tabs.some(x => x[0] === tab)) tab = tabs[0][0];
+  v.innerHTML = (tabs.length > 1 ? `<div class="dash-tabs" role="tablist">${tabs.map(([k, l]) => `<button role="tab" data-dt="${k}" aria-selected="${k === tab}">${esc(l)}</button>`).join('')}</div>` : '') + '<div id="dashBody"></div>';
+  const body = $('#dashBody', v);
+  const show = async k => {
+    tab = k; try { localStorage.setItem('jlr-dash-tab', k); } catch (e) {}
+    $$('[data-dt]', v).forEach(b => b.setAttribute('aria-selected', b.dataset.dt === k));
+    body.innerHTML = '<div class="loading">Loading…</div>';
+    try { await ({ office: dashOffice, mine: dashMine, system: dashSystemTab }[k])(body); }
+    catch (e) { body.innerHTML = `<p class="note warn">${esc(friendly(e))}</p>`; }
+  };
+  $$('[data-dt]', v).forEach(b => b.onclick = () => show(b.dataset.dt));
+  await show(tab);
+};
+
+/* ---------- shared: work-request list and window ---------- */
+const wrBadge = r => `<span class="st wr-${slug(r.status)}">${esc(r.status)}</span>${r.priority !== 'Normal' ? ` <span class="chip ${r.priority === 'Urgent' ? 'red' : 'amber'} small">${esc(r.priority)}</span>` : ''}`;
+function wrTable(list, { mine = false } = {}) {
+  if (!list.length) return `<div class="empty small">${mine ? 'No requests for you right now.' : 'No open requests.'}</div>`;
+  const t = today();
+  return `<div class="table-wrap"><table><thead><tr><th>Request</th><th>${mine ? 'From' : 'For'}</th><th>Due</th><th>Status</th><th></th></tr></thead><tbody>
+    ${list.map(r => `<tr><td class="wrap"><b>${esc(r.title)}</b>${r.client_id ? `<div class="muted small">${esc(cLabel(clientById(r.client_id) || { name: '' }))}</div>` : ''}${r.reply ? `<div class="small">↳ ${esc(r.reply)}</div>` : ''}</td>
+      <td>${esc(profName(mine ? r.requested_by : r.assigned_to) || '—')}</td>
+      <td class="${r.due_date && r.due_date < t && !['Done', 'Cancelled'].includes(r.status) ? 'late' : ''}">${r.due_date ? fmtDate(r.due_date) : '—'}</td>
+      <td>${wrBadge(r)}</td>
+      <td class="row-btns">${mine && r.status === 'New' ? `<button class="btn sm" data-wrgo="${r.id}" data-to="In progress">Start</button>` : ''}${mine && ['New', 'In progress'].includes(r.status) ? `<button class="btn sm primary" data-wrdone="${r.id}">Done</button>` : ''}<button class="btn sm ghost" data-wropen="${r.id}">Open</button></td></tr>`).join('')}
+    </tbody></table></div>`;
+}
+function bindWr(el, list, refresh) {
+  el.onclick = async e => {
+    const b = e.target.closest('button'); if (!b) return;
+    const r = list.find(x => x.id === (b.dataset.wrgo || b.dataset.wrdone || b.dataset.wropen)); if (!r) return;
+    if (b.dataset.wrgo) { try { await must(sb.from('work_requests').update({ status: b.dataset.to }).eq('id', r.id)); toast('Started'); refresh(); } catch (err) { toast(friendly(err), true); } }
+    if (b.dataset.wrdone) wrDone(r, refresh);
+    if (b.dataset.wropen) editRequest(r, refresh);
+  };
+}
+function wrDone(r, refresh) {
+  modal('Mark as done', `<p class="small" style="margin-top:0"><b>${esc(r.title)}</b></p>
+    <label class="full">Reply to ${esc(profName(r.requested_by) || 'your manager')} (optional)<textarea name="reply" rows="3" placeholder="e.g. Collected all 6 months, saved in Client mail">${esc(r.reply || '')}</textarea></label>`,
+    { saveText: 'Mark done', onSave: async el => { await must(sb.from('work_requests').update({ status: 'Done', reply: fv(el, 'reply') || null }).eq('id', r.id)); toast('Done — ' + (profName(r.requested_by) || 'your manager') + ' has been told'); refresh(); } });
+}
+function editRequest(r, refresh) {
+  const isNew = !r || !!r._new, mgr = isManager();
+  r = r || { priority: 'Normal', status: 'New' };
+  const ro = !mgr ? 'disabled' : '';
+  const staff = activeStaff().filter(p => p.id !== me.id || isAdmin());
+  const m = modal(isNew ? 'New work request' : 'Work request', `<div class="form-grid">
+    <label class="full">What needs doing ${REQ}<input name="title" value="${esc(r.title || '')}" maxlength="200" placeholder="e.g. Collect Oct–Mar bank statements and convert to Tally" ${ro}></label>
+    <label>For ${REQ}<select name="assigned_to" ${ro}>${isNew ? '<option value="">Choose a team member…</option>' : ''}${opts(staff, r.assigned_to, p => p.full_name || p.email, p => p.id)}</select></label>
+    <label>Client (optional)<select name="client_id" ${ro}><option value="">— none —</option>${opts(clients.filter(c => c.active || c.id === r.client_id), r.client_id, cLabel, c => c.id)}</select></label>
+    <label>Due date<input type="date" name="due_date" value="${esc(r.due_date || '')}" ${ro}></label>
+    <label>Priority<select name="priority" ${ro}>${opts(WR_PRI, r.priority)}</select></label>
+    <label class="full">Details<textarea name="details" rows="4" ${ro}>${esc(r.details || '')}</textarea></label>
+    ${isNew ? '' : `<label>Status<select name="status">${opts(mgr ? WR_ST : WR_ST.filter(s => s !== 'Cancelled'), r.status)}</select></label>
+      <label class="full">Reply from ${esc(profName(r.assigned_to) || 'team member')}<textarea name="reply" rows="3" ${r.assigned_to === me.id || mgr ? '' : 'disabled'}>${esc(r.reply || '')}</textarea></label>
+      <p class="full muted small" style="margin:0">Asked by ${esc(profName(r.requested_by) || '—')} on ${fmtDate((r.created_at || '').slice(0, 10))}${r.started_at ? ' · started ' + fmtDate(r.started_at.slice(0, 10)) : ''}${r.done_at ? ' · done ' + fmtDate(r.done_at.slice(0, 10)) : ''}</p>`}
+    ${isNew ? '<p class="full muted small" style="margin:0">The team member sees this on their dashboard and gets an email. You are told when it is done.</p>' : ''}</div>`, {
+    saveText: isNew ? 'Send request' : 'Save',
+    extra: !isNew && mgr ? '<button class="btn danger" data-wrdel>Delete</button>' : '',
+    onSave: async el => {
+      const rec = isNew || mgr ? { title: fv(el, 'title').trim(), assigned_to: fv(el, 'assigned_to') || null, client_id: fv(el, 'client_id') || null,
+        due_date: fv(el, 'due_date') || null, priority: fv(el, 'priority'), details: fv(el, 'details') || null } : {};
+      if (!isNew) { rec.status = fv(el, 'status'); rec.reply = fv(el, 'reply') || null; }
+      if ((isNew || mgr) && !rec.title) { toast('Write what needs doing', true); return false; }
+      if ((isNew || mgr) && !rec.assigned_to) { toast('Choose the team member', true); return false; }
+      if (isNew) await must(sb.from('work_requests').insert({ ...rec, status: 'New' })); else await must(sb.from('work_requests').update(rec).eq('id', r.id));
+      toast(isNew ? `Request sent to ${profName(rec.assigned_to)}` : 'Saved'); refresh && refresh();
+    }
+  });
+  const d = $('[data-wrdel]', m.el);
+  if (d) d.onclick = async () => { if (!confirm('Delete this request?')) return; try { await must(sb.from('work_requests').delete().eq('id', r.id)); m.close(); toast('Deleted'); refresh && refresh(); } catch (e) { toast(friendly(e), true); } };
+}
+
+/* ---------- OFFICE (Manager, Partner, Admin) ---------- */
+async function dashOffice(body) {
+  const now = new Date(), t = today(), in7 = iso(addDays(now, 7)), y = now.getFullYear(), m = now.getMonth() + 1;
+  const mStart = iso(new Date(y, m - 1, 1)), mEnd = iso(new Date(y, m, 0));
+  const [open, month, nt, wr, inv, pay] = await Promise.all([
+    must(sb.from('tasks').select('*').not('status', 'in', '("Filed","Not applicable")').order('due_date', { ascending: true, nullsFirst: false }).limit(5000)),
+    must(sb.from('tasks').select('id,client_id,work_type,return_name,status,due_date,filed_on,assigned_to').gte('due_date', mStart).lte('due_date', mEnd).limit(10000)),
+    safe(sb.from('notices').select('id,client_id,dept,notice_type,status,reply_due,assigned_to').neq('status', 'Closed').limit(3000)),
+    safe(sb.from('work_requests').select('*').in('status', ['New', 'In progress']).order('due_date', { ascending: true, nullsFirst: false }).limit(500)),
+    isPartner() && P4() ? safe(sb.from('invoices').select('client_id,total,paid').limit(10000)) : Promise.resolve({ data: null }),
+    isPartner() && P4() ? safe(sb.from('payments').select('amount,paid_on').gte('paid_on', mStart).lte('paid_on', mEnd).limit(5000)) : Promise.resolve({ data: null })
+  ]);
+  const rows = open.data || [], mrows = (month.data || []).filter(r => r.status !== 'Not applicable');
+  const notices = nt.error ? [] : nt.data || [], reqs = wr.error ? null : wr.data || [];
+  const overdue = rows.filter(r => r.due_date && r.due_date < t), soon = rows.filter(r => r.due_date && r.due_date >= t && r.due_date <= in7);
+  const nDue = notices.filter(n => isOpenNotice(n.status) && n.reply_due && n.reply_due <= in7).sort((a, b) => a.reply_due.localeCompare(b.reply_due));
+
+  // this month by department
+  const dept = ['GST', 'TDS', 'ROC/MCA', 'Other'].map(w => {
+    const list = mrows.filter(r => inTab(r, w));
+    const c = { filed: list.filter(r => r.status === 'Filed').length, prog: list.filter(r => ['In progress', 'Ready to file'].includes(r.status)).length,
+      wait: list.filter(r => r.status === 'Pending data').length, late: list.filter(r => r.status !== 'Filed' && r.due_date < t).length };
+    const [bg, fg] = WT_TONE[w], p = list.length ? Math.round(100 * c.filed / list.length) : 0;
+    return `<div class="bento-card dept od-dept"><div class="dept-head"><span class="dept-ico" style="background:${bg};color:${fg}">${wtIcon(w, 20)}</span><b>${esc(w === 'ROC/MCA' ? 'MCA' : w)}</b><span class="dept-count">${c.filed} / ${list.length}</span></div>
+      <div class="bar"><i style="width:${p}%;background:${fg}"></i></div>
+      <div class="od-nums">${[['filed', 'Filed', c.filed, 'Filed'], ['prog', 'In progress', c.prog, 'progress'], ['wait', 'Waiting data', c.wait, 'Pending data'], ['late', 'Overdue', c.late, 'overdue']]
+        .map(([k, l, n, st]) => `<a href="#/work" data-od="${esc(w)}|${st}" class="od-n od-${k}${n ? '' : ' zero'}"><b>${n}</b><span>${l}</span></a>`).join('')}</div></div>`;
+  }).join('');
+
+  // staff board
+  const people = activeStaff().map(p => {
+    const mine = rows.filter(r => r.assigned_to === p.id), mm = mrows.filter(r => r.assigned_to === p.id);
+    return { p, late: mine.filter(r => r.due_date && r.due_date < t).length, week: mine.filter(r => r.due_date && r.due_date >= t && r.due_date <= in7).length,
+      wait: mine.filter(r => r.status === 'Pending data').length, open: mine.length, done: mm.filter(r => r.status === 'Filed').length, total: mm.length,
+      req: (reqs || []).filter(r => r.assigned_to === p.id).length };
+  }).filter(x => x.open || x.total || x.req).sort((a, b) => b.late - a.late || b.open - a.open);
+  const un = rows.filter(r => !r.assigned_to);
+  const staffRows = people.map(x => `<tr><td><b>${esc(x.p.full_name || x.p.email)}</b><div class="muted small">${esc(ROLE_LABEL ? (ROLE_LABEL[x.p.role] || x.p.role) : x.p.role)}</div></td>
+      <td class="${x.late ? 'late' : ''}"><b>${x.late}</b></td><td>${x.week}</td><td>${x.wait}</td><td>${x.open}</td>
+      <td>${x.total ? `${x.done} / ${x.total}<div class="hbar"><i class="green" style="width:${Math.round(100 * x.done / x.total)}%"></i></div>` : '—'}</td><td>${x.req || '—'}</td>
+      <td class="row-btns"><a class="btn sm" href="#/work" data-ostaff="${x.p.id}">Open list</a><button class="btn sm ghost" data-oreq="${x.p.id}">+ Request</button></td></tr>`).join('');
+
+  const fees = inv && inv.data ? inv.data.reduce((a, i) => a + num(i.total) - num(i.paid), 0) : null;
+  const got = pay && pay.data ? pay.data.reduce((a, x) => a + num(x.amount), 0) : null;
+  const filedM = mrows.filter(r => r.status === 'Filed').length;
+  body.innerHTML = `
+    <div class="page-head"><h2>Office</h2><span class="muted">${MONTHS_FULL[m - 1]} ${y} · ${filedM} of ${mrows.length} filed</span><span class="spacer"></span>
+      <button class="btn primary" id="oReq">+ Work request</button></div>
+    <div class="bento-stats card stats4" style="margin-bottom:14px">
+      <a class="mini red" href="#/work" data-oq="overdue"><span>Overdue</span><b>${overdue.length}</b></a>
+      <a class="mini amber" href="#/work" data-oq="soon"><span>Due in 7 days</span><b>${soon.length}</b></a>
+      <a class="mini blue" href="#/work" data-oq="waiting"><span>Waiting for client data</span><b>${rows.filter(r => r.status === 'Pending data').length}</b></a>
+      <a class="mini ${nDue.length ? 'red' : 'green'}" href="#/notices"><span>Notice replies due (7 days)</span><b>${nDue.length}</b></a></div>
+    ${fees !== null ? `<div class="od-fees"><a class="chip blue" href="#/billing" data-billdue>Fees outstanding ${inr(fees)}</a><span class="chip green">Collected this month ${inr(got || 0)}</span></div>` : ''}
+    <h3 class="od-h">This month by department</h3><div class="od-depts">${dept}</div>
+    <div class="card"><h3>Team</h3>${people.length || un.length ? `<div class="table-wrap"><table class="od-staff"><thead><tr><th>Person</th><th>Overdue</th><th>Due 7 days</th><th>Waiting data</th><th>All open</th><th>Filed this month</th><th>Requests</th><th></th></tr></thead><tbody>
+      ${staffRows}${un.length ? `<tr><td><b>Not assigned</b></td><td class="${un.filter(r => r.due_date && r.due_date < t).length ? 'late' : ''}"><b>${un.filter(r => r.due_date && r.due_date < t).length}</b></td><td>${un.filter(r => r.due_date && r.due_date >= t && r.due_date <= in7).length}</td><td>${un.filter(r => r.status === 'Pending data').length}</td><td>${un.length}</td><td>—</td><td>—</td><td class="row-btns"><a class="btn sm" href="#/work" data-ostaff="none">Open list</a></td></tr>` : ''}
+      </tbody></table></div>` : '<div class="empty small">No open work.</div>'}</div>
+    <div class="card"><h3>Work requests in progress${reqs ? ` (${reqs.length})` : ''}</h3><div id="oReqList">${reqs ? '' : '<p class="note small">Run <b>update-session10.sql</b> in Supabase to switch on work requests.</p>'}</div></div>
+    <div class="card"><h3>Overdue (${overdue.length})</h3><div data-t="late"></div></div>
+    <div class="card"><h3>Due in the next 7 days (${soon.length})</h3><div data-t="soon"></div></div>
+    ${nDue.length ? `<div class="card"><h3>Notice replies due</h3><div class="table-wrap"><table><thead><tr><th>Client</th><th>Notice</th><th>Reply by</th><th>Staff</th></tr></thead><tbody>
+      ${nDue.slice(0, 30).map(n => `<tr><td>${esc(clientName(n.client_id))}</td><td>${esc((n.dept === 'ROC/MCA' ? 'MCA' : n.dept) + ' · ' + n.notice_type)}</td><td class="${n.reply_due < t ? 'late' : ''}">${fmtDate(n.reply_due)}</td><td>${esc(profName(n.assigned_to) || '—')}</td></tr>`).join('')}</tbody></table></div></div>` : ''}
+    <div id="oHealth"></div>`;
+  const refresh = () => route();
+  const lateEl = $('[data-t=late]', body), soonEl = $('[data-t=soon]', body);
+  lateEl.innerHTML = taskTable(overdue.slice(0, 50), { showArn: false, showAssigned: true }); bindTaskTable(lateEl, overdue, refresh);
+  soonEl.innerHTML = taskTable(soon.slice(0, 50), { showArn: false, showAssigned: true }); bindTaskTable(soonEl, soon, refresh);
+  if (reqs) { $('#oReqList', body).innerHTML = wrTable(reqs); bindWr($('#oReqList', body), reqs, refresh); }
+  $('#oReq', body).onclick = () => reqs ? editRequest(null, refresh) : toast('Run update-session10.sql in Supabase first', true);
+  const t0 = t, mo = t.slice(0, 7);
+  $$('[data-oq]', body).forEach(a => a.onclick = () => { wf = { ...WF_DEFAULT, status: a.dataset.oq === 'waiting' ? 'Pending data' : 'open', quick: a.dataset.oq === 'waiting' ? '' : a.dataset.oq }; });
+  $$('[data-od]', body).forEach(a => a.onclick = () => { const [w, st] = a.dataset.od.split('|'); wf = { ...WF_DEFAULT, type: w, month: mo, status: st === 'progress' ? 'open' : st === 'overdue' ? 'open' : st, quick: st === 'overdue' ? 'overdue' : '' }; });
+  $$('[data-ostaff]', body).forEach(a => a.onclick = () => { wf = { ...WF_DEFAULT, staff: a.dataset.ostaff === 'none' ? '' : a.dataset.ostaff, status: 'open' }; });
+  $$('[data-oreq]', body).forEach(b => b.onclick = () => reqs ? editRequest({ priority: 'Normal', status: 'New', assigned_to: b.dataset.oreq, _new: true }, refresh) : toast('Run update-session10.sql in Supabase first', true));
+  $$('[data-billdue]', body).forEach(x => x.onclick = () => { billTab = 'due'; });
+  countUp(body);
+  HEALTH.load().then(all => {
+    const red = all.filter(x => x.level === 'red'), box = $('#oHealth', body); if (!box || !document.body.contains(box) || !red.length) return;
+    box.innerHTML = `<div class="card"><h3>Clients needing attention (${red.length})</h3><div class="chips">${red.slice(0, 12).map(x => `<a class="chip red" href="#/health" data-hred>${esc(x.c.name)} · ${x.score}</a>`).join('')}</div></div>`;
+    $$('[data-hred]', box).forEach(a => a.onclick = () => { hf = { ...hf, level: 'red' }; });
+  }).catch(() => {});
+}
+
+/* ---------- MY DAY (team member, and Admin's own work) ---------- */
+async function dashMine(body) {
+  const now = new Date(), t = today(), in7 = iso(addDays(now, 7)), y = now.getFullYear(), m = now.getMonth() + 1;
+  const mStart = iso(new Date(y, m - 1, 1)), mEnd = iso(new Date(y, m, 0));
+  const [open, done, nt, wr] = await Promise.all([
+    must(sb.from('tasks').select('*').eq('assigned_to', me.id).not('status', 'in', '("Filed","Not applicable")').order('due_date', { ascending: true, nullsFirst: false }).limit(3000)),
+    must(sb.from('tasks').select('id,status,due_date,filed_on').eq('assigned_to', me.id).eq('status', 'Filed').gte('filed_on', mStart).lte('filed_on', mEnd).limit(3000)),
+    safe(sb.from('notices').select('*').eq('assigned_to', me.id).neq('status', 'Closed').order('reply_due', { ascending: true, nullsFirst: false }).limit(500)),
+    safe(sb.from('work_requests').select('*').eq('assigned_to', me.id).in('status', ['New', 'In progress']).order('due_date', { ascending: true, nullsFirst: false }).limit(300))
+  ]);
+  const rows = open.data || [], filed = done.data || [], notices = nt.error ? [] : nt.data || [], reqs = wr.error ? null : wr.data || [];
+  const overdue = rows.filter(r => r.due_date && r.due_date < t), todayL = rows.filter(r => r.due_date === t), week = rows.filter(r => r.due_date && r.due_date > t && r.due_date <= in7);
+  const waiting = rows.filter(r => r.status === 'Pending data');
+  const ontime = filed.filter(r => !r.due_date || (r.filed_on || '') <= r.due_date).length;
+  const hour = now.getHours(), hello = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
+  const nLate = notices.filter(n => n.reply_due && n.reply_due < t && n.status !== 'Hearing');
+  body.innerHTML = `
+    <div class="page-head"><h2>${hello}, ${esc((me.full_name || '').split(' ')[0] || 'there')}</h2><span class="muted">${now.toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' })}</span></div>
+    <div class="bento-stats card stats4" style="margin-bottom:14px">
+      <a class="mini red" href="#/work" data-mq="overdue"><span>Overdue</span><b>${overdue.length}</b></a>
+      <a class="mini amber" href="#/work" data-mq="soon"><span>Due today &amp; this week</span><b>${todayL.length + week.length}</b></a>
+      <a class="mini blue" href="#/work" data-mq="waiting"><span>Waiting for client data</span><b>${waiting.length}</b></a>
+      <div class="mini green"><span>Filed this month · on time</span><b>${filed.length}</b><small>${filed.length ? Math.round(100 * ontime / filed.length) + '% on time' : '—'}</small></div></div>
+    ${reqs && reqs.length ? `<div class="card wr-card"><h3>Requests for you (${reqs.length})</h3><div id="mReq"></div></div>` : ''}
+    ${!reqs ? '' : !reqs.length ? '' : ''}
+    <div class="card"><h3>Overdue (${overdue.length})</h3><div data-t="late"></div></div>
+    <div class="card"><h3>Due today (${todayL.length})</h3><div data-t="today"></div></div>
+    <div class="card"><h3>Due in the next 7 days (${week.length})</h3><div data-t="week"></div></div>
+    <div class="card"><h3>Waiting for client data (${waiting.length})</h3><p class="muted small" style="margin-top:-4px">Use Follow-up to call or WhatsApp the client and note when they promised the data.</p><div data-t="wait"></div></div>
+    ${notices.length ? `<div class="card"><h3>My notices (${notices.length})${nLate.length ? ` <span class="chip red small">${nLate.length} reply overdue</span>` : ''}</h3><div class="table-wrap"><table><thead><tr><th>Client</th><th>Notice</th><th>Reply by</th><th>Status</th></tr></thead><tbody>
+      ${notices.map(n => `<tr><td>${esc(clientName(n.client_id))}</td><td><a href="#/notices">${esc((n.dept === 'ROC/MCA' ? 'MCA' : n.dept) + ' · ' + n.notice_type)}</a></td><td class="${n.reply_due && n.reply_due < t ? 'late' : ''}">${n.reply_due ? fmtDate(n.reply_due) : '—'}</td><td>${esc(n.status)}</td></tr>`).join('')}</tbody></table></div></div>` : ''}`;
+  const refresh = () => route();
+  [['late', overdue], ['today', todayL], ['week', week], ['wait', waiting]].forEach(([k, list]) => {
+    const el = $(`[data-t=${k}]`, body);
+    el.innerHTML = list.length ? taskTable(list.slice(0, 60), { showArn: false, showAssigned: false }) : `<div class="empty small">${k === 'late' ? 'Nothing overdue — well done.' : 'Nothing here.'}</div>`;
+    if (list.length) bindTaskTable(el, list, refresh);
+  });
+  if (reqs && reqs.length) { $('#mReq', body).innerHTML = wrTable(reqs, { mine: true }); bindWr($('#mReq', body), reqs, refresh); }
+  $$('[data-mq]', body).forEach(a => a.onclick = () => { wf = { ...WF_DEFAULT, staff: isManager() ? me.id : '', status: a.dataset.mq === 'waiting' ? 'Pending data' : 'open', quick: a.dataset.mq === 'waiting' ? '' : a.dataset.mq }; });
+  countUp(body);
+}
+
+/* ---------- SYSTEM (Admin): automatic jobs + the full dashboard ---------- */
+async function dashSystemTab(body) {
+  body.innerHTML = '<div class="card sys-card"><h3>Automatic jobs</h3><div class="sys-grid" id="sysGrid"><div class="loading">Checking…</div></div></div><div id="sysOld"></div>';
+  const when = x => { if (!x) return 'never'; const mins = Math.round((Date.now() - new Date(x)) / 60000); return mins < 1 ? 'just now' : mins < 60 ? mins + ' min ago' : mins < 1440 ? Math.round(mins / 60) + ' h ago' : new Date(x).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }); };
+  Promise.all([safe(sb.rpc('wa_admin_status')), safe(sb.from('wa_settings').select('enabled,client_enabled').eq('id', 1).maybeSingle()), safe(sb.rpc('notice_status')), safe(sb.rpc('auto_work_status')),
+    safe(sb.rpc('chase_status')), safe(sb.rpc('mail_admin_status')), safe(sb.from('backups').select('taken_at,rows').order('taken_at', { ascending: false }).limit(1)), safe(sb.rpc('ai_admin_status'))])
+  .then(([wa, ws, nw, aw, ch, ml, bk, ai]) => {
+    const tile = (name, ok, line, href) => `<a class="sys-tile ${ok === true ? 'ok' : ok === false ? 'bad' : 'off'}" href="${href}"><span class="sys-dot"></span><b>${esc(name)}</b><span class="small">${line}</span></a>`;
+    const n = nw.data || {}, a = aw.data || {}, c = ch.data || {}, mm = ml.data || {}, b = (bk.data || [])[0], ia = ai.data || {}, w = ws.data || {};
+    const bkAge = b ? (Date.now() - new Date(b.taken_at)) / 36e5 : null;
+    $('#sysGrid', body).innerHTML = [
+      tile('WhatsApp reminders', wa.error || ws.error ? null : !!w.enabled, wa.error || ws.error ? 'not set up' : w.enabled ? 'on — staff 9:30 AM daily' : 'switched off', '#/settings'),
+      tile('Notice watch', nw.error ? null : n.connected && n.enabled ? !n.last_error && !!n.last_check_at && (Date.now() - new Date(n.last_check_at)) < 3 * 36e5 : null, nw.error ? 'not installed' : !n.connected ? 'not set up' : n.last_error ? 'problem: ' + esc(n.last_error) : 'last check ' + when(n.last_check_at), '#/notices'),
+      tile('Automatic GST work', aw.error ? null : a.gst_enabled ? true : null, aw.error ? 'not installed' : a.gst_enabled ? 'last run ' + when(a.last_run_at) + (a.last_made != null ? ` · ${a.last_made} made` : '') : 'switched off', '#/settings'),
+      tile('Data chasing', ch.error ? null : c.enabled ? !c.failed_7 : null, ch.error ? 'not installed' : c.enabled ? `on · ${c.sent_7 || 0} clients reminded in 7 days${c.failed_7 ? ` · ${c.failed_7} failed` : ''}${c.queued ? ` · ${c.queued} emails waiting` : ''}` : 'switched off', '#/settings'),
+      tile('Client mail', ml.error ? null : mm.enabled && mm.key_set ? !mm.last_error : null, ml.error ? 'not installed' : mm.enabled && mm.key_set ? 'last mail ' + when(mm.last_mail_at) + (mm.new ? ` · ${mm.new} waiting` : '') : 'not set up', '#/inbox'),
+      tile('Backup', bk.error ? null : b ? bkAge < 30 : false, bk.error ? 'not available' : b ? 'last ' + when(b.taken_at) + ` · ${b.rows} rows` : 'no backup yet', '#/settings'),
+      tile('AI (bills, help, replies)', ai.error ? null : ia.enabled && ia.key_set ? true : null, ai.error ? 'not installed' : ia.key_set ? `this month ₹${(+ia.month_cost || 0).toFixed(2)}` : 'no key — free reading only', '#/settings')
+    ].join('');
+  });
+  await dashFull($('#sysOld', body));
+}
+
+window.__tracker = { dashTabs, AUDIT, IDLE, clientProblems, HEALTH, HELP, noticeLetter, BANK, bankReadFile, TDSW, MCA, BILL, parseMcaSheets, mcaPlanAll, fillGstWorkings, G1, GR, RECO, gstr3bFromApi, periodToMonth, strongPassword, periodFor, dueDateFor, parseCSV, toCSV, gstLateFee, gstInterest, tdsCalc, rocCalc, monthsSpan, tdsDepositDue, g1json, clientReportHtml, clientReportMsg, rnStage, anyDate, parseRenewalRows, gstPayDue, tdsPayDue, advInstalment, advCurrent, advDue, recurringPlan, taxMsg, addMonths, fyEndOf, obProgress, rnKind };
 start();
 })();
