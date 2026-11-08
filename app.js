@@ -1829,6 +1829,9 @@ VIEWS.settings = async v => {
   const dr = document.createElement('div');
   v.appendChild(dr);
   renderDataRequestSettings(dr);
+  const dm = document.createElement('div');
+  v.appendChild(dm);
+  renderDemoSettings(dm);
   const ai = document.createElement('div');
   v.appendChild(ai);
   renderAiSettings(ai);
@@ -8615,6 +8618,7 @@ VIEWS.dashboard = async v => {
   if (!tabs.some(x => x[0] === tab)) tab = tabs[0][0];
   v.innerHTML = (tabs.length > 1 ? `<div class="dash-tabs" role="tablist">${tabs.map(([k, l]) => `<button role="tab" data-dt="${k}" aria-selected="${k === tab}">${esc(l)}</button>`).join('')}</div>` : '') + '<div id="dashBody"></div>';
   const body = $('#dashBody', v);
+  try { await loadRefs(); const b = demoBanner(); if (b) v.insertAdjacentHTML('afterbegin', b); } catch (e) {}
   const show = async k => {
     tab = k; try { localStorage.setItem('jlr-dash-tab', k); } catch (e) {}
     $$('[data-dt]', v).forEach(b => b.setAttribute('aria-selected', b.dataset.dt === k));
@@ -9298,6 +9302,40 @@ async function renderDataRequestSettings(box) {
     $$('[data-drk]', m.el).forEach(b => b.onclick = () => show(b.dataset.drk));
     show('gst');
   };
+}
+
+/* =====================================================================
+   v31  SAMPLE DATA FOR THE DEMO (Settings card, Admin only)
+   Loads 20 made-up clients (DEMO-01 … DEMO-20) with work, notices, invoices, payments,
+   requests and follow-ups — and clears them all in one click. Nothing is ever emailed for them.
+   ===================================================================== */
+async function renderDemoSettings(box) {
+  if (!isAdmin()) { box.innerHTML = ''; return; }
+  const r = await safe(sb.rpc('demo_status'));
+  if (r.error) { box.innerHTML = '<div class="card"><h3>Sample data for the demo</h3><p class="note small">Run <b>update-session14.sql</b> in Supabase to switch this on.</p></div>'; return; }
+  const s = r.data || {}, on = num(s.clients) > 0;
+  box.innerHTML = `<div class="card demo-card"><h3>Sample data for the demo</h3>
+    <p class="muted">Fills the tracker with <b>20 made-up clients</b> (codes DEMO-01 to DEMO-20) and a realistic month of work — GST, TDS and MCA returns in every status, two overdue items, notices with a reply draft and a hearing, invoices with full / part / no payment, work requests and follow-ups — so every screen has something to show. Demo clients use example.com emails and have automatic reminders switched off, so <b>nothing is ever sent</b> to anyone.</p>
+    <div class="mail-stat"><span class="pill ${on ? 'a' : 'g'}">${on ? '● Sample data loaded' : 'No sample data'}</span>
+      ${on ? `<span class="small">${num(s.clients)} clients · ${num(s.tasks)} work items · ${num(s.notices)} notices · ${num(s.invoices)} invoices</span>` : ''}</div>
+    <div class="toolbar" style="margin-top:12px">${on ? '<button class="btn danger" id="demoClear">Clear sample data</button>' : '<button class="btn primary" id="demoLoad">Load sample data</button>'}</div>
+    <p class="muted small">${on ? 'Clear it after the demo — it removes the demo clients and everything linked to them (work, notices, invoices, payments, requests, follow-ups, emails, activity). Your real clients are not touched.' : 'Takes a few seconds. Your real clients are not touched, and one click removes it all again.'}</p></div>`;
+  const go = async (btn, rpc, ask, done) => {
+    if (!confirm(ask)) return;
+    btn.disabled = true; btn.textContent = 'Working…';
+    try { const { data } = await must(sb.rpc(rpc)); toast(done(data || {})); await loadRefs(true); renderDemoSettings(box); }
+    catch (e) { toast(friendly(e), true); btn.disabled = false; renderDemoSettings(box); }
+  };
+  if ($('#demoLoad', box)) $('#demoLoad', box).onclick = e => go(e.target, 'demo_load',
+    'Load 20 sample clients with work, notices and invoices for the demo?\n\nNothing will be emailed. You can clear it all with one click afterwards.',
+    d => `Sample data loaded: ${num(d.clients)} clients, ${num(d.tasks)} work items, ${num(d.invoices)} invoices`);
+  if ($('#demoClear', box)) $('#demoClear', box).onclick = e => go(e.target, 'demo_clear',
+    `Remove all ${num(s.clients)} demo clients (DEMO-01 to DEMO-20) and everything linked to them?\n\nThis cannot be undone. Real clients are not touched.`,
+    d => `Sample data cleared: ${num(d.clients)} demo clients removed`);
+}
+function demoBanner() {
+  if (!isAdmin() || !(clients || []).some(c => c.is_demo)) return '';
+  return `<p class="note warn small demo-banner">Sample data is loaded (DEMO-01 to DEMO-20). Clear it in <a href="#/settings">Settings → Sample data for the demo</a> before real work starts.</p>`;
 }
 
 window.__tracker = { ACK, dashTabs, AUDIT, IDLE, clientProblems, HEALTH, HELP, noticeLetter, BANK, bankReadFile, TDSW, MCA, BILL, parseMcaSheets, mcaPlanAll, fillGstWorkings, G1, GR, RECO, gstr3bFromApi, periodToMonth, strongPassword, periodFor, dueDateFor, parseCSV, toCSV, gstLateFee, gstInterest, tdsCalc, rocCalc, monthsSpan, tdsDepositDue, g1json, clientReportHtml, clientReportMsg, rnStage, anyDate, parseRenewalRows, gstPayDue, tdsPayDue, advInstalment, advCurrent, advDue, recurringPlan, taxMsg, addMonths, fyEndOf, obProgress, rnKind };
