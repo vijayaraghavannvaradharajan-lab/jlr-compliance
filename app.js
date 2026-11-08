@@ -149,6 +149,8 @@ async function must(promise) {
 function friendly(e) {
   const m = (e && (e.message || e.error_description)) || String(e);
   if (/row-level security/i.test(m)) return 'You do not have permission to do that.';
+  if (/client_code/i.test(m) && /column|schema cache/i.test(m)) return 'Client code is not set up yet — run update-session8.sql in Supabase first.';
+  if (/clients_code_uq|client_code/i.test(m) && /duplicate|unique/i.test(m)) return 'This client code is already used by another client.';
   if (/duplicate key/i.test(m)) return 'This entry already exists.';
   return m;
 }
@@ -233,7 +235,10 @@ async function start() {
   }
   const recovering = /type=recovery/.test(location.hash);
   sb = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY);
-  sb.auth.onAuthStateChange(event => { if (event === 'PASSWORD_RECOVERY') showSetPassword(); });
+  sb.auth.onAuthStateChange(event => {
+    if (event === 'PASSWORD_RECOVERY') showSetPassword();
+    if (event === 'SIGNED_OUT' && me) { IDLE.stop(); me = null; showLogin('You were signed out.'); }   // signed out in another tab
+  });
   const { data: { session } } = await sb.auth.getSession();
   if (recovering && session) return showSetPassword();
   session ? boot() : showLogin();
@@ -278,7 +283,52 @@ function wireAuthShell() {
 }
 const pwField = (label, name, extra) => `<label>${label}<span class="pw-wrap"><input name="${name}" type="password" ${extra}><button type="button" class="pw-eye" data-eye aria-label="Show password">Show</button></span></label>`;
 
+/* ---------- v25: sign out after 5 minutes without activity ---------- */
+const IDLE = {
+  LIMIT: 5 * 60 * 1000, WARN: 60 * 1000, KEY: 'jlr-last-active', timer: null, last: 0, bar: null,
+  stamp(force) { const t = Date.now(); if (!force && t - this.last < 5000) return; this.last = t; try { localStorage.setItem(this.KEY, String(t)); } catch (e) {} },
+  lastSeen() { let v = 0; try { v = +localStorage.getItem(this.KEY) || 0; } catch (e) {} return Math.max(v, this.last); },
+  expired() { const l = this.lastSeen(); return l > 0 && Date.now() - l >= this.LIMIT; },
+  onAct: null,
+  start() {
+    this.stop(); this.stamp(true);
+    this.onAct = () => { this.stamp(); if (this.bar) this.hideBar(); };
+    ['mousedown', 'mousemove', 'keydown', 'touchstart', 'wheel', 'scroll'].forEach(ev => addEventListener(ev, this.onAct, { passive: true, capture: true }));
+    document.addEventListener('visibilitychange', this.vis = () => { if (!document.hidden) this.tick(); });
+    this.timer = setInterval(() => this.tick(), 5000);
+  },
+  stop() {
+    clearInterval(this.timer); this.timer = null; this.hideBar();
+    if (this.onAct) ['mousedown', 'mousemove', 'keydown', 'touchstart', 'wheel', 'scroll'].forEach(ev => removeEventListener(ev, this.onAct, { capture: true }));
+    if (this.vis) document.removeEventListener('visibilitychange', this.vis);
+    this.onAct = this.vis = null;
+  },
+  tick() {
+    if (!me) return this.stop();
+    const left = this.LIMIT - (Date.now() - this.lastSeen());
+    if (left <= 0) return this.signOut();
+    if (left <= this.WARN) this.showBar(Math.ceil(left / 1000)); else this.hideBar();
+  },
+  showBar(sec) {
+    if (!this.bar) {
+      this.bar = document.createElement('div'); this.bar.className = 'idle-bar'; this.bar.setAttribute('role', 'alertdialog');
+      this.bar.innerHTML = '<span>No activity for a while — you will be signed out in <b></b> seconds.</span><button class="btn primary sm" type="button">Stay signed in</button>';
+      this.bar.querySelector('button').onclick = () => { this.stamp(true); this.hideBar(); };
+      document.body.appendChild(this.bar);
+    }
+    this.bar.querySelector('b').textContent = sec;
+  },
+  hideBar() { if (this.bar) { this.bar.remove(); this.bar = null; } },
+  async signOut() {
+    this.stop(); me = null;
+    try { await sb.auth.signOut({ scope: 'local' }); } catch (e) {}
+    history.replaceState(null, '', location.pathname);
+    showLogin('You were signed out after 5 minutes without activity. Please sign in again.');
+  }
+};
+
 function showLogin(msg) {
+  IDLE.stop(); ['#helpFab', '#helpPane', '.modal-back', '.modal-wrap'].forEach(q => $$(q).forEach(x => x.remove()));
   root.innerHTML = authShell(`<form class="card auth" id="loginForm">
     <div class="auth-k">Welcome back</div>
     <h2>Sign in</h2>${msg ? `<p class="note warn">${esc(msg)}</p>` : ''}
@@ -293,7 +343,7 @@ function showLogin(msg) {
     const b = $('button[type=submit]', f); b.disabled = true; b.textContent = 'Signing in…';
     const { error } = await sb.auth.signInWithPassword({ email: f.email.value.trim(), password: f.password.value });
     if (error) { toast(error.message, true); b.disabled = false; b.textContent = 'Sign in'; f.classList.remove('shake'); void f.offsetWidth; f.classList.add('shake'); }
-    else { f.classList.add('done'); boot(); }
+    else { f.classList.add('done'); IDLE.stamp(true); boot(); }
   };
   $('#forgot').onclick = async () => {
     const email = f.email.value.trim();
@@ -326,6 +376,7 @@ async function boot() {
   try {
     const { data: { user } } = await sb.auth.getUser();
     if (!user) return showLogin();
+    if (IDLE.expired()) { try { await sb.auth.signOut({ scope: 'local' }); } catch (e) {} return showLogin('You were signed out after 5 minutes without activity. Please sign in again.'); }
     const [{ data: prof }, refs] = await Promise.all([            // profile and lists in one round trip
       sb.from('profiles').select('*').eq('id', user.id).maybeSingle(),
       loadRefs().then(() => null, e => e)
@@ -334,6 +385,7 @@ async function boot() {
     if (!prof.active) { await sb.auth.signOut(); return showLogin('Your account has been deactivated. Please contact the admin.'); }
     if (refs) throw refs;
     me = prof;
+    IDLE.start();
     renderShell();
     workItemDatalists();
     if (!/^#\//.test(location.hash)) history.replaceState(null, '', location.pathname + '#/dashboard');
@@ -437,7 +489,7 @@ function renderShell() {
   document.addEventListener('click', () => { menu.hidden = true; const r = $('#gRes'); if (r) r.hidden = true; });
   menu.onclick = async e => {
     const act = e.target.dataset.act;
-    if (act === 'out') { await sb.auth.signOut(); me = null; location.hash = ''; showLogin(); }
+    if (act === 'out') { IDLE.stop(); me = null; await sb.auth.signOut(); location.hash = ''; showLogin(); }
     if (act === 'pw') changePassword();
     if (act === 'theme') pickTheme();
     if (act === 'install') installApp();
@@ -468,8 +520,8 @@ function bindSearch() {
   const draw = () => {
     const q = lc(inp.value); if (!q) { res.hidden = true; return; }
     const qq = q.replace(/\s+/g, '');
-    hits = clients.filter(c => [c.name, c.gstin, c.pan, c.tan, c.cin].some(x => lc(x).replace(/\s+/g, '').includes(qq))).slice(0, 6);
-    res.innerHTML = hits.map((c, i) => `<button type="button" data-h="${i}"><b>${esc(c.name)}</b><span>${esc([c.gstin, c.pan].filter(Boolean).join(' · ') || (c.services || []).join(', '))}</span></button>`).join('')
+    hits = clients.filter(c => [c.client_code, c.name, c.gstin, c.pan, c.tan, c.cin].some(x => lc(x).replace(/\s+/g, '').includes(qq))).slice(0, 6);
+    res.innerHTML = hits.map((c, i) => `<button type="button" data-h="${i}"><b>${c.client_code ? `<span class="ccode">${esc(c.client_code)}</span> ` : ''}${esc(c.name)}</b><span>${esc([c.gstin, c.pan].filter(Boolean).join(' · ') || (c.services || []).join(', '))}</span></button>`).join('')
       + `<button type="button" data-h="q" class="srch-all">Search all work for “${esc(inp.value.trim())}”</button>`;
     res.hidden = false;
   };
@@ -703,7 +755,7 @@ function editTask(task, refresh) {
   const dis = admin ? '' : 'disabled';
   const ro = can ? '' : 'disabled';
   const body = `<div class="form-grid">
-    <label class="full">Client<select name="client_id" ${dis}>${isNew ? '<option value="">Select client…</option>' : ''}${opts(clients.filter(c => c.active || c.id === task.client_id), task.client_id, c => c.name, c => c.id)}</select></label>
+    <label class="full">Client<select name="client_id" ${dis}>${isNew ? '<option value="">Select client…</option>' : ''}${opts(clients.filter(c => c.active || c.id === task.client_id), task.client_id, cLabel, c => c.id)}</select></label>
     <label>Work type<select name="work_type" ${dis}>${opts(typesWith(task.work_type), task.work_type)}</select></label>
     <label>Return / task<input autocomplete="off" name="return_name" list="${dlFor(task.work_type)}" value="${esc(task.return_name || '')}" placeholder="Pick or type, e.g. GSTR-3B" ${dis}></label>
     <label>Period<input name="period" value="${esc(task.period || '')}" placeholder="e.g. Oct 2026" ${dis}></label>
@@ -1023,7 +1075,7 @@ function followupsForEvent() {
   if (!triggers.length) return toast('Run update-checklists.sql first', true);
   const now = new Date();
   const body = `<div class="form-grid">
-      <label class="full">Client<select name="cl"><option value="">Select client…</option>${opts(clients.filter(c => c.active), '', c => c.name, c => c.id)}</select></label>
+      <label class="full">Client<select name="cl"><option value="">Select client…</option>${opts(clients.filter(c => c.active), '', cLabel, c => c.id)}</select></label>
       <label class="full">What happened?<select name="tr">${opts(triggers, triggers[0])}</select></label>
       <label>Event date<input type="date" name="ev" value="${today()}"></label>
       <label>Period label<input name="pd" value="${MONTHS[now.getMonth()]} ${now.getFullYear()}"></label>
@@ -1331,7 +1383,7 @@ VIEWS.work = async v => {
       <select id="fStatus"><option value="open">Open (not filed)</option><option value="all">All statuses</option>${opts(STATUSES, wf.status)}</select>
       <select id="fRet"><option value="">All returns</option>${opts(wf.type ? WORK_ITEMS[wf.type] || [] : [].concat(...WORK_TYPES.map(w => WORK_ITEMS[w] || [])), wf.ret)}</select>
       ${isManager() ? `<select id="fStaff"><option value="">All staff</option><option value="none" ${wf.staff === 'none' ? 'selected' : ''}>Unassigned</option>${opts(activeStaff(), wf.staff, p => p.full_name || p.email, p => p.id)}</select>` : ''}
-      <select id="fClient"><option value="">All clients</option>${opts(clients, wf.client, c => c.name, c => c.id)}</select>
+      <select id="fClient"><option value="">All clients</option>${opts(clients, wf.client, cLabel, c => c.id)}</select>
       <input type="search" id="fSearch" placeholder="Search client / return / ARN" value="${esc(wf.q)}">
       <button class="btn sm" id="clearF">Clear</button>
       <button class="btn sm" id="csvBtn">Export CSV</button>
@@ -1491,14 +1543,20 @@ VIEWS.clients = async v => {
   v.innerHTML = `<div class="page-head"><h2>Clients</h2><span class="muted">${clients.filter(c => c.active).length} active</span><span class="spacer"></span>
       ${isAdmin() ? '<button class="btn ghost" id="lgLog">Login access log</button>' : ''}<button class="btn" id="tplBtn">CSV template</button><button class="btn" id="impBtn">Import CSV</button>
       <button class="btn primary" id="addC">+ Add client</button><input type="file" id="impFile" accept=".csv,text/csv" hidden></div>
-    <div class="toolbar"><input type="search" id="cq" placeholder="Search name / GSTIN / PAN" value="${esc(clientQ)}">
+    <div id="cMiss"></div>
+    <div class="toolbar"><input type="search" id="cq" placeholder="Search code / name / GSTIN / PAN" value="${esc(clientQ)}">
       <label class="check"><input type="checkbox" id="inact" ${showInactive ? 'checked' : ''}> Show inactive</label></div>
     <div id="cList"></div>`;
   const render = () => {
     const s = clientQ.toLowerCase();
-    const list = clients.filter(c => (showInactive || c.active) && (!s || [c.name, c.gstin, c.pan, c.tan, c.cin].join(' ').toLowerCase().includes(s)));
-    $('#cList').innerHTML = list.length ? `<div class="table-wrap"><table><thead><tr><th>Client</th><th>GSTIN</th><th>PAN / TAN</th><th>GST scheme</th><th>Services</th><th>Default staff</th><th>Status link</th><th></th></tr></thead><tbody>
+    const list = clients.filter(c => (showInactive || c.active) && (!s || [c.client_code, c.name, c.gstin, c.pan, c.tan, c.cin].join(' ').toLowerCase().includes(s)))
+      .sort((a, b) => (a.client_code ? 0 : 1) - (b.client_code ? 0 : 1) || String(a.client_code || a.name).localeCompare(String(b.client_code || b.name), 'en', { numeric: true }));
+    const miss = clients.filter(c => c.active && clientProblems({ ...c, client_code: (c.client_code || '').toUpperCase() }, c.id).length);
+    $('#cMiss').innerHTML = miss.length ? `<p class="note warn small">${miss.length} active client${miss.length > 1 ? 's are' : ' is'} missing required details (client code, PAN, GSTIN, phone or email): ${miss.slice(0, 8).map(c => `<button class="link" data-ed="${c.id}">${esc(c.name)}</button>`).join(', ')}${miss.length > 8 ? ' …' : ''}. Open each one and fill them in.</p>` : '';
+    $('#cMiss').onclick = e => { if (e.target.dataset.ed) editClient(clientById(e.target.dataset.ed)); };
+    $('#cList').innerHTML = list.length ? `<div class="table-wrap"><table><thead><tr><th>Code</th><th>Client</th><th>GSTIN</th><th>PAN / TAN</th><th>GST scheme</th><th>Services</th><th>Default staff</th><th>Status link</th><th></th></tr></thead><tbody>
       ${list.map(c => `<tr>
+        <td>${c.client_code ? `<span class="ccode">${esc(c.client_code)}</span>` : '<span class="late small">—</span>'}</td>
         <td class="wrap"><b>${esc(c.name)}</b>${c.active ? '' : ' <span class="badge">inactive</span>'}<div class="muted small">${esc([c.contact_person, c.phone].filter(Boolean).join(' · '))}</div></td>
         <td class="small">${esc(c.gstin || '—')}</td><td class="small">${esc(c.pan || '—')}<div class="muted">${esc(c.tan || '')}</div></td>
         <td>${esc(c.gst_scheme)}</td><td class="wrap">${(c.services || []).map(wtBadge).join(' ')}</td>
@@ -1519,8 +1577,8 @@ VIEWS.clients = async v => {
   };
   if ($('#lgLog')) $('#lgLog').onclick = () => loginLog(null);
   $('#tplBtn').onclick = () => download('clients-template.csv', toCSV([
-    ['name', 'gstin', 'pan', 'tan', 'cin', 'contact_person', 'phone', 'email', 'gst_scheme', 'services', 'default_staff_email'],
-    ['ABC Traders', '33AAAAA0000A1Z5', 'AAAAA0000A', 'CHEA00000A', '', 'Mr. Kumar', '9876543210', 'abc@example.com', 'Monthly', 'GST;TDS;Income Tax', me.email]]));
+    ['client_code', 'name', 'gstin', 'pan', 'tan', 'cin', 'contact_person', 'phone', 'email', 'gst_scheme', 'services', 'default_staff_email'],
+    ['JLR001', 'ABC Traders', '33AAAAA0000A1Z5', 'AAAAA0000A', 'CHEA00000A', '', 'Mr. Kumar', '9876543210', 'abc@example.com', 'Monthly', 'GST;TDS;Income Tax', me.email]]));
   $('#impBtn').onclick = () => $('#impFile').click();
   $('#impFile').onchange = async e => {
     const file = e.target.files[0]; e.target.value = '';
@@ -1536,10 +1594,22 @@ VIEWS.clients = async v => {
         const scheme = GST_SCHEMES.find(s => s.toLowerCase() === get(r, 'gst_scheme').toLowerCase()) || (get(r, 'gstin') ? 'Monthly' : 'Not registered');
         const services = get(r, 'services').split(/[;|]/).map(s => s.trim()).map(s => WORK_TYPES.find(w => w.toLowerCase() === s.toLowerCase())).filter(Boolean);
         const staff = profiles.find(p => (p.email || '').toLowerCase() === get(r, 'default_staff_email').toLowerCase());
-        return { name: get(r, 'name'), gstin: get(r, 'gstin').toUpperCase() || null, pan: get(r, 'pan').toUpperCase() || null, tan: get(r, 'tan').toUpperCase() || null,
-          cin: get(r, 'cin').toUpperCase() || null, contact_person: get(r, 'contact_person') || null, phone: get(r, 'phone') || null, email: get(r, 'email') || null,
+        return { client_code: get(r, 'client_code').toUpperCase() || null, name: get(r, 'name'), gstin: get(r, 'gstin').toUpperCase() || null, pan: get(r, 'pan').toUpperCase() || null, tan: get(r, 'tan').toUpperCase() || null,
+          cin: get(r, 'cin').toUpperCase() || null, contact_person: get(r, 'contact_person') || null, phone: cleanPhone(get(r, 'phone')), email: cleanEmail(get(r, 'email')),
           gst_scheme: scheme, services, default_staff: staff ? staff.id : null };
       });
+      const seenCodes = new Set(), bad = [];
+      recs.forEach((r, i) => {
+        const pr = clientProblems(r);
+        if (r.client_code && seenCodes.has(r.client_code)) pr.push(`Client code ${r.client_code} appears twice in the file`);
+        if (r.client_code) seenCodes.add(r.client_code);
+        if (pr.length) bad.push(`Row ${i + 2} (${r.name}): ${pr.join('; ')}`);
+      });
+      if (bad.length) {
+        modal('Fix the file first', `<p class="small" style="margin-top:0">Nothing was imported. ${bad.length} row${bad.length > 1 ? 's need' : ' needs'} fixing — client code, name, PAN, GSTIN, phone and email are required:</p>
+          <ul class="small">${bad.slice(0, 40).map(b => `<li>${esc(b)}</li>`).join('')}</ul>${bad.length > 40 ? `<p class="small">…and ${bad.length - 40} more</p>` : ''}`);
+        return;
+      }
       if (!confirm(`Import ${recs.length} client(s)?`)) return;
       await must(sb.from('clients').insert(recs));
       toast(`${recs.length} clients imported`); route();
@@ -1547,21 +1617,49 @@ VIEWS.clients = async v => {
   };
 };
 
+/* v25: client details check — code, name, PAN, GSTIN, phone and email are required */
+const REQ = '<b class="req" title="Required">*</b>';
+function clientProblems(rec, selfId = null) {
+  const p = [];
+  if (!rec.client_code) p.push('Client code is required');
+  else if (!/^[A-Z0-9][A-Z0-9/_.-]{0,19}$/.test(rec.client_code)) p.push('Client code: letters, numbers and / - _ . only (up to 20)');
+  else { const dup = clients.find(c => c.id !== selfId && (c.client_code || '').toUpperCase() === rec.client_code); if (dup) p.push(`Client code ${rec.client_code} is already used by ${dup.name}`); }
+  if (!rec.name) p.push('Client name is required');
+  if (!rec.pan) p.push('PAN is required');
+  else if (!/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(rec.pan)) p.push('PAN format looks wrong (e.g. ABCDE1234F)');
+  if (rec.gst_scheme !== 'Not registered' || rec.gstin) {
+    if (!rec.gstin) p.push('GSTIN is required (choose GST scheme “Not registered” if the client has no GST)');
+    else if (!/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(rec.gstin)) p.push('GSTIN format looks wrong (e.g. 33ABCDE1234F1Z5)');
+    else if (rec.pan && rec.gstin.slice(2, 12) !== rec.pan) p.push('GSTIN does not match the PAN (characters 3–12 of the GSTIN are the PAN)');
+  }
+  if (!rec.phone) p.push('Phone is required');
+  else if (!/^[6-9][0-9]{9}$/.test(rec.phone)) p.push('Phone should be a 10-digit mobile number');
+  if (!rec.email) p.push('Email is required');
+  else { const bad = rec.email.split(',').map(x => x.trim()).filter(x => !/^[^\s@,]+@[^\s@,]+\.[a-z]{2,}$/i.test(x)); if (bad.length) p.push('Email looks wrong: ' + bad.join(', ')); }
+  return p;
+}
+const cLabel = c => (c.client_code ? c.client_code + ' · ' : '') + c.name;
+const cleanPhone = v => { let d = String(v || '').replace(/\D/g, ''); if (d.length === 12 && d.startsWith('91')) d = d.slice(2); if (d.length === 11 && d.startsWith('0')) d = d.slice(1); return d || null; };
+const cleanEmail = v => String(v || '').split(/[,;\s]+/).map(x => x.trim().toLowerCase()).filter(Boolean).join(', ') || null;
+
 function editClient(c) {
   const isNew = !c;
   c = c || { gst_scheme: 'Monthly', services: ['GST'], active: true };
   const body = `<div class="form-grid">
-    <label class="full">Client / business name<input name="name" value="${esc(c.name || '')}"></label>
-    <label>GSTIN<input name="gstin" value="${esc(c.gstin || '')}" maxlength="15" style="text-transform:uppercase"></label>
+    <p class="full muted small" style="margin:0">Fields marked ${REQ} are required.</p>
+    <label>Client code ${REQ}<input name="client_code" value="${esc(c.client_code || '')}" maxlength="20" style="text-transform:uppercase" placeholder="e.g. JLR001" autocomplete="off" required></label>
+    <label>Client / business name ${REQ}<input name="name" value="${esc(c.name || '')}" required></label>
+    <label>PAN ${REQ}<input name="pan" value="${esc(c.pan || '')}" maxlength="10" style="text-transform:uppercase" required></label>
+    <label>GSTIN ${REQ}<input name="gstin" value="${esc(c.gstin || '')}" maxlength="15" style="text-transform:uppercase"></label>
+    <label>Phone / WhatsApp ${REQ}<input name="phone" value="${esc(c.phone || '')}" placeholder="10-digit mobile" inputmode="tel" required></label>
+    <label>Email ${REQ}<input name="email" value="${esc(c.email || '')}" placeholder="accounts@client.com, owner@client.com" inputmode="email" required></label>
     <label>GST scheme<select name="gst_scheme">${opts(GST_SCHEMES, c.gst_scheme)}</select></label>
-    <label>PAN<input name="pan" value="${esc(c.pan || '')}" maxlength="10" style="text-transform:uppercase"></label>
     <label>TAN<input name="tan" value="${esc(c.tan || '')}" maxlength="10" style="text-transform:uppercase"></label>
     <label>CIN / LLPIN<input name="cin" value="${esc(c.cin || '')}" style="text-transform:uppercase"></label>
     <label>Default staff<select name="default_staff">${staffOpts(c.default_staff || '', { blank: 'None' })}</select></label>
     <label>Contact person<input name="contact_person" value="${esc(c.contact_person || '')}"></label>
-    <label>Phone / WhatsApp<input name="phone" value="${esc(c.phone || '')}" placeholder="10-digit mobile"></label>
     ${P4() ? `<label class="full">Address (for invoices)<textarea name="address" rows="2">${esc(c.address || '')}</textarea></label>` : ''}
-    <label class="full">Email (for data tracking — separate several with commas)<input name="email" value="${esc(c.email || '')}" placeholder="accounts@client.com, owner@client.com"></label>
+    <p class="full muted small" style="margin:0">Several emails? Separate them with commas — reminders go to the first one.</p>
     <div class="full"><div class="small muted" style="margin-bottom:6px;font-weight:500">Services you handle for this client</div>
       <div class="toolbar" style="margin:0" data-svc>${[...WORK_TYPES, ...(c.services || []).filter(x => !WORK_TYPES.includes(x))].map(w => `<label class="check"><input type="checkbox" value="${esc(w)}" ${(c.services || []).includes(w) ? 'checked' : ''}> ${wtIcon(w, 16)} ${esc(w)}</label>`).join('')}</div></div>
     <label class="full">Notes<textarea name="notes">${esc(c.notes || '')}</textarea></label>
@@ -1580,16 +1678,21 @@ function editClient(c) {
     onSave: async el => {
       const up = n => fv(el, n).toUpperCase() || null;
       const rec = {
-        name: fv(el, 'name'), gstin: up('gstin'), pan: up('pan'), tan: up('tan'), cin: up('cin'),
+        client_code: up('client_code'), name: fv(el, 'name'), gstin: up('gstin'), pan: up('pan'), tan: up('tan'), cin: up('cin'),
         gst_scheme: fv(el, 'gst_scheme'), default_staff: fv(el, 'default_staff') || null,
-        contact_person: fv(el, 'contact_person') || null, phone: fv(el, 'phone') || null, email: fv(el, 'email') || null,
+        contact_person: fv(el, 'contact_person') || null, phone: cleanPhone(fv(el, 'phone')), email: cleanEmail(fv(el, 'email')),
         ...(P4() ? { address: fv(el, 'address') || null } : {}),
         notes: fv(el, 'notes') || null, active: $('[name=active]', el).checked, ...($('[name=chase_off]', el) ? { chase_off: $('[name=chase_off]', el).checked } : {}),
         services: $$('[data-svc] input:checked', el).map(i => i.value)
       };
-      if (!rec.name) { toast('Name is required', true); return false; }
-      if (rec.gstin && !/^[0-9]{2}[A-Z0-9]{13}$/.test(rec.gstin)) { toast('GSTIN should be 15 characters', true); return false; }
-      if (rec.pan && !/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(rec.pan)) { toast('PAN format looks wrong (e.g. ABCDE1234F)', true); return false; }
+      const probs = clientProblems(rec, isNew ? null : c.id);
+      $$('.bad', el).forEach(x => x.classList.remove('bad'));
+      if (probs.length) {
+        const field = { 'Client code': 'client_code', 'Client name': 'name', PAN: 'pan', GSTIN: 'gstin', Phone: 'phone', Email: 'email' };
+        probs.forEach(t => { const k = Object.keys(field).find(f => t.startsWith(f)); if (k) $(`[name=${field[k]}]`, el)?.classList.add('bad'); });
+        $('.bad', el)?.focus();
+        toast(probs.length > 1 ? `Please fix ${probs.length} things: ${probs.join(' · ')}` : probs[0], true); return false;
+      }
       if (isNew) {
         const { data: nc } = await must(sb.from('clients').insert(rec).select().single());
         toast('Saved');
@@ -1604,6 +1707,7 @@ function editClient(c) {
     }
   });
   const el = m.el;
+  $('[name=gstin]', el).addEventListener('input', e => { const g = e.target.value.toUpperCase(), pan = $('[name=pan]', el); if (g.length >= 12 && !pan.value.trim()) pan.value = g.slice(2, 12); });
   if ($('[data-cp]', el)) $('[data-cp]', el).onclick = () => copy(statusUrl(c.status_token));
   if ($('[data-gstnow]', el)) $('[data-gstnow]', el).onclick = async e => {
     const b = e.target; b.disabled = true;
@@ -2081,7 +2185,7 @@ function invStatus(i) {
 }
 function renderInvoices(box, invoices) {
   const list = billClient ? invoices.filter(i => i.client_id === billClient) : invoices;
-  box.innerHTML = `<div class="toolbar"><select id="bc"><option value="">All clients</option>${opts(clients, billClient, c => c.name, c => c.id)}</select>
+  box.innerHTML = `<div class="toolbar"><select id="bc"><option value="">All clients</option>${opts(clients, billClient, cLabel, c => c.id)}</select>
       <span class="spacer"></span><button class="btn sm" id="invCsv">Export CSV</button></div>
     <div class="table-wrap">${list.length ? `<table><thead><tr><th>Invoice</th><th>Date</th><th>Client</th><th class="r">Total</th><th class="r">Paid</th><th class="r">Balance</th><th>Status</th>${zohoCfg ? '<th>Zoho</th>' : ''}<th></th></tr></thead><tbody>
     ${list.map(i => `<tr><td><b>${esc(i.inv_no)}</b></td><td>${fmtDate(i.inv_date)}</td><td class="wrap">${esc(clientName(i.client_id))}</td>
@@ -2185,7 +2289,7 @@ function renderFees(box, fees) {
   const allRet = [].concat(...WORK_TYPES.map(w => WORK_ITEMS[w] || []));
   box.innerHTML = `<p class="muted small">Standard fees apply to every client; a client fee overrides it. The fee is filled in automatically when work is created.</p>
     <div class="card"><div class="form-grid fee-add">
-      <label>Client<select name="fc"><option value="">Standard (all clients)</option>${opts(clients.filter(c => c.active), '', c => c.name, c => c.id)}</select></label>
+      <label>Client<select name="fc"><option value="">Standard (all clients)</option>${opts(clients.filter(c => c.active), '', cLabel, c => c.id)}</select></label>
       <label>Return / work<input autocomplete="off" name="fr" list="dl-feeret" placeholder="e.g. GSTR-3B"></label>
       <label>Fee (₹)<input name="fa" type="number" min="0" step="1"></label>
       <div style="align-self:end"><button class="btn primary" id="feeAdd">Add / update</button></div>
@@ -2384,7 +2488,7 @@ function editNotice(n, prefill = null, mailRow = null) {
   n = n || prefill || { dept: 'GST', status: 'Open', notice_date: today() };
   const can = admin || n.assigned_to === me.id, dis = admin ? '' : 'disabled', ro = can ? '' : 'disabled';
   const body = `<div class="form-grid">
-    <label class="full">Client<select name="client_id" ${dis}>${isNew ? '<option value="">Select client…</option>' : ''}${opts(clients.filter(c => c.active || c.id === n.client_id), n.client_id, c => c.name, c => c.id)}</select></label>
+    <label class="full">Client<select name="client_id" ${dis}>${isNew ? '<option value="">Select client…</option>' : ''}${opts(clients.filter(c => c.active || c.id === n.client_id), n.client_id, cLabel, c => c.id)}</select></label>
     <label>Department<select name="dept" ${dis}>${opts(NOTICE_DEPTS, n.dept, d => d === 'ROC/MCA' ? 'MCA' : d)}</select></label>
     <label>Notice type<input autocomplete="off" name="notice_type" list="dl-ntype" value="${esc(n.notice_type || '')}" placeholder="e.g. ASMT-10" ${dis}></label>
     <datalist id="dl-ntype">${NOTICE_TYPES.map(x => `<option value="${esc(x)}"></option>`).join('')}</datalist>
@@ -8304,6 +8408,6 @@ async function renderChaseSettings(box) {
   };
 }
 
-window.__tracker = { HEALTH, HELP, noticeLetter, BANK, bankReadFile, TDSW, MCA, BILL, parseMcaSheets, mcaPlanAll, fillGstWorkings, G1, GR, RECO, gstr3bFromApi, periodToMonth, strongPassword, periodFor, dueDateFor, parseCSV, toCSV, gstLateFee, gstInterest, tdsCalc, rocCalc, monthsSpan, tdsDepositDue, g1json, clientReportHtml, clientReportMsg, rnStage, anyDate, parseRenewalRows, gstPayDue, tdsPayDue, advInstalment, advCurrent, advDue, recurringPlan, taxMsg, addMonths, fyEndOf, obProgress, rnKind };
+window.__tracker = { IDLE, clientProblems, HEALTH, HELP, noticeLetter, BANK, bankReadFile, TDSW, MCA, BILL, parseMcaSheets, mcaPlanAll, fillGstWorkings, G1, GR, RECO, gstr3bFromApi, periodToMonth, strongPassword, periodFor, dueDateFor, parseCSV, toCSV, gstLateFee, gstInterest, tdsCalc, rocCalc, monthsSpan, tdsDepositDue, g1json, clientReportHtml, clientReportMsg, rnStage, anyDate, parseRenewalRows, gstPayDue, tdsPayDue, advInstalment, advCurrent, advDue, recurringPlan, taxMsg, addMonths, fyEndOf, obProgress, rnKind };
 start();
 })();

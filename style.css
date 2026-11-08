@@ -1025,3 +1025,9 @@ button.mini{border:0;cursor:pointer;text-align:left;font:inherit}
 .hl-table .chip{display:inline-block;margin:2px 2px 2px 0;padding:3px 9px;font-size:.75rem}
 tr.hl-red td:first-child{box-shadow:inset 4px 0 0 var(--red)}tr.hl-amber td:first-child{box-shadow:inset 4px 0 0 var(--amber)}
 .hl-ul{margin:0;padding-left:18px}.hl-ul li{margin:3px 0}
+
+/* ---------- v25: required fields, client code, idle sign-out ---------- */
+.req{color:var(--red);font-weight:800;margin-left:2px}
+input.bad,select.bad,textarea.bad{border-color:var(--red)!important;box-shadow:0 0 0 3px var(--red-soft)!important}
+.ccode{display:inline-block;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.78rem;font-weight:700;padding:2px 7px;border-radius:6px;background:var(--blue-soft);color:var(--blue);white-space:nowrap}
+.idle-bar{position:fixed;left:50%;top:16px;transform:translateX(-50%);z-index:200;display:flex;align-items:center;gap:14px;flex-wrap:wrap;justify-content:center;max-width:calc(100vw - 24px);padding:12px 16px;border-radius:14px;background:#14213d;color:#f6f8fc;box-shadow:0 10px 30px rgba(0,0,0,.3);font-size:.92rem}

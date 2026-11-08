@@ -22,7 +22,23 @@
 
   sb.auth.onAuthStateChange(ev => { if (ev === 'PASSWORD_RECOVERY') { recovering = true; showSetPassword(); } });
 
+  /* sign out after 5 minutes without activity */
+  const IDLE_MS = 5 * 60 * 1000, IKEY = 'jlr-portal-last-active';
+  let idleT = null, lastAct = 0;
+  const stamp = f => { const t = Date.now(); if (!f && t - lastAct < 5000) return; lastAct = t; try { localStorage.setItem(IKEY, String(t)); } catch (e) {} };
+  const seen = () => { let v = 0; try { v = +localStorage.getItem(IKEY) || 0; } catch (e) {} return Math.max(v, lastAct); };
+  const act = () => stamp();
+  const EVS = ['mousedown', 'mousemove', 'keydown', 'touchstart', 'wheel', 'scroll'];
+  function idleStart() { idleStop(); stamp(true); EVS.forEach(e => addEventListener(e, act, { passive: true, capture: true })); idleT = setInterval(idleTick, 5000); document.addEventListener('visibilitychange', idleTick); }
+  function idleStop() { clearInterval(idleT); idleT = null; EVS.forEach(e => removeEventListener(e, act, { capture: true })); document.removeEventListener('visibilitychange', idleTick); }
+  async function idleTick() {
+    if (!idleT || Date.now() - seen() < IDLE_MS) return;
+    idleStop(); try { await sb.auth.signOut({ scope: 'local' }); } catch (e) {}
+    showLogin('You were signed out after 5 minutes without activity. Please sign in again.');
+  }
+
   function showLogin(msg) {
+    idleStop();
     $('#title').textContent = 'Client portal'; $('#sub').textContent = 'Sign in to see your work status, upload documents and download invoices';
     out.innerHTML = `<div class="card portal-login"><h3 style="margin-top:0">Sign in</h3>${msg ? `<p class="note small">${esc(msg)}</p>` : ''}
       <form id="lf" class="form-grid"><label class="full">Email<input name="e" type="email" autocomplete="username" required></label>
@@ -32,7 +48,7 @@
       e.preventDefault(); const f = e.target;
       const { error } = await sb.auth.signInWithPassword({ email: f.e.value.trim(), password: f.p.value });
       if (error) return toast('Email or password is wrong', true);
-      load();
+      stamp(true); load();
     };
     $('#fg').onclick = async () => {
       const email = $('[name=e]').value.trim(); if (!email) return toast('Type your email first', true);
@@ -59,6 +75,7 @@
   async function load() {
     const { data: s } = await sb.auth.getSession();
     if (!s || !s.session) return showLogin();
+    if (seen() && Date.now() - seen() >= IDLE_MS && !recovering) { await sb.auth.signOut({ scope: 'local' }); return showLogin('You were signed out after 5 minutes without activity. Please sign in again.'); }
     if (recovering) return showSetPassword();
     const { data: me, error } = await sb.rpc('portal_me');
     if (error || !me) { await sb.auth.signOut({ scope: 'local' }); return showLogin('This login is not linked to a client. Staff should use the main tracker page instead.'); }
@@ -66,6 +83,7 @@
     const rp = await sb.rpc('portal_reports');
     data.reports = rp.error ? null : (rp.data || []);
     render();
+    if (!idleT) idleStart();
   }
 
   function render() {
