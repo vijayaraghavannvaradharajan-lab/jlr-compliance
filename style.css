@@ -1031,3 +1031,12 @@ tr.hl-red td:first-child{box-shadow:inset 4px 0 0 var(--red)}tr.hl-amber td:firs
 input.bad,select.bad,textarea.bad{border-color:var(--red)!important;box-shadow:0 0 0 3px var(--red-soft)!important}
 .ccode{display:inline-block;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.78rem;font-weight:700;padding:2px 7px;border-radius:6px;background:var(--blue-soft);color:var(--blue);white-space:nowrap}
 .idle-bar{position:fixed;left:50%;top:16px;transform:translateX(-50%);z-index:200;display:flex;align-items:center;gap:14px;flex-wrap:wrap;justify-content:center;max-width:calc(100vw - 24px);padding:12px 16px;border-radius:14px;background:#14213d;color:#f6f8fc;box-shadow:0 10px 30px rgba(0,0,0,.3);font-size:.92rem}
+
+/* ---------- v26: activity log ---------- */
+.aud-filters label{display:flex;align-items:center;gap:6px}
+.aud-table td{vertical-align:top}
+.aud-act{display:inline-block;font-weight:700;font-size:.8rem;padding:2px 8px;border-radius:999px;background:var(--blue-soft);color:var(--blue);white-space:nowrap}
+.aud-act.aud-insert{background:var(--green-soft);color:var(--green)}.aud-act.aud-delete{background:var(--red-soft);color:var(--red)}
+.aud-act.aud-sign_in,.aud-act.aud-sign_out,.aud-act.aud-idle_sign_out,.aud-act.aud-export{background:var(--amber-soft);color:var(--amber)}
+.aud-old{text-decoration:line-through;color:var(--muted)}.aud-new{font-weight:700}
+.aud-table details summary{cursor:pointer;color:var(--blue)}

@@ -321,6 +321,7 @@ const IDLE = {
   hideBar() { if (this.bar) { this.bar.remove(); this.bar = null; } },
   async signOut() {
     this.stop(); me = null;
+    try { await AUDIT.event('idle_sign_out'); } catch (e) {}
     try { await sb.auth.signOut({ scope: 'local' }); } catch (e) {}
     history.replaceState(null, '', location.pathname);
     showLogin('You were signed out after 5 minutes without activity. Please sign in again.');
@@ -386,6 +387,7 @@ async function boot() {
     if (refs) throw refs;
     me = prof;
     IDLE.start();
+    AUDIT.event('sign_in');
     renderShell();
     workItemDatalists();
     if (!/^#\//.test(location.hash)) history.replaceState(null, '', location.pathname + '#/dashboard');
@@ -420,6 +422,7 @@ const NI = {   // menu icons (stroke SVG paths)
   gst: '<path d="M6 2h12v20l-3-2-3 2-3-2-3 2z"></path><path d="M9 7h6M9 11h6"></path>',
   tds: '<circle cx="7" cy="7" r="2.5"></circle><circle cx="17" cy="17" r="2.5"></circle><path d="M19 5L5 19"></path>',
   gstw: '<path d="M4 4h16v16H4z"></path><path d="M8 9h8M8 13h8M8 17h5"></path>',
+  activity: '<path d="M12 8v4l3 2"></path><circle cx="12" cy="12" r="9"></circle>',
   health: '<path d="M3 12h4l2-5 4 10 2-5h6"></path>',
   refresh: '<path d="M21 12a9 9 0 1 1-2.6-6.4M21 3v6h-6"></path>',
   chat: '<path d="M21 12a8 8 0 0 1-11.6 7.1L3 21l1.9-6.4A8 8 0 1 1 21 12z"></path>',
@@ -453,7 +456,7 @@ function navGroups() {
     ['Tools', [['bank', 'Bank statements', 'bank'], ['calc', 'Late fee calculator'], ['checklists', 'Checklists'], ['updates', 'Law updates']]],
     ['Clients', [isManager() && ['clients', 'Clients'], ['onboarding', 'Onboarding'], ['renewals', 'Renewals (DSC, LUT…)'], ['inbox', 'Client mail'], ['clientreport', 'Monthly client reports']]],
     ['Payments & billing', [['taxpay', 'Tax payment intimation'], isManager() && ['billing', 'Billing & fees']]],
-    (isManager() || isPartner()) && ['Office', [['health', 'Client health'], isManager() && ['workload', 'Team workload'], isPartner() && ['reports', 'Reports']]],
+    (isManager() || isPartner()) && ['Office', [['health', 'Client health'], isManager() && ['workload', 'Team workload'], isPartner() && ['reports', 'Reports'], isPartner() && ['activity', 'Activity log']]],
     isAdmin() && ['Admin', [['team', 'Team & logins'], ['settings', 'Settings']]]
   ].filter(Boolean);
   return G.map(([g, items]) => `<div class="side-g"><span class="side-gl">${esc(g)}</span>${items.filter(Boolean).map(([k, l, ic]) => {
@@ -489,7 +492,7 @@ function renderShell() {
   document.addEventListener('click', () => { menu.hidden = true; const r = $('#gRes'); if (r) r.hidden = true; });
   menu.onclick = async e => {
     const act = e.target.dataset.act;
-    if (act === 'out') { IDLE.stop(); me = null; await sb.auth.signOut(); location.hash = ''; showLogin(); }
+    if (act === 'out') { IDLE.stop(); me = null; await AUDIT.event('sign_out'); await sb.auth.signOut(); location.hash = ''; showLogin(); }
     if (act === 'pw') changePassword();
     if (act === 'theme') pickTheme();
     if (act === 'install') installApp();
@@ -644,7 +647,7 @@ async function route() {
   if (!me) return;
   const key = location.hash.replace(/^#\/?/, '').split('?')[0] || 'dashboard';
   const adminOnly = ['clients', 'team', 'settings', 'billing', 'reports'];
-  const need = { team: isAdmin, settings: isAdmin, reports: isPartner, clients: isManager, billing: isManager, workload: isManager, health: () => isManager() || isPartner() }[key];
+  const need = { team: isAdmin, settings: isAdmin, reports: isPartner, clients: isManager, billing: isManager, workload: isManager, health: () => isManager() || isPartner(), activity: isPartner }[key];
   if (!VIEWS[key] || (need && !need())) { location.hash = '#/dashboard'; return; }
   const navKey = key === 'work' ? ({ GST: 'work-gst', TDS: 'work-tds', 'ROC/MCA': 'work-mca' }[wf.type] || 'work') : key === 'notices' ? ({ GST: 'notices-gst', TDS: 'notices-tds', 'ROC/MCA': 'notices-mca' }[nf.dept] || 'notices') : key;
   $$('#nav a').forEach(a => { const on = a.dataset.k === navKey; a.classList.toggle('active', on); if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
@@ -773,7 +776,7 @@ function editTask(task, refresh) {
     <label class="full">Remarks<textarea name="remarks" ${ro}>${esc(task.remarks || '')}</textarea></label>
     ${!isNew ? `<p class="muted small full">Last updated ${new Date(task.updated_at).toLocaleString('en-IN')}${task.updated_by ? ' by ' + esc(profName(task.updated_by)) : ''}</p>` : ''}
   </div>`;
-  const extra = (isPartner() && !isNew ? '<button class="btn danger" data-del>Delete</button>' : '') +
+  const extra = (isPartner() && !isNew ? '<button class="btn danger" data-del>Delete</button><button class="btn ghost" type="button" data-hist>History</button>' : '') +
     (!isNew ? '<button class="btn" data-chkl>☑ Checklist</button>' : '') + (!isNew && can && 'fu_count' in task ? `<button class="btn" data-fulog>Follow-up${task.fu_count ? ' (' + task.fu_count + ')' : ''}</button>` : '');
   const m = modal(isNew ? 'Add work' : 'Work details', body, {
     extra,
@@ -797,6 +800,7 @@ function editTask(task, refresh) {
   if (chk) chk.onclick = () => { m.close(); openChecklist(task, refresh); };
   const ful = $('[data-fulog]', m.el);
   if (ful) ful.onclick = () => { m.close(); logFollowup({ kind: 'task', task }, refresh); };
+  if ($('[data-hist]', m.el)) $('[data-hist]', m.el).onclick = () => showHistory('tasks', task.id, `${clientName(task.client_id)} · ${task.return_name} ${task.period || ''}`);
   const del = $('[data-del]', m.el);
   if (del) del.onclick = async () => {
     if (!confirm('Delete this work item permanently?')) return;
@@ -1674,7 +1678,7 @@ function editClient(c) {
   </div>`;
   const m = modal(isNew ? 'Add client' : 'Edit client', body, {
     wide: true,
-    extra: isNew || !isPartner() ? '' : '<button class="btn danger" data-del>Delete</button>',
+    extra: isNew || !isPartner() ? '' : '<button class="btn danger" data-del>Delete</button><button class="btn ghost" type="button" data-hist>History</button>',
     onSave: async el => {
       const up = n => fv(el, n).toUpperCase() || null;
       const rec = {
@@ -1707,6 +1711,7 @@ function editClient(c) {
     }
   });
   const el = m.el;
+  if ($('[data-hist]', el)) $('[data-hist]', el).onclick = () => showHistory('client', c.id, (c.client_code ? c.client_code + ' · ' : '') + c.name);
   $('[name=gstin]', el).addEventListener('input', e => { const g = e.target.value.toUpperCase(), pan = $('[name=pan]', el); if (g.length >= 12 && !pan.value.trim()) pan.value = g.slice(2, 12); });
   if ($('[data-cp]', el)) $('[data-cp]', el).onclick = () => copy(statusUrl(c.status_token));
   if ($('[data-gstnow]', el)) $('[data-gstnow]', el).onclick = async e => {
@@ -2507,7 +2512,7 @@ function editNotice(n, prefill = null, mailRow = null) {
       <textarea name="draft_reply" rows="${n.draft_reply ? 12 : 3}" placeholder="${can ? 'Write the reply here, or press “Draft reply with AI”. Paste the notice text in Remarks first for a better draft.' : ''}" ${ro}>${esc(n.draft_reply || '')}</textarea>
       ${n.draft_at ? `<p class="muted small">Last drafted ${new Date(n.draft_at).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}</p>` : ''}</div></div>`;
   const m = modal(isNew ? 'Add notice' : 'Notice details', body, {
-    extra: isPartner() && !isNew ? '<button class="btn danger" data-ndel>Delete</button>' : '',
+    extra: isPartner() && !isNew ? '<button class="btn danger" data-ndel>Delete</button><button class="btn ghost" type="button" data-hist>History</button>' : '',
     onSave: can ? async el => {
       const rec = {};
       ['ref_no', 'period', 'notice_date', 'hearing_date', 'status', 'replied_on', 'ack_no', 'remarks', 'draft_reply'].forEach(k => rec[k] = fv(el, k) || null);
@@ -2521,6 +2526,7 @@ function editNotice(n, prefill = null, mailRow = null) {
       toast('Saved'); route();
     } : null
   });
+  if ($('[data-hist]', m.el)) $('[data-hist]', m.el).onclick = () => showHistory('notices', n.id, `${clientName(n.client_id)} · ${n.notice_type || 'notice'}`);
   const ai = $('#nAi', m.el);
   if (ai) ai.onclick = () => aiNoticeDraft(m.el, n, ai);
   const d = $('[data-ndel]', m.el);
@@ -8408,6 +8414,109 @@ async function renderChaseSettings(box) {
   };
 }
 
-window.__tracker = { IDLE, clientProblems, HEALTH, HELP, noticeLetter, BANK, bankReadFile, TDSW, MCA, BILL, parseMcaSheets, mcaPlanAll, fillGstWorkings, G1, GR, RECO, gstr3bFromApi, periodToMonth, strongPassword, periodFor, dueDateFor, parseCSV, toCSV, gstLateFee, gstInterest, tdsCalc, rocCalc, monthsSpan, tdsDepositDue, g1json, clientReportHtml, clientReportMsg, rnStage, anyDate, parseRenewalRows, gstPayDue, tdsPayDue, advInstalment, advCurrent, advDue, recurringPlan, taxMsg, addMonths, fyEndOf, obProgress, rnKind };
+
+/* =====================================================================
+   v26  ACTIVITY LOG  (#/activity, Partners & Admin) + History buttons
+   Rows are written by the database itself (triggers), so nothing can skip them.
+   ===================================================================== */
+const AUDIT = {
+  AREA: { clients: 'Client', tasks: 'Work', notices: 'Notice', invoices: 'Invoice', payments: 'Payment', profiles: 'Team member', task_docs: 'Work file', renewals: 'Renewal',
+    mca_companies: 'Company / LLP', mca_directors: 'Director', tds_challans: 'TDS challan', tds_returns: 'TDS return', fee_rates: 'Fee rate', due_dates: 'Due date',
+    onboarding: 'Onboarding', tax_intimations: 'Tax intimation', checklist_templates: 'Checklist', settings: 'Settings', login: 'Sign-in' },
+  ACT: { insert: 'Added', update: 'Changed', delete: 'Deleted', sign_in: 'Signed in', sign_out: 'Signed out', idle_sign_out: 'Signed out (5 min idle)', export: 'Exported' },
+  FIELD: { status: 'Status', assigned_to: 'Staff', default_staff: 'Default staff', due_date: 'Due date', filed_on: 'Filed on', arn: 'ARN', remarks: 'Remarks', client_id: 'Client',
+    return_name: 'Return', period: 'Period', work_type: 'Type', gstin: 'GSTIN', pan: 'PAN', tan: 'TAN', cin: 'CIN', phone: 'Phone', email: 'Email', client_code: 'Client code',
+    name: 'Name', active: 'Active', role: 'Role', full_name: 'Name', reply_due: 'Reply due', hearing_date: 'Hearing', notice_type: 'Notice', ref_no: 'Reference', amount: 'Amount',
+    fee: 'Fee', total: 'Total', paid: 'Paid', inv_no: 'Invoice no.', inv_date: 'Invoice date', gst_scheme: 'GST scheme', services: 'Services', status_token: 'Status link',
+    data_received_on: 'Data received', contact_person: 'Contact person', address: 'Address', notes: 'Notes', draft_reply: 'Reply draft', replied_on: 'Replied on', ack_no: 'Ack no.',
+    chase_off: 'No auto reminders', expiry: 'Expiry', paid_on: 'Paid on' },
+  lab(k) { return this.FIELD[k] || k.replace(/_/g, ' ').replace(/^./, x => x.toUpperCase()); },
+  val(k, v) {
+    if (v === null || v === undefined || v === '') return '—';
+    if (typeof v === 'boolean') return v ? 'Yes' : 'No';
+    if (Array.isArray(v)) return v.join(', ') || '—';
+    if (typeof v === 'object') return JSON.stringify(v).slice(0, 120);
+    if (['assigned_to', 'default_staff', 'created_by', 'user_id', 'updated_by'].includes(k)) return profName(v) || 'someone';
+    if (k === 'client_id') return (clientById(v) || {}).name || 'a client';
+    if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return fmtDate(v);
+    if (/^\d{4}-\d{2}-\d{2}T/.test(v)) return new Date(v).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' });
+    return String(v);
+  },
+  changes(r) {
+    const c = r.changes || {}, ks = Object.keys(c);
+    if (!ks.length) return r.summary && r.area === 'login' ? esc(r.summary) : '';
+    if (r.action === 'update') return ks.map(k => c[k][1] === '(changed)' ? `<div><b>${esc(this.lab(k))}:</b> changed (hidden for safety)</div>` : `<div><b>${esc(this.lab(k))}:</b> <span class="aud-old">${esc(this.val(k, c[k][0]))}</span> → <span class="aud-new">${esc(this.val(k, c[k][1]))}</span></div>`).join('');
+    const keep = ['status', 'client_code', 'name', 'return_name', 'period', 'due_date', 'assigned_to', 'role', 'email', 'notice_type', 'reply_due', 'amount', 'total', 'arn'];
+    const main = ks.filter(k => keep.includes(k)), rest = ks.filter(k => !keep.includes(k) && k !== 'client_id');
+    const line = k => `<b>${esc(this.lab(k))}:</b> ${esc(this.val(k, c[k]))}`;
+    return `<div class="muted">${main.map(line).join(' · ')}</div>${rest.length ? `<details><summary class="small">All details (${rest.length})</summary><div class="small">${rest.map(line).join('<br>')}</div></details>` : ''}`;
+  },
+  when(t) { return new Date(t).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }); },
+  row(r, showWhat = true) {
+    return `<tr class="aud-${r.action}"><td class="nowrap small">${this.when(r.at)}</td><td>${esc(r.user_name || '—')}</td>
+      <td><span class="aud-act aud-${r.action}">${esc(this.ACT[r.action] || r.action)}</span>${showWhat ? `<div class="small muted">${esc(this.AREA[r.area] || r.area)}</div>` : ''}</td>
+      ${showWhat ? `<td class="wrap">${esc(r.summary || '')}</td>` : ''}<td class="wrap small">${this.changes(r)}</td></tr>`;
+  },
+  event(a, note) { return safe(sb.rpc('audit_event', { p_action: a, p_note: note || null })); }
+};
+
+let af = { from: '', to: '', user: '', area: '', client: '', act: '', q: '' };
+VIEWS.activity = async v => {
+  await loadRefs();
+  if (!af.from) { af.from = iso(addDays(new Date(), -7)); af.to = today(); }
+  v.innerHTML = `<div class="page-head"><h2>Activity log</h2><span class="muted">Who changed what, and when</span><span class="spacer"></span><button class="btn" id="aExp">Export CSV</button></div>
+    <div class="toolbar aud-filters">
+      <label class="small">From <input type="date" id="aFrom" value="${af.from}"></label><label class="small">To <input type="date" id="aTo" value="${af.to}"></label>
+      <select id="aUser"><option value="">Everyone</option>${opts(profiles, af.user, p => p.full_name || p.email, p => p.id)}<option value="system" ${af.user === 'system' ? 'selected' : ''}>System (automatic)</option></select>
+      <select id="aArea"><option value="">Everything</option>${opts(Object.entries(AUDIT.AREA), af.area, x => x[1], x => x[0])}</select>
+      <select id="aAct"><option value="">Added / changed / deleted</option>${opts(Object.entries(AUDIT.ACT), af.act, x => x[1], x => x[0])}</select>
+      <select id="aClient"><option value="">All clients</option>${opts(clients, af.client, cLabel, c => c.id)}</select>
+      <input type="search" id="aQ" placeholder="Search" value="${esc(af.q)}"></div>
+    <div id="aList"><div class="loading">Loading…</div></div>`;
+  let rows = [], done = false;
+  const PAGE = 200;
+  const load = async (more) => {
+    let q = sb.from('audit_log').select('*').gte('at', af.from + 'T00:00:00+05:30').lt('at', iso(addDays(new Date(af.to + 'T00:00:00'), 1)) + 'T00:00:00+05:30')
+      .order('at', { ascending: false }).order('id', { ascending: false }).range(more ? rows.length : 0, (more ? rows.length : 0) + PAGE - 1);
+    if (af.user === 'system') q = q.is('user_id', null); else if (af.user) q = q.eq('user_id', af.user);
+    if (af.area) q = q.eq('area', af.area);
+    if (af.act) q = q.eq('action', af.act);
+    if (af.client) q = q.eq('client_id', af.client);
+    if (af.q) q = q.ilike('summary', '%' + af.q.replace(/[%_,()]/g, ' ') + '%');
+    const r = await safe(q);
+    if (r.error) { $('#aList').innerHTML = `<p class="note warn">${/audit_log/.test(r.error.message || '') ? 'Run <b>update-session9.sql</b> in Supabase to switch the activity log on.' : esc(friendly(r.error))}</p>`; return; }
+    rows = more ? rows.concat(r.data) : r.data; done = r.data.length < PAGE;
+    $('#aList').innerHTML = rows.length ? `<div class="table-wrap"><table class="aud-table"><thead><tr><th>When</th><th>Who</th><th>Action</th><th>Record</th><th>What changed</th></tr></thead><tbody>
+      ${rows.map(x => AUDIT.row(x)).join('')}</tbody></table></div>
+      <div class="toolbar" style="justify-content:center;margin-top:10px"><span class="muted small">${rows.length} entr${rows.length === 1 ? 'y' : 'ies'}</span>${done ? '' : '<button class="btn" id="aMore">Load more</button>'}</div>`
+      : '<div class="table-wrap"><div class="empty">Nothing recorded for these filters.</div></div>';
+    if ($('#aMore')) $('#aMore').onclick = () => load(true);
+  };
+  const set = (k, id, ev = 'onchange') => { $(id)[ev] = e => { af[k] = e.target.value; clearTimeout(set.t); set.t = setTimeout(() => load(false), ev === 'oninput' ? 350 : 0); }; };
+  set('from', '#aFrom'); set('to', '#aTo'); set('user', '#aUser'); set('area', '#aArea'); set('act', '#aAct'); set('client', '#aClient'); set('q', '#aQ', 'oninput');
+  $('#aExp').onclick = () => {
+    if (!rows.length) return toast('Nothing to export', true);
+    const flat = r => r.action === 'update' ? Object.entries(r.changes || {}).map(([k, x]) => `${AUDIT.lab(k)}: ${AUDIT.val(k, x[0])} -> ${AUDIT.val(k, x[1])}`).join('; ')
+      : Object.entries(r.changes || {}).map(([k, x]) => `${AUDIT.lab(k)}: ${AUDIT.val(k, x)}`).join('; ');
+    download(`activity-log-${af.from}-to-${af.to}.csv`, toCSV([['When', 'Who', 'Action', 'Area', 'Record', 'Details'],
+      ...rows.map(r => [AUDIT.when(r.at), r.user_name || '', AUDIT.ACT[r.action] || r.action, AUDIT.AREA[r.area] || r.area, r.summary || '', flat(r)])]));
+    AUDIT.event('export', `Activity log ${af.from} to ${af.to} (${rows.length} rows)`);
+  };
+  load(false);
+};
+
+/* History window for one record (work / notice) or one client (everything about that client) */
+async function showHistory(kind, id, title) {
+  const m = modal('History — ' + title, '<div class="loading">Loading…</div>', { wide: true });
+  let q = sb.from('audit_log').select('*').order('at', { ascending: false }).order('id', { ascending: false }).limit(300);
+  q = kind === 'client' ? q.eq('client_id', id) : q.eq('area', kind).eq('row_id', id);
+  const r = await safe(q);
+  $('.modal-body', m.el).innerHTML = r.error ? `<p class="note warn">${/audit_log/.test(r.error.message || '') ? 'Run update-session9.sql in Supabase to switch the activity log on.' : esc(friendly(r.error))}</p>`
+    : r.data.length ? `<div class="table-wrap"><table class="aud-table"><thead><tr><th>When</th><th>Who</th><th>Action</th>${kind === 'client' ? '<th>Record</th>' : ''}<th>What changed</th></tr></thead><tbody>
+        ${r.data.map(x => AUDIT.row(x, kind === 'client')).join('')}</tbody></table></div>${r.data.length === 300 ? '<p class="muted small">Showing the latest 300 — see Activity log for more.</p>' : ''}`
+    : '<p class="muted">No changes recorded yet. Changes are recorded from the day the activity log was switched on.</p>';
+}
+
+window.__tracker = { AUDIT, IDLE, clientProblems, HEALTH, HELP, noticeLetter, BANK, bankReadFile, TDSW, MCA, BILL, parseMcaSheets, mcaPlanAll, fillGstWorkings, G1, GR, RECO, gstr3bFromApi, periodToMonth, strongPassword, periodFor, dueDateFor, parseCSV, toCSV, gstLateFee, gstInterest, tdsCalc, rocCalc, monthsSpan, tdsDepositDue, g1json, clientReportHtml, clientReportMsg, rnStage, anyDate, parseRenewalRows, gstPayDue, tdsPayDue, advInstalment, advCurrent, advDue, recurringPlan, taxMsg, addMonths, fyEndOf, obProgress, rnKind };
 start();
 })();
