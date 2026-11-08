@@ -1068,3 +1068,20 @@ input.bad,select.bad,textarea.bad{border-color:var(--red)!important;box-shadow:0
 @media (max-width:700px){.od-depts{grid-template-columns:1fr}}
 .od-depts .dept{grid-column:auto}
 .od-nums{grid-template-columns:repeat(2,1fr)}
+
+/* ---------- v28: acknowledgements, monthly documents, GST billing run ---------- */
+.ack-row{padding-top:4px;border-top:1px dashed var(--line)}
+tr.ak-done td{opacity:.65}
+.ak-in{width:170px;text-transform:uppercase}
+.bk-drop.over{border-color:var(--brand);background:var(--blue-soft)}
+.md-client{padding:14px 18px}
+.md-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.md-head .hbar{width:90px;margin-top:0}
+.md-docs{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.md-doc{border:1px solid var(--line);background:var(--surface);color:var(--ink);font:inherit;font-size:.85rem;padding:6px 12px;border-radius:999px;cursor:pointer}
+.md-doc:hover:not(:disabled){border-color:var(--brand)}
+.md-doc.got{background:var(--green-soft);color:var(--green);border-color:transparent;font-weight:600}
+.md-doc:disabled{cursor:default}
+.md-foot{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
+.gst-run{border-left:4px solid var(--brand)}.gst-run.today{border-left-color:var(--amber);background:var(--amber-soft)}
+.gst-run .toolbar{gap:12px;flex-wrap:wrap}

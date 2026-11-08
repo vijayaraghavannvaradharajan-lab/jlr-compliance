@@ -422,6 +422,8 @@ const NI = {   // menu icons (stroke SVG paths)
   gst: '<path d="M6 2h12v20l-3-2-3 2-3-2-3 2z"></path><path d="M9 7h6M9 11h6"></path>',
   tds: '<circle cx="7" cy="7" r="2.5"></circle><circle cx="17" cy="17" r="2.5"></circle><path d="M19 5L5 19"></path>',
   gstw: '<path d="M4 4h16v16H4z"></path><path d="M8 9h8M8 13h8M8 17h5"></path>',
+  acks: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"></path><path d="M14 3v5h5M9 14l2 2 4-4"></path>',
+  docs: '<path d="M9 11l3 3L22 4"></path><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>',
   activity: '<path d="M12 8v4l3 2"></path><circle cx="12" cy="12" r="9"></circle>',
   health: '<path d="M3 12h4l2-5 4 10 2-5h6"></path>',
   refresh: '<path d="M21 12a9 9 0 1 1-2.6-6.4M21 3v6h-6"></path>',
@@ -453,8 +455,8 @@ function navGroups() {
     ['GST', [['work-gst', isManager() ? 'GST work' : 'My GST work', 'gstw'], ['gst', 'GST review', 'gst'], ['notices-gst', 'GST notices', 'notices']]],
     ['TDS', [['work-tds', isManager() ? 'TDS / TCS work' : 'My TDS work', 'tds'], ['tds', 'TDS working', 'tdsw'], ['notices-tds', 'TDS notices', 'notices']]],
     ['MCA', [['work-mca', isManager() ? 'MCA / ROC work' : 'My MCA work', 'mca'], ['mca', 'Companies & LLPs', 'companies'], ['notices-mca', 'MCA notices', 'notices']]],
-    ['Tools', [['bank', 'Bank statements', 'bank'], ['calc', 'Late fee calculator'], ['checklists', 'Checklists'], ['updates', 'Law updates']]],
-    ['Clients', [isManager() && ['clients', 'Clients'], ['onboarding', 'Onboarding'], ['renewals', 'Renewals (DSC, LUT…)'], ['inbox', 'Client mail'], ['clientreport', 'Monthly client reports']]],
+    ['Tools', [['bank', 'Bank statements', 'bank'], ['acks', 'Filing acknowledgements'], ['calc', 'Late fee calculator'], ['checklists', 'Checklists'], ['updates', 'Law updates']]],
+    ['Clients', [isManager() && ['clients', 'Clients'], ['docs', 'Documents for the month'], ['onboarding', 'Onboarding'], ['renewals', 'Renewals (DSC, LUT…)'], ['inbox', 'Client mail'], ['clientreport', 'Monthly client reports']]],
     ['Payments & billing', [['taxpay', 'Tax payment intimation'], isManager() && ['billing', 'Billing & fees']]],
     (isManager() || isPartner()) && ['Office', [['health', 'Client health'], isManager() && ['workload', 'Team workload'], isPartner() && ['reports', 'Reports'], isPartner() && ['activity', 'Activity log']]],
     isAdmin() && ['Admin', [['team', 'Team & logins'], ['settings', 'Settings']]]
@@ -774,6 +776,7 @@ function editTask(task, refresh) {
       <a class="btn sm" href="${esc(gmailSearchUrl(clientById(task.client_id)))}" target="_blank" rel="noopener">Check client mail in Gmail</a>
       <a class="btn sm" href="${esc(requestMailUrl(clientById(task.client_id), task))}">Email client for data</a></div>` : ''}
     <label class="full">Remarks<textarea name="remarks" ${ro}>${esc(task.remarks || '')}</textarea></label>
+    ${!isNew ? `<div class="full ack-row" data-ackrow>${can ? '<button type="button" class="btn sm" data-ackread>📄 Read acknowledgement PDF</button> <span class="muted small">fills ARN and date and marks it Filed</span>' : ''}</div>` : ''}
     ${!isNew ? `<p class="muted small full">Last updated ${new Date(task.updated_at).toLocaleString('en-IN')}${task.updated_by ? ' by ' + esc(profName(task.updated_by)) : ''}</p>` : ''}
   </div>`;
   const extra = (isPartner() && !isNew ? '<button class="btn danger" data-del>Delete</button><button class="btn ghost" type="button" data-hist>History</button>' : '') +
@@ -800,6 +803,13 @@ function editTask(task, refresh) {
   if (chk) chk.onclick = () => { m.close(); openChecklist(task, refresh); };
   const ful = $('[data-fulog]', m.el);
   if (ful) ful.onclick = () => { m.close(); logFollowup({ kind: 'task', task }, refresh); };
+  const akb = $('[data-ackread]', m.el);
+  if (akb) akb.onclick = () => ackForTask(task, () => { m.close(); refresh(); });
+  if (!isNew) safe(sb.from('filing_acks').select('*').eq('task_id', task.id).order('created_at', { ascending: false }).limit(3)).then(r => {
+    const row = $('[data-ackrow]', m.el); if (!row || r.error || !r.data.length) return;
+    row.insertAdjacentHTML('beforeend', `<div class="small" style="margin-top:6px">Saved acknowledgement: ${r.data.map(a => `${a.file_path ? `<button type="button" class="link" data-akopen="${a.id}">${esc(a.file_name || 'PDF')}</button>` : esc(a.arn || '')} <span class="muted">${a.filed_on ? fmtDate(a.filed_on) : ''}</span>`).join(' · ')}</div>`);
+    row.onclick = e => { const id = e.target.dataset.akopen; if (id) ACK.open(r.data.find(a => a.id === id)); };
+  });
   if ($('[data-hist]', m.el)) $('[data-hist]', m.el).onclick = () => showHistory('tasks', task.id, `${clientName(task.client_id)} · ${task.return_name} ${task.period || ''}`);
   const del = $('[data-del]', m.el);
   if (del) del.onclick = async () => {
@@ -2125,12 +2135,22 @@ VIEWS.billing = async v => {
   if (billTab === 'fees') renderFees(box, fees);
 };
 
+const gstBillDay = () => Math.min(28, Math.max(1, +settings.gst_bill_day || 25));
+const gstBillDate = () => { const d = new Date(); return iso(new Date(d.getFullYear(), d.getMonth(), gstBillDay())); };
 function renderToInvoice(box, rows, fees = []) {
   const rateFor = r => { const f = fees.find(x => x.client_id === r.client_id && lc(x.return_name) === lc(r.return_name)) || fees.find(x => !x.client_id && lc(x.return_name) === lc(r.return_name)); return f ? f.amount : ''; };
   if (!rows.length) { box.innerHTML = '<div class="table-wrap"><div class="empty">All filed work is invoiced 🎉</div></div>'; return; }
   const by = {}; rows.forEach(r => (by[r.client_id] = by[r.client_id] || []).push(r));
   const ids = Object.keys(by).sort((a, b) => clientName(a).localeCompare(clientName(b)));
-  box.innerHTML = `<p class="muted small">Filed work that is not billed yet. Fees come from the Fee list — change any amount here before creating the invoice.</p>` +
+  const gstRows = rows.filter(r => r.work_type === 'GST'), gstBy = {}; gstRows.forEach(r => (gstBy[r.client_id] = gstBy[r.client_id] || []).push(r));
+  const gstSum = gstRows.reduce((a, r) => a + num(r.fee ?? rateFor(r)), 0), bd = gstBillDate(), isDay = today() === bd;
+  box.innerHTML = (gstRows.length ? `<div class="card gst-run ${isDay ? 'today' : ''}"><div class="toolbar" style="margin:0;align-items:center">
+      <div><h3 style="margin:0">GST billing run${isDay ? ' — today is billing day' : ''}</h3>
+        <span class="muted small">${Object.keys(gstBy).length} client${Object.keys(gstBy).length > 1 ? 's' : ''} · ${gstRows.length} filed GST return${gstRows.length > 1 ? 's' : ''} not billed · ${inr(gstSum)} before GST. One invoice per client, dated the GST billing day (the ${gstBillDay()}${['th', 'st', 'nd', 'rd'][(gstBillDay() % 10 > 3 || [11, 12, 13].includes(gstBillDay())) ? 0 : gstBillDay() % 10]} of the month).</span></div><span class="spacer"></span>
+      <label class="small">Invoice date <input type="date" id="grDate" value="${bd}"></label>
+      ${isAdmin() ? `<label class="small" title="Day of the month for GST bills">Billing day <input type="number" id="grDay" min="1" max="28" value="${gstBillDay()}" style="width:64px"></label>` : ''}
+      <button class="btn primary" id="grGo">Create ${Object.keys(gstBy).length} GST invoice${Object.keys(gstBy).length > 1 ? 's' : ''}</button></div></div>` : '') +
+    `<p class="muted small">Filed work that is not billed yet. Fees come from the Fee list — change any amount here before creating the invoice.</p>` +
     ids.map(cid => `<div class="card bill-client" data-cid="${cid}">
       <div class="bill-head"><h3 style="margin:0">${esc(clientName(cid))}</h3><span class="muted small">${by[cid].length} item${by[cid].length > 1 ? 's' : ''}</span></div>
       <div class="table-wrap"><table><thead><tr><th><input type="checkbox" data-all checked aria-label="Select all"></th><th>Work</th><th>Filed on</th><th style="width:140px">Fee (₹)</th></tr></thead><tbody>
@@ -2140,7 +2160,7 @@ function renderToInvoice(box, rows, fees = []) {
       </tbody></table></div>
       <div class="bill-foot"><span>Selected: <b data-sum>₹0</b> <span class="muted small" data-gstamt></span></span><span class="spacer"></span>
         <label class="small">GST <select data-gst>${[...new Set([18, 5, 0, num(settings.gst_rate)])].sort((a, b) => b - a).map(r => `<option value="${r}" ${r === num(settings.gst_rate) ? 'selected' : ''}>${r}%</option>`).join('')}</select></label>
-        <label class="small">Invoice date <input type="date" data-date value="${today()}"></label>
+        <label class="small">Invoice date <input type="date" data-date value="${by[cid].every(r => r.work_type === 'GST') ? gstBillDate() : today()}"></label>
         <button class="btn primary" data-mk>Create invoice</button></div></div>`).join('');
   const recalc = card => {
     let s = 0;
@@ -2149,6 +2169,27 @@ function renderToInvoice(box, rows, fees = []) {
     const r = num($('[data-gst]', card).value), g = Math.round(s * r) / 100;
     $('[data-sum]', card).textContent = inr(s);
     $('[data-gstamt]', card).textContent = r ? `+ GST ${r}% ${inr(g)} = ${inr(s + g)}` : '(no GST)';
+  };
+  if ($('#grDay', box)) $('#grDay', box).onchange = async e => {
+    const d = Math.min(28, Math.max(1, Math.round(num(e.target.value)) || 25));
+    try { await must(sb.from('settings').update({ gst_bill_day: d }).eq('id', 1)); settings.gst_bill_day = d; toast(`GST billing day set to the ${d}`); route(); }
+    catch (err) { toast(/gst_bill_day/.test(err.message || '') ? 'Run update-session11.sql in Supabase first' : friendly(err), true); }
+  };
+  if ($('#grGo', box)) $('#grGo', box).onclick = async e => {
+    const date = $('#grDate', box).value || gstBillDate(), cids = Object.keys(gstBy);
+    if (!confirm(`Create ${cids.length} GST invoice${cids.length > 1 ? 's' : ''} dated ${fmtDate(date)}?\nFees come from each work item or the Fee list. Each invoice gets its own number${zohoOn() && zohoCfg.auto_push ? ' and is sent to Zoho' : ''}.`)) return;
+    e.target.disabled = true; let ok = 0, zoho = 0; const bad = [];
+    for (const cid of cids) {
+      try {
+        for (const r of gstBy[cid]) { const f = num(r.fee ?? rateFor(r)); if (r.fee == null || num(r.fee) !== f) await must(sb.from('tasks').update({ fee: f }).eq('id', r.id)); }
+        const { data: iid } = await must(sb.rpc('create_invoice', { p_client: cid, p_tasks: gstBy[cid].map(r => r.id), p_extra: [], p_date: date, p_notes: null, p_gst_rate: num(settings.gst_rate) }));
+        ok++;
+        if (zohoOn() && zohoCfg.auto_push) { try { await zohoCall('push_invoice', { invoice_id: iid }); zoho++; } catch (zerr) { bad.push(`${clientName(cid)}: saved, not sent to Zoho (${friendly(zerr)})`); } }
+      } catch (err) { bad.push(`${clientName(cid)}: ${friendly(err)}`); }
+    }
+    toast(`${ok} GST invoice${ok === 1 ? '' : 's'} created${zoho ? `, ${zoho} sent to Zoho` : ''}${bad.length ? ` · ${bad.length} problem${bad.length > 1 ? 's' : ''}` : ''}`, !!bad.length);
+    if (bad.length) modal('Some invoices need attention', `<ul class="small">${bad.map(b => `<li>${esc(b)}</li>`).join('')}</ul>`);
+    await loadRefs(); billTab = ok ? 'inv' : billTab; route();
   };
   $$('.bill-client', box).forEach(card => {
     recalc(card);
@@ -8656,7 +8697,7 @@ async function dashOffice(body) {
       <a class="mini amber" href="#/work" data-oq="soon"><span>Due in 7 days</span><b>${soon.length}</b></a>
       <a class="mini blue" href="#/work" data-oq="waiting"><span>Waiting for client data</span><b>${rows.filter(r => r.status === 'Pending data').length}</b></a>
       <a class="mini ${nDue.length ? 'red' : 'green'}" href="#/notices"><span>Notice replies due (7 days)</span><b>${nDue.length}</b></a></div>
-    ${fees !== null ? `<div class="od-fees"><a class="chip blue" href="#/billing" data-billdue>Fees outstanding ${inr(fees)}</a><span class="chip green">Collected this month ${inr(got || 0)}</span></div>` : ''}
+    ${fees !== null ? `<div class="od-fees"><a class="chip blue" href="#/billing" data-billdue>Fees outstanding ${inr(fees)}</a><span class="chip green">Collected this month ${inr(got || 0)}</span><span id="oGstBill"></span></div>` : ''}
     <h3 class="od-h">This month by department</h3><div class="od-depts">${dept}</div>
     <div class="card"><h3>Team</h3>${people.length || un.length ? `<div class="table-wrap"><table class="od-staff"><thead><tr><th>Person</th><th>Overdue</th><th>Due 7 days</th><th>Waiting data</th><th>All open</th><th>Filed this month</th><th>Requests</th><th></th></tr></thead><tbody>
       ${staffRows}${un.length ? `<tr><td><b>Not assigned</b></td><td class="${un.filter(r => r.due_date && r.due_date < t).length ? 'late' : ''}"><b>${un.filter(r => r.due_date && r.due_date < t).length}</b></td><td>${un.filter(r => r.due_date && r.due_date >= t && r.due_date <= in7).length}</td><td>${un.filter(r => r.status === 'Pending data').length}</td><td>${un.length}</td><td>—</td><td>—</td><td class="row-btns"><a class="btn sm" href="#/work" data-ostaff="none">Open list</a></td></tr>` : ''}
@@ -8679,6 +8720,11 @@ async function dashOffice(body) {
   $$('[data-ostaff]', body).forEach(a => a.onclick = () => { wf = { ...WF_DEFAULT, staff: a.dataset.ostaff === 'none' ? '' : a.dataset.ostaff, status: 'open' }; });
   $$('[data-oreq]', body).forEach(b => b.onclick = () => reqs ? editRequest({ priority: 'Normal', status: 'New', assigned_to: b.dataset.oreq, _new: true }, refresh) : toast('Run update-session10.sql in Supabase first', true));
   $$('[data-billdue]', body).forEach(x => x.onclick = () => { billTab = 'due'; });
+  if ($('#oGstBill', body) && now.getDate() >= gstBillDay()) safe(sb.rpc('gst_bill_ready', { p_upto: null })).then(r => {
+    const d = r.data, el = $('#oGstBill', body); if (!el || r.error || !d || !+d.clients) return;
+    el.innerHTML = `<a class="chip amber" href="#/billing" data-gstbill>GST billing${now.getDate() === gstBillDay() ? ' day' : ''}: ${d.clients} client${+d.clients > 1 ? 's' : ''} ready · ${inr(d.amount)}</a>`;
+    $('[data-gstbill]', el).onclick = () => { billTab = 'toinv'; };
+  });
   countUp(body);
   HEALTH.load().then(all => {
     const red = all.filter(x => x.level === 'red'), box = $('#oHealth', body); if (!box || !document.body.contains(box) || !red.length) return;
@@ -8752,6 +8798,314 @@ async function dashSystemTab(body) {
   await dashFull($('#sysOld', body));
 }
 
-window.__tracker = { dashTabs, AUDIT, IDLE, clientProblems, HEALTH, HELP, noticeLetter, BANK, bankReadFile, TDSW, MCA, BILL, parseMcaSheets, mcaPlanAll, fillGstWorkings, G1, GR, RECO, gstr3bFromApi, periodToMonth, strongPassword, periodFor, dueDateFor, parseCSV, toCSV, gstLateFee, gstInterest, tdsCalc, rocCalc, monthsSpan, tdsDepositDue, g1json, clientReportHtml, clientReportMsg, rnStage, anyDate, parseRenewalRows, gstPayDue, tdsPayDue, advInstalment, advCurrent, advDue, recurringPlan, taxMsg, addMonths, fyEndOf, obProgress, rnKind };
+
+/* =====================================================================
+   v28  FILING ACKNOWLEDGEMENTS — read the GST / TDS / MCA acknowledgement PDF,
+   find the work, mark it Filed with ARN and date, keep the PDF.
+   ===================================================================== */
+const ACK = {
+  MON: ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'],
+  MON3: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
+  key: s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, ''),
+  TDS_ALIAS: { '24Q': ['24q', 'form138'], '26Q': ['26q', 'form140'], '27Q': ['27q', 'form144'], '27EQ': ['27eq', 'form143'] },
+  NEW_TO_OLD: { 138: '24Q', 140: '26Q', 144: '27Q', 143: '27EQ' },
+  date(s) {
+    if (!s) return null;
+    let m = s.match(/(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})/);
+    if (m) return `${m[3]}-${String(m[2]).padStart(2, '0')}-${String(m[1]).padStart(2, '0')}`;
+    m = s.match(/(\d{1,2})[\s\-]([A-Za-z]{3})[A-Za-z]*[\s\-,]+(\d{4})/);
+    if (m) { const i = this.MON.indexOf(m[2].toLowerCase()); if (i >= 0) return `${m[3]}-${String(i + 1).padStart(2, '0')}-${String(m[1]).padStart(2, '0')}`; }
+    return null;
+  },
+  parse(text) {
+    const T = String(text || '').replace(/ /g, ' '), U = T.toUpperCase();
+    const r = { kind: null, form: null, gstin: null, tan: null, cin: null, fyStart: null, month: null, quarter: null, arn: null, filed_on: null, period: null };
+    r.gstin = (U.match(/\b(\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z])\b/) || [])[1] || null;
+    r.tan = (U.match(/\b([A-Z]{4}\d{5}[A-Z])\b/) || [])[1] || null;
+    r.cin = (U.match(/\b([UL]\d{5}[A-Z]{2}\d{4}[A-Z]{3}\d{6})\b/) || U.match(/LLPIN\s*[:\-]?\s*([A-Z]{3}-\d{4})\b/) || [])[1] || null;
+    // form
+    let m;
+    if ((m = U.match(/\b(GSTR[\s-]?(?:3B|1|4|7|8|9C|9)|CMP[\s-]?08|PMT[\s-]?06)\b/))) { r.kind = 'GST'; r.form = m[1].replace(/\s/g, '').replace(/^GSTR(?!-)/, 'GSTR-').replace(/^CMP(?!-)/, 'CMP-').replace(/^PMT(?!-)/, 'PMT-'); }
+    else if (/INVOICE FURNISHING FACILITY|\bIFF\b/.test(U)) { r.kind = 'GST'; r.form = 'IFF'; }
+    if (!r.form && (m = U.match(/\bFORM\s*(?:NO\.?\s*)?:?\s*(24Q|26Q|27Q|27EQ|138|140|143|144)\b/) || U.match(/\b(24Q|26Q|27Q|27EQ)\b/))) { r.kind = 'TDS'; r.form = this.NEW_TO_OLD[m[1]] || m[1]; }
+    if (!r.form && (m = U.match(/\b(AOC[\s-]?4(?:\s*(?:XBRL|CFS))?|MGT[\s-]?7A?|ADT[\s-]?1|DIR[\s-]?3\s*KYC(?:[\s-]?WEB)?|DPT[\s-]?3|MSME[\s-]?1|INC[\s-]?20A|LLP\s*FORM\s*(?:NO\.?\s*)?(?:11|8)|FORM\s*(?:11|8)\b)/))) {
+      r.kind = 'MCA'; r.form = m[1].replace(/\s+/g, ' ').replace(/^LLP\s*FORM\s*(?:NO\.?\s*)?/, 'Form ').replace(/^(AOC|MGT|ADT|DPT|MSME|INC)\s?-?/, '$1-').replace(/^DIR[\s-]?3\s*KYC.*/, 'DIR-3 KYC');
+    }
+    if (!r.kind) r.kind = r.gstin ? 'GST' : r.tan ? 'TDS' : r.cin ? 'MCA' : null;
+    // year
+    if ((m = T.match(/(?:Financial\s*Year|F\.?\s?Y\.?|Year)\s*(?:ending\s*(?:on)?)?\s*[:\-]?\s*(20\d{2})\s*[-–\/]\s*(\d{2,4})/i))) r.fyStart = +m[1];
+    else if ((m = T.match(/Assessment\s*Year\s*[:\-]?\s*(20\d{2})\s*[-–]\s*\d{2,4}/i))) r.fyStart = +m[1] - 1;
+    else if ((m = T.match(/(?:year|period)\s*end(?:ed|ing)\s*(?:on)?\s*[:\-]?\s*31[\/\-.\s](?:03|mar\w*)[\/\-.\s,]*(20\d{2})/i))) r.fyStart = +m[1] - 1;
+    // quarter / month
+    const qm = T.match(/\b(?:Quarter|Qtr)\s*[:\-]?\s*(?:Q\s*)?([1-4])\b/i) || T.match(/\bQ\s?([1-4])\b/) ||
+      T.match(/\b(Apr(?:il)?\s*[-–to]+\s*Jun(?:e)?|Jul(?:y)?\s*[-–to]+\s*Sep(?:tember)?|Oct(?:ober)?\s*[-–to]+\s*Dec(?:ember)?|Jan(?:uary)?\s*[-–to]+\s*Mar(?:ch)?)\b/i);
+    if (qm) r.quarter = /^\d$/.test(qm[1]) ? +qm[1] : ({ apr: 1, jul: 2, oct: 3, jan: 4 })[qm[1].slice(0, 3).toLowerCase()];
+    const mm = T.match(/(?:Tax\s*Period|Return\s*Period|Period|Month)\s*[:\-]?\s*(January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\b(?!\s*[-–]\s*[A-Z])/i);
+    if (mm) r.month = this.MON.indexOf(mm[1].slice(0, 3).toLowerCase()) + 1;
+    if (r.month && !r.fyStart) { const y = T.match(new RegExp(mm[1] + '[,\\s-]*(20\\d{2})', 'i')); if (y) r.fyStart = r.month >= 4 ? +y[1] : +y[1] - 1; }
+    // reference number
+    if (r.kind === 'GST') r.arn = (U.match(/\bARN\s*(?:NO\.?|NUMBER)?\s*[:\-]?\s*([A-Z]{2}\d{12}[A-Z0-9])\b/) || U.match(/\b(AA\d{12}[A-Z0-9])\b/) || [])[1] || null;
+    if (r.kind === 'TDS') r.arn = (U.match(/(?:TOKEN|PROVISIONAL\s*RECEIPT|RECEIPT|ACKNOWLEDG(?:E)?MENT)\s*(?:NO\.?|NUMBER)?\s*[:\-]?\s*(\d{15})\b/) || U.match(/\b(\d{15})\b/) || [])[1] || null;
+    if (r.kind === 'MCA') r.arn = (U.match(/\bSRN\s*(?:NO\.?|NUMBER)?\s*[:\-]?\s*([A-Z]{1,2}\d{7,8})\b/) || U.match(/SERVICE\s*REQUEST\s*NUMBER\s*[:\-]?\s*([A-Z]{1,2}\d{7,8})/) || [])[1] || null;
+    if (!r.arn) r.arn = (U.match(/\bARN\s*[:\-]?\s*([A-Z0-9]{10,20})\b/) || [])[1] || null;
+    // date
+    const dm = T.match(/(?:Date\s*of\s*(?:ARN|filing|submission|receipt|acknowledg\w*)|ARN\s*Date|Filing\s*Date|Filed\s*on|Date\s*of\s*Filing|Submitted\s*on|Payment\s*Date|SRN\s*Date)\s*[:\-]?\s*(\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{4}|\d{1,2}[\s\-][A-Za-z]{3,9}[\s\-,]+\d{4})/i);
+    r.filed_on = this.date(dm ? dm[1] : (T.match(/\b\d{1,2}[\/\-.]\d{1,2}[\/\-.]20\d{2}\b/) || [])[0]);
+    // the tracker's period text
+    const fy = s => `FY ${s}-${String(s + 1).slice(2)}`;
+    const annual = /GSTR-9|GSTR-4|AOC|MGT|ADT|DPT|Form 11|Form 8|DIR-3|INC/.test(r.form || '');
+    if (r.fyStart) {
+      if (annual) r.period = fy(r.fyStart);
+      else if (r.month && !(r.kind === 'TDS')) r.period = `${this.MON3[r.month - 1]} ${r.month >= 4 ? r.fyStart : r.fyStart + 1}`;
+      else if (r.quarter) r.period = `Q${r.quarter} ${fy(r.fyStart)}`;
+      else r.period = fy(r.fyStart);
+    }
+    return r;
+  },
+  formMatches(form, kind, returnName) {
+    const k = this.key(returnName);
+    if (!form) return false;
+    if (kind === 'TDS') return (this.TDS_ALIAS[form] || [this.key(form)]).some(a => k.includes(a));
+    const f = this.key(form);
+    if (f === 'gstr9') return k.startsWith('gstr9') && !k.startsWith('gstr9c') || k === 'gstr99c';
+    if (f === 'dir3kyc') return k.includes('dir3');
+    return k.startsWith(f) || k.includes(f);
+  },
+  clientFor(r) {
+    const act = clients.filter(c => c.active);
+    return (r.gstin && act.find(c => (c.gstin || '').toUpperCase() === r.gstin)) || (r.tan && act.find(c => (c.tan || '').toUpperCase() === r.tan)) ||
+      (r.cin && act.find(c => (c.cin || '').toUpperCase() === r.cin)) || (r.gstin && act.find(c => (c.pan || '').toUpperCase() === r.gstin.slice(2, 12))) || null;
+  },
+  // best work item for this acknowledgement: same client + return; same period if it can be read, else the earliest open one
+  pick(r, tasks) {
+    const same = tasks.filter(t => this.formMatches(r.form, r.kind, t.return_name));
+    const per = r.period ? same.filter(t => this.key(t.period) === this.key(r.period)) : [];
+    const open = x => x.filter(t => t.status !== 'Filed');
+    const exact = open(per)[0] || per[0];
+    if (exact) return { task: exact, sure: true, list: same };
+    const guess = open(same).sort((a, b) => String(a.due_date || '9').localeCompare(String(b.due_date || '9')))[0];
+    return { task: guess || null, sure: false, list: same };
+  },
+  async readText(file) {
+    const pdfjs = await pdfLib(), doc = await pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()), isEvalSupported: false }).promise;
+    let text = '';
+    for (let p = 1; p <= Math.min(doc.numPages, 6); p++) { const pg = await doc.getPage(p); text += BILL.itemsToLines((await pg.getTextContent()).items) + '\n'; }
+    return text;
+  },
+  async save(task, r, file) {
+    let path = null;
+    if (file) {
+      path = `${task.client_id}/${task.id}/${Date.now()}-${(file.name || 'ack.pdf').replace(/[^\w.\-]+/g, '_')}`;
+      const up = await sb.storage.from('filing-acks').upload(path, file, { contentType: 'application/pdf', upsert: false });
+      if (up.error) path = null;
+    }
+    const ins = await safe(sb.from('filing_acks').insert({ task_id: task.id, client_id: task.client_id, kind: r.kind, return_name: task.return_name, period: task.period,
+      arn: r.arn || null, filed_on: r.filed_on || today(), file_name: file ? file.name : null, file_path: path }));
+    await must(sb.from('tasks').update({ status: 'Filed', arn: r.arn || task.arn || null, filed_on: r.filed_on || today() }).eq('id', task.id));
+    return { stored: !!path, logged: !ins.error };
+  },
+  async open(a) {
+    const { data, error } = await sb.storage.from('filing-acks').createSignedUrl(a.file_path, 120);
+    if (error) return toast(friendly(error), true);
+    window.open(data.signedUrl, '_blank', 'noopener');
+  }
+};
+
+/* one work item: button in the work window */
+async function ackForTask(task, after) {
+  const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'application/pdf,.pdf';
+  inp.onchange = async () => {
+    const file = inp.files[0]; if (!file) return;
+    let r;
+    try { toast('Reading the acknowledgement…'); r = ACK.parse(await ACK.readText(file)); }
+    catch (e) { return toast(/password/i.test(e.message || '') ? 'This PDF is locked — open it, save a copy without a password, then try again' : 'Could not read this PDF: ' + friendly(e), true); }
+    const c = clientById(task.client_id) || {}, warn = [];
+    const who = ACK.clientFor(r);
+    if (!r.arn) warn.push('No ARN / acknowledgement number found — type it in the ARN box.');
+    if (who && who.id !== task.client_id) warn.push(`This acknowledgement looks like it is for <b>${esc(who.name)}</b>, not ${esc(c.name)}.`);
+    if (r.form && !ACK.formMatches(r.form, r.kind, task.return_name)) warn.push(`It is for <b>${esc(r.form)}</b>, but this work is ${esc(task.return_name)}.`);
+    if (r.period && ACK.key(r.period) !== ACK.key(task.period)) warn.push(`Period read as <b>${esc(r.period)}</b>; this work is ${esc(task.period || '—')}.`);
+    if (!r.form && !r.arn) warn.push('This does not look like a GST / TDS / MCA acknowledgement. If it is a scanned copy, type the ARN by hand.');
+    modal('Acknowledgement read', `<table class="small"><tbody>
+        <tr><td>Return</td><td><b>${esc(r.form || '—')}</b> ${r.kind ? `<span class="muted">(${esc(r.kind)})</span>` : ''}</td></tr>
+        <tr><td>${r.kind === 'MCA' ? 'CIN / LLPIN' : r.kind === 'TDS' ? 'TAN' : 'GSTIN'}</td><td>${esc(r.gstin || r.tan || r.cin || '—')}</td></tr>
+        <tr><td>Period</td><td>${esc(r.period || '—')}</td></tr>
+        <tr><td>${r.kind === 'MCA' ? 'SRN' : r.kind === 'TDS' ? 'Token / receipt no.' : 'ARN'}</td><td><input name="arn" value="${esc(r.arn || '')}" style="text-transform:uppercase"></td></tr>
+        <tr><td>Filed on</td><td><input type="date" name="filed_on" value="${esc(r.filed_on || today())}"></td></tr></tbody></table>
+      ${warn.length ? `<div class="note warn small">${warn.join('<br>')}</div>` : '<p class="small" style="color:var(--green)">✓ Matches this work.</p>'}
+      <p class="muted small">Saving marks <b>${esc(task.return_name)} · ${esc(task.period || '')}</b> as Filed with this number and date, and keeps the PDF with the work.</p>`,
+      { saveText: 'Mark filed', onSave: async el => {
+        const rr = { ...r, arn: fv(el, 'arn').toUpperCase() || null, filed_on: fv(el, 'filed_on') || today() };
+        const res = await ACK.save(task, rr, file);
+        toast(res.stored ? 'Marked Filed — acknowledgement saved' : 'Marked Filed (the PDF could not be stored — run update-session11.sql)', !res.stored);
+        after && after();
+      } });
+  };
+  inp.click();
+}
+
+/* many at once: Tools → Acknowledgements */
+VIEWS.acks = async v => {
+  await loadRefs();
+  v.innerHTML = `<div class="page-head"><h2>Filing acknowledgements</h2><span class="muted">GST · TDS · MCA</span></div>
+    <div class="card"><div class="bk-drop" id="akDrop" tabindex="0" role="button" aria-label="Choose acknowledgement PDFs">
+      <b>Drop acknowledgement PDFs here</b><span class="muted small">or click to choose — as many as you like (GSTR-1, 3B, IFF, CMP-08, 26Q / Form 140, AOC-4, MGT-7…)</span></div>
+      <input type="file" id="akFile" accept="application/pdf,.pdf" multiple hidden>
+      <p class="muted small" style="margin:10px 0 0">Each PDF is read on this computer. The tracker finds the client by GSTIN / TAN / CIN, picks the work for that return and period, and marks it Filed with the ARN and date. Check the list, then press <b>Mark as filed</b>.</p></div>
+    <div id="akRes"></div><div class="card"><h3>Saved acknowledgements</h3><div id="akSaved"><div class="loading">Loading…</div></div></div>`;
+  let rows = [];
+  const drawSaved = async () => {
+    const r = await safe(sb.from('filing_acks').select('*').order('created_at', { ascending: false }).limit(100));
+    $('#akSaved').innerHTML = r.error ? '<p class="note small">Run <b>update-session11.sql</b> in Supabase to keep acknowledgements.</p>'
+      : r.data.length ? `<div class="table-wrap"><table><thead><tr><th>Client</th><th>Return</th><th>ARN / SRN</th><th>Filed on</th><th>Added</th><th></th></tr></thead><tbody>
+        ${r.data.map(a => `<tr><td>${esc(cLabel(clientById(a.client_id) || { name: '—' }))}</td><td>${esc(a.return_name || '')} <span class="muted small">${esc(a.period || '')}</span></td><td class="small">${esc(a.arn || '—')}</td>
+          <td>${a.filed_on ? fmtDate(a.filed_on) : '—'}</td><td class="small muted">${a.created_at ? fmtDate(a.created_at.slice(0, 10)) : ''} · ${esc(profName(a.uploaded_by) || '')}</td>
+          <td>${a.file_path ? `<button class="btn sm" data-akopen="${a.id}">PDF</button>` : ''}</td></tr>`).join('')}</tbody></table></div>`
+      : '<div class="empty small">None yet.</div>';
+    $('#akSaved').onclick = e => { const id = e.target.dataset.akopen; if (id) ACK.open(r.data.find(a => a.id === id)); };
+  };
+  const draw = () => {
+    if (!rows.length) { $('#akRes').innerHTML = ''; return; }
+    const ready = rows.filter(x => x.task && !x.done && x.r.arn);
+    $('#akRes').innerHTML = `<div class="card"><div class="toolbar" style="margin-top:0"><h3 style="margin:0">Read ${rows.length} file${rows.length > 1 ? 's' : ''}</h3><span class="spacer"></span>
+      <button class="btn primary" id="akGo" ${ready.length ? '' : 'disabled'}>Mark ${ready.length} as filed</button></div>
+      <div class="table-wrap"><table><thead><tr><th>File</th><th>Client</th><th>Return · period</th><th>ARN / SRN</th><th>Filed on</th><th>Work to mark</th></tr></thead><tbody>
+      ${rows.map((x, i) => `<tr class="${x.done ? 'ak-done' : ''}"><td class="small wrap">${esc(x.file.name)}${x.err ? `<div class="late">${esc(x.err)}</div>` : ''}</td>
+        <td>${x.client ? esc(cLabel(x.client)) : `<span class="late small">No client with ${esc(x.r.gstin || x.r.tan || x.r.cin || 'this number')}</span>`}</td>
+        <td>${esc(x.r.form || '—')} <span class="muted small">${esc(x.r.period || '')}</span></td>
+        <td><input class="ak-in" data-akarn="${i}" value="${esc(x.r.arn || '')}" ${x.done ? 'disabled' : ''}></td>
+        <td><input type="date" data-akdt="${i}" value="${esc(x.r.filed_on || '')}" ${x.done ? 'disabled' : ''}></td>
+        <td>${x.done ? '<span class="st st-filed">Filed ✓</span>' : x.client ? `<select data-aktask="${i}"><option value="">— skip —</option>${opts(x.tasks, x.task ? x.task.id : '', t => `${t.return_name} · ${t.period || ''}${t.status === 'Filed' ? ' (already filed)' : ''}`, t => t.id)}</select>${x.task && !x.sure ? '<div class="small" style="color:var(--amber)">best guess — please check</div>' : ''}` : '—'}</td></tr>`).join('')}
+      </tbody></table></div></div>`;
+    $('#akRes').oninput = $('#akRes').onchange = e => {
+      const i = +(e.target.dataset.akarn ?? e.target.dataset.akdt ?? e.target.dataset.aktask ?? -1); if (i < 0) return;
+      const x = rows[i];
+      if (e.target.dataset.akarn != null) x.r.arn = e.target.value.trim().toUpperCase() || null;
+      if (e.target.dataset.akdt != null) x.r.filed_on = e.target.value || null;
+      if (e.target.dataset.aktask != null) { x.task = x.tasks.find(t => t.id === e.target.value) || null; x.sure = true; if (e.type === 'change') draw(); }
+      const n = rows.filter(y => y.task && !y.done && y.r.arn).length, b = $('#akGo'); if (b) { b.disabled = !n; b.textContent = `Mark ${n} as filed`; }
+    };
+    const go = $('#akGo');
+    if (go) go.onclick = async () => {
+      go.disabled = true; let n = 0, stored = 0;
+      for (const x of rows.filter(y => y.task && !y.done && y.r.arn)) {
+        try { const res = await ACK.save(x.task, x.r, x.file); x.done = true; n++; if (res.stored) stored++; } catch (e) { x.err = friendly(e); }
+      }
+      toast(`${n} marked Filed${stored < n ? ` (${n - stored} PDF${n - stored > 1 ? 's' : ''} not stored)` : ''}`, stored < n);
+      draw(); drawSaved();
+    };
+  };
+  const add = async files => {
+    const pdfs = [...files].filter(f => /pdf$/i.test(f.type) || /\.pdf$/i.test(f.name));
+    if (!pdfs.length) return toast('Choose PDF files', true);
+    $('#akRes').innerHTML = '<div class="card"><div class="loading">Reading ' + pdfs.length + ' file' + (pdfs.length > 1 ? 's' : '') + '…</div></div>';
+    const byClient = {};
+    for (const file of pdfs) {
+      const x = { file, r: {}, client: null, tasks: [], task: null, sure: false };
+      try { x.r = ACK.parse(await ACK.readText(file)); } catch (e) { x.err = /password/i.test(e.message || '') ? 'Locked PDF — save a copy without the password' : 'Could not read'; rows.push(x); continue; }
+      x.client = ACK.clientFor(x.r);
+      if (x.client) {
+        if (!byClient[x.client.id]) { const q = await safe(sb.from('tasks').select('id,client_id,work_type,return_name,period,due_date,status,arn').eq('client_id', x.client.id).order('due_date', { ascending: false }).limit(400)); byClient[x.client.id] = q.data || []; }
+        x.tasks = byClient[x.client.id].filter(t => !x.r.kind || ACK.formMatches(x.r.form, x.r.kind, t.return_name) || t.status !== 'Filed');
+        const p = ACK.pick(x.r, byClient[x.client.id]); x.task = p.task; x.sure = p.sure;
+        if (x.task && !x.tasks.includes(x.task)) x.tasks.unshift(x.task);
+      }
+      if (!x.r.form && !x.r.arn) x.err = 'Does not look like an acknowledgement';
+      rows.push(x);
+    }
+    draw();
+  };
+  const drop = $('#akDrop');
+  drop.onclick = () => $('#akFile').click();
+  drop.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); $('#akFile').click(); } };
+  $('#akFile').onchange = e => { add(e.target.files); e.target.value = ''; };
+  drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
+  drop.ondragleave = () => drop.classList.remove('over');
+  drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); add(e.dataTransfer.files); };
+  drawSaved();
+};
+
+/* =====================================================================
+   v28  MONTHLY DOCUMENTS — one page for the month: what each client must send,
+   ticked as it arrives (the same "Documents from client" lists the work items use)
+   ===================================================================== */
+let mdf = { month: '', missing: true, staff: '', q: '' };
+const mdMsg = (c, tasks, missing) => `Dear ${c.contact_person || c.name},\nFor ${tasks.map(t => `${t.return_name} - ${t.period}`).join(', ')}, we are waiting for:\n${missing.map(x => '- ' + x).join('\n')}\nPlease share at the earliest so we can file on time.\nStatus: ${statusUrl(c.status_token)}\n- ${firmName()}`;
+VIEWS.docs = async v => {
+  await loadRefs();
+  if (!mdf.month) mdf.month = today().slice(0, 7);
+  const [y, m] = mdf.month.split('-').map(Number), from = `${mdf.month}-01`, to = iso(new Date(y, m, 0));
+  v.innerHTML = `<div class="page-head"><h2>Documents for the month</h2><span class="muted">What each client still has to send</span></div>
+    <div class="toolbar"><label class="small">Work due in <input type="month" id="mdM" value="${mdf.month}"></label>
+      ${isManager() ? `<select id="mdS"><option value="">All staff</option>${opts(activeStaff(), mdf.staff, p => p.full_name || p.email, p => p.id)}</select>` : ''}
+      <label class="check"><input type="checkbox" id="mdMiss" ${mdf.missing ? 'checked' : ''}> Only clients with documents missing</label>
+      <input type="search" id="mdQ" placeholder="Search client" value="${esc(mdf.q)}"></div><div id="mdList"><div class="loading">Loading…</div></div>`;
+  const tq = await must(sb.from('tasks').select('id,client_id,work_type,return_name,period,due_date,status,assigned_to,data_received_on').gte('due_date', from).lte('due_date', to).neq('status', 'Not applicable').limit(5000));
+  let tasks = tq.data || [];
+  const loadDocs = async () => {
+    const out = [];
+    for (let i = 0; i < tasks.length; i += 150) {
+      const r = await safe(sb.from('task_docs').select('*').in('task_id', tasks.slice(i, i + 150).map(t => t.id)));
+      if (r.error) return null; out.push(...(r.data || []));
+    }
+    return out;
+  };
+  let docs = await loadDocs();
+  if (docs === null) { $('#mdList').innerHTML = '<p class="note warn">Client documents are not set up yet (update-phase4.sql).</p>'; return; }
+  // fill in the standard list for work that has none yet (only open work this person may change)
+  const has = new Set(docs.map(d => d.task_id));
+  const fill = tasks.filter(t => !has.has(t.id) && t.status !== 'Filed' && (isManager() || t.assigned_to === me.id)).flatMap(t => {
+    const tpl = templateFor(t.return_name); return tpl && (tpl.docs || []).length ? tpl.docs.map((n, i) => ({ task_id: t.id, seq: i + 1, name: n })) : [];
+  });
+  if (fill.length) { for (let i = 0; i < fill.length; i += 300) await safe(sb.from('task_docs').upsert(fill.slice(i, i + 300), { onConflict: 'task_id,name', ignoreDuplicates: true })); docs = await loadDocs() || docs; }
+
+  const render = () => {
+    const s = mdf.q.toLowerCase(), byC = {};
+    tasks.filter(t => !mdf.staff || t.assigned_to === mdf.staff).forEach(t => (byC[t.client_id] = byC[t.client_id] || []).push(t));
+    let list = Object.entries(byC).map(([cid, ts]) => {
+      const c = clientById(cid) || { id: cid, name: '—' }, ids = new Set(ts.map(t => t.id)), names = {};
+      docs.filter(d => ids.has(d.task_id)).forEach(d => { (names[d.name] = names[d.name] || []).push(d); });
+      const items = Object.entries(names).map(([n, rows]) => ({ n, rows, got: rows.every(r => r.received) })).sort((a, b) => a.got - b.got || a.n.localeCompare(b.n));
+      return { c, ts, items, missing: items.filter(x => !x.got).map(x => x.n) };
+    }).filter(x => (!s || (x.c.name + ' ' + (x.c.client_code || '')).toLowerCase().includes(s)) && (!mdf.missing || x.missing.length));
+    list.sort((a, b) => b.missing.length - a.missing.length || a.c.name.localeCompare(b.c.name));
+    const allC = Object.keys(byC).length, done = Object.values(byC).length - list.filter(x => x.missing.length).length;
+    $('#mdList').innerHTML = `<p class="muted small">${allC} client${allC === 1 ? '' : 's'} with work due in ${MONTHS_FULL[m - 1]} ${y}${mdf.missing ? ` · showing ${list.length} still missing documents` : ''}. Tick a document when it arrives — it is ticked in every work item that needs it, and the client sees it on their status link. Automatic reminders list what is still missing.</p>` +
+      (list.length ? list.map(x => {
+        const got = x.items.filter(i => i.got).length, pct = x.items.length ? Math.round(100 * got / x.items.length) : 100;
+        const can = isManager() || x.ts.some(t => t.assigned_to === me.id);
+        return `<div class="card md-client" data-cid="${x.c.id}"><div class="md-head"><div><b>${esc(cLabel(x.c))}</b>
+            <div class="muted small">${x.ts.map(t => `${esc(t.return_name)} ${esc(t.period || '')} <span class="st st-${slug(t.status)}">${esc(t.status)}</span>`).join(' · ')}</div></div><span class="spacer"></span>
+            ${x.items.length ? `<span class="small"><b>${got}</b> of ${x.items.length} received</span><div class="hbar"><i class="${pct === 100 ? 'green' : pct >= 50 ? 'amber' : 'red'}" style="width:${pct}%"></i></div>` : '<span class="small muted">No list</span>'}</div>
+          <div class="md-docs">${x.items.length ? x.items.map(i => `<button type="button" class="md-doc ${i.got ? 'got' : ''}" data-mdn="${esc(i.n)}" ${can ? '' : 'disabled'} aria-pressed="${i.got}">${i.got ? '✓' : '○'} ${esc(i.n)}</button>`).join('') : '<span class="muted small">No document list for this work — add one in the work item’s Checklist.</span>'}</div>
+          ${x.missing.length && can ? `<div class="md-foot">${x.c.phone ? `<a class="btn sm" target="_blank" rel="noopener" href="${esc(waShare(mdMsg(x.c, x.ts, x.missing), x.c.phone))}">Ask on WhatsApp</a>` : ''}
+            ${clientEmails(x.c).length ? `<a class="btn sm ghost" href="mailto:${esc(clientEmails(x.c).join(','))}?subject=${encodeURIComponent('Documents needed: ' + x.ts.map(t => t.return_name + ' ' + t.period).join(', '))}&body=${encodeURIComponent(mdMsg(x.c, x.ts, x.missing))}">Email</a>` : ''}
+            <button class="btn sm ghost" data-mdall>Mark all received</button></div>` : ''}</div>`;
+      }).join('') : `<div class="table-wrap"><div class="empty">${mdf.missing ? 'Every client has sent everything for this month 🎉' : 'No work due this month.'}</div></div>`);
+  };
+  const setDocs = async (cid, names, val) => {
+    const ids = new Set(tasks.filter(t => t.client_id === cid).map(t => t.id));
+    const rows = docs.filter(d => ids.has(d.task_id) && names.includes(d.name) && !!d.received !== val);
+    if (!rows.length) return;
+    await must(sb.from('task_docs').update({ received: val }).in('id', rows.map(r => r.id)));
+    rows.forEach(r => { r.received = val; r.received_on = val ? today() : null; });
+  };
+  $('#mdList').onclick = async e => {
+    const card = e.target.closest('.md-client'); if (!card) return;
+    const b = e.target.closest('[data-mdn]'), all = e.target.closest('[data-mdall]');
+    try {
+      if (b) { const n = b.dataset.mdn, now = b.getAttribute('aria-pressed') !== 'true'; b.disabled = true; await setDocs(card.dataset.cid, [n], now); }
+      if (all) { all.disabled = true; await setDocs(card.dataset.cid, [...card.querySelectorAll('[data-mdn]')].map(x => x.dataset.mdn), true); toast('All documents marked received'); }
+      if (b || all) { const t2 = await must(sb.from('tasks').select('id,status,data_received_on').in('id', tasks.filter(t => t.client_id === card.dataset.cid).map(t => t.id))); (t2.data || []).forEach(u => Object.assign(tasks.find(t => t.id === u.id), u)); render(); }
+    } catch (err) { toast(friendly(err), true); render(); }
+  };
+  $('#mdM').onchange = e => { mdf.month = e.target.value || today().slice(0, 7); route(); };
+  if ($('#mdS')) $('#mdS').onchange = e => { mdf.staff = e.target.value; render(); };
+  $('#mdMiss').onchange = e => { mdf.missing = e.target.checked; render(); };
+  $('#mdQ').oninput = e => { mdf.q = e.target.value; render(); };
+  render();
+};
+
+window.__tracker = { ACK, dashTabs, AUDIT, IDLE, clientProblems, HEALTH, HELP, noticeLetter, BANK, bankReadFile, TDSW, MCA, BILL, parseMcaSheets, mcaPlanAll, fillGstWorkings, G1, GR, RECO, gstr3bFromApi, periodToMonth, strongPassword, periodFor, dueDateFor, parseCSV, toCSV, gstLateFee, gstInterest, tdsCalc, rocCalc, monthsSpan, tdsDepositDue, g1json, clientReportHtml, clientReportMsg, rnStage, anyDate, parseRenewalRows, gstPayDue, tdsPayDue, advInstalment, advCurrent, advDue, recurringPlan, taxMsg, addMonths, fyEndOf, obProgress, rnKind };
 start();
 })();
