@@ -414,6 +414,8 @@ async function loadRefs() {
 const canLayoutB = () => !!me && (me.role === 'admin' || me.role === 'staff');      // Performance layout: Admin and Team members only
 function applyLayout() {
   const T = window.TrackerTheme; if (T && T.allowLayout) T.allowLayout(canLayoutB());
+  if (T && T.allowLook) T.allowLook(canLayoutB());              // Professional only for Partners / Managers; Admin & Team can choose
+  if (typeof GAME !== 'undefined') GAME.bar();
 }
 const NI = {   // menu icons (stroke SVG paths)
   dashboard: '<path d="M3 3h7v9H3zM14 3h7v5h-7zM14 12h7v9h-7zM3 16h7v5H3z"></path>',
@@ -481,6 +483,7 @@ function renderShell() {
         <div class="srch" role="search"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"></circle><path d="M21 21l-4.3-4.3"></path></svg>
           <input id="gSearch" type="search" placeholder="Search client, GSTIN, PAN or return…" aria-label="Search client, GSTIN, PAN or return" autocomplete="off"><div class="srch-res" id="gRes" hidden></div></div>
         ${isManager() ? '<button class="btn primary top-new" id="topNew">+ New work</button><button class="btn top-cl" id="topClient">+ Client</button>' : ''}
+        <div id="gameBar" class="game-bar" hidden></div>
         <a href="#/inbox" id="mailBadge" class="mail-badge" hidden title="New mail from clients">📥 <b>0</b></a>
         <div class="user"><button class="btn ghost sm user-btn" id="userBtn"><span class="u-av" aria-hidden="true">${esc(((me.full_name || me.email || '?').trim()[0] || '?').toUpperCase())}</span><span class="u-nm">${esc(me.full_name || me.email)}<small>${esc(ROLE_LABEL[me.role] || me.role)}</small></span> ▾</button>
           <div class="menu" id="userMenu" hidden>
@@ -596,7 +599,16 @@ function pickTheme() {
   if (!T) return toast('Theme is not available', true);
   const start = T.get();
   const okB = canLayoutB();
-  const body = `<div class="small muted" style="font-weight:600;margin-bottom:8px">Layout</div>
+  const looks = [['pro', 'Professional', 'Clean and modern · light blue', 'lk-pro'], ['game', 'Game', 'Points, levels and streaks · purple', 'lk-game'], ['classic', 'Classic', 'The older layouts and colour themes below', 'lk-classic']];
+  const body = `<div class="small muted" style="font-weight:600;margin-bottom:8px">Theme style</div>
+    ${okB ? `<div class="layouts looks">${looks.map(([k, l, d, c]) => `<button type="button" class="lay ${start.look === k ? 'on' : ''}" data-lk="${k}" aria-pressed="${start.look === k}">
+        <span class="lay-pv ${c}" aria-hidden="true"><i></i><i></i><i></i></span><b>${l}</b><span class="small muted">${d}</span></button>`).join('')}</div>`
+      : '<p class="note small">Partners and Managers use the <b>Professional</b> theme.</p>'}
+    <div class="small muted" style="font-weight:600;margin:18px 0 6px">Animation</div>
+    <div class="seg" data-anim-seg>${[['full', 'Full'], ['subtle', 'Subtle'], ['off', 'Off']].map(([k, l]) =>
+      `<button type="button" data-an="${k}" class="${start.anim === k ? 'on' : ''}">${l}</button>`).join('')}</div>
+    <div data-classic>
+    <div class="small muted" style="font-weight:600;margin:18px 0 8px">Layout</div>
     <div class="layouts">
       <button type="button" class="lay ${start.layout !== 'b' || !okB ? 'on' : ''}" data-ly="a" aria-pressed="${start.layout !== 'b' || !okB}">
         <span class="lay-pv lay-a" aria-hidden="true"><i></i><i></i><i></i></span><b>Office</b><span class="small muted">Clean and calm · gentle animation · uses your theme below</span></button>
@@ -607,16 +619,13 @@ function pickTheme() {
     <div class="skins">${T.SKINS.map(([k, name]) => { const [bg, hero, acc] = SKIN_PREVIEW[k];
       return `<button type="button" class="skin ${start.skin === k ? 'on' : ''}" data-s="${k}" aria-pressed="${start.skin === k}">
         <span class="pv" style="background:${bg}"><i style="height:38px;background:${hero}"></i><i style="height:22px;background:${acc}"></i><i style="height:30px;background:${hero};opacity:.6"></i></span><b>${esc(name)}</b></button>`; }).join('')}</div>
-    <div class="small muted" style="font-weight:600;margin:18px 0 6px">Animation</div>
-    <div class="seg" data-anim-seg>${[['full', 'Full'], ['subtle', 'Subtle'], ['off', 'Off']].map(([k, l]) =>
-      `<button type="button" data-an="${k}" class="${start.anim === k ? 'on' : ''}">${l}</button>`).join('')}</div>
     <div data-orig>
     <div class="small muted" style="font-weight:600;margin:18px 0 6px">Light / dark (Original theme)</div>
     <div class="seg" data-mode>${[['light', 'Light'], ['dark', 'Dark'], ['system', 'Same as device']].map(([k, l]) =>
       `<button type="button" data-m="${k}" class="${start.mode === k ? 'on' : ''}">${l}</button>`).join('')}</div>
     <div class="small muted" style="font-weight:600;margin:18px 0 6px">Accent colour (Original theme)</div>
     <div class="swatches">${ACCENTS.map(([k, c, l]) =>
-      `<button type="button" class="swatch ${start.accent === k ? 'on' : ''}" data-a="${k}" title="${l}" aria-label="${l}" style="background:${c}"></button>`).join('')}</div></div>
+      `<button type="button" class="swatch ${start.accent === k ? 'on' : ''}" data-a="${k}" title="${l}" aria-label="${l}" style="background:${c}"></button>`).join('')}</div></div></div>
     <p class="muted small" style="margin-top:16px">Saved on this device only — each person can pick their own. Changes show instantly.</p>`;
   const m = modal('Theme', body, { onSave: () => { toast('Theme saved'); route(); }, saveText: 'Done', wide: true,
     extra: '<button class="btn ghost" data-reset>Reset</button>' });
@@ -630,10 +639,13 @@ function pickTheme() {
     $$('[data-a]', el).forEach(b => b.classList.toggle('on', b.dataset.a === cur.accent));
     $('[data-orig]', el).style.opacity = cur.skin === 'original' ? '1' : '.4';
     $('[data-orig]', el).style.pointerEvents = cur.skin === 'original' ? '' : 'none';
+    $$('[data-lk]', el).forEach(b => { const on = b.dataset.lk === cur.look; b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); });
+    const cls = $('[data-classic]', el); cls.hidden = cur.look !== 'classic';
   };
   sync();
   el.addEventListener('click', e => {
     const b = e.target.closest('button'); if (!b) return;
+    if (b.dataset.lk && T.setLook) { T.setLook(b.dataset.lk); applyLayout(); sync(); }
     if (b.dataset.ly && !b.disabled) { T.setLayout(b.dataset.ly); applyLayout(); sync(); }
     if (b.dataset.s) { T.setSkin(b.dataset.s); sync(); }
     if (b.dataset.an) { T.setAnim(b.dataset.an); sync(); }
@@ -642,12 +654,13 @@ function pickTheme() {
     if (b.hasAttribute('data-reset')) { T.reset(); sync(); }
   });
   // Cancel / close restores the previous choice
-  $$('[data-x]', el).forEach(x => x.addEventListener('click', () => { T.setSkin(start.skin); T.setAnim(start.anim); T.set(start.mode, start.accent); if (T.setLayout) T.setLayout(start.layout); }));
+  $$('[data-x]', el).forEach(x => x.addEventListener('click', () => { T.setSkin(start.skin); T.setAnim(start.anim); T.set(start.mode, start.accent); if (T.setLayout) T.setLayout(start.layout); if (T.setLook && okB) T.setLook(start.look); applyLayout(); }));
 }
 
 const VIEWS = {};
 async function route() {
   if (!me) return;
+  GAME.bar();
   const key = location.hash.replace(/^#\/?/, '').split('?')[0] || 'dashboard';
   const adminOnly = ['clients', 'team', 'settings', 'billing', 'reports'];
   const need = { team: isAdmin, settings: isAdmin, reports: isPartner, clients: isManager, billing: isManager, workload: isManager, health: () => isManager() || isPartner(), activity: isPartner, profit: () => isPartner() && P4() }[key];
@@ -8647,6 +8660,7 @@ VIEWS.dashboard = async v => {
   v.innerHTML = (tabs.length > 1 ? `<div class="dash-tabs" role="tablist">${tabs.map(([k, l]) => `<button role="tab" data-dt="${k}" aria-selected="${k === tab}">${esc(l)}</button>`).join('')}</div>` : '') + '<div id="dashBody"></div>';
   const body = $('#dashBody', v);
   try { await loadRefs(); const b = demoBanner(); if (b) v.insertAdjacentHTML('afterbegin', b); } catch (e) {}
+  if (GAME.on()) { body.insertAdjacentHTML('beforebegin', '<div id="gameHero" class="game-hero" aria-live="polite"></div>'); GAME.hero($('#gameHero', v)); }
   const show = async k => {
     tab = k; try { localStorage.setItem('jlr-dash-tab', k); } catch (e) {}
     $$('[data-dt]', v).forEach(b => b.setAttribute('aria-selected', b.dataset.dt === k));
@@ -8766,10 +8780,10 @@ async function dashOffice(body) {
     <div class="page-head"><h2>Office</h2><span class="muted">${MONTHS_FULL[m - 1]} ${y} · ${filedM} of ${mrows.length} filed</span><span class="spacer"></span>
       <button class="btn primary" id="oReq">+ Work request</button></div>
     <div class="bento-stats card stats4" style="margin-bottom:14px">
-      <a class="mini red" href="#/work" data-oq="overdue"><span>Overdue</span><b>${overdue.length}</b></a>
-      <a class="mini amber" href="#/work" data-oq="soon"><span>Due in 7 days</span><b>${soon.length}</b></a>
-      <a class="mini blue" href="#/work" data-oq="waiting"><span>Waiting for client data</span><b>${rows.filter(r => r.status === 'Pending data').length}</b></a>
-      <a class="mini ${nDue.length ? 'red' : 'green'}" href="#/notices"><span>Notice replies due (7 days)</span><b>${nDue.length}</b></a></div>
+      <a class="mini red k-late" href="#/work" data-oq="overdue">${kpiIco('late')}<span>Overdue</span><b>${overdue.length}</b></a>
+      <a class="mini amber k-soon" href="#/work" data-oq="soon">${kpiIco('soon')}<span>Due in 7 days</span><b>${soon.length}</b></a>
+      <a class="mini blue k-wait" href="#/work" data-oq="waiting">${kpiIco('wait')}<span>Waiting for client data</span><b>${rows.filter(r => r.status === 'Pending data').length}</b></a>
+      <a class="mini ${nDue.length ? 'red' : 'green'} k-note" href="#/notices">${kpiIco('note')}<span>Notice replies due (7 days)</span><b>${nDue.length}</b></a></div>
     ${fees !== null ? `<div class="od-fees"><a class="chip blue" href="#/billing" data-billdue>Fees outstanding ${inr(fees)}</a><span class="chip green">Collected this month ${inr(got || 0)}</span><span id="oGstBill"></span></div>` : ''}
     <h3 class="od-h">This month by department</h3><div class="od-depts">${dept}</div>
     <div class="card"><h3>Team</h3>${people.length || un.length ? `<div class="table-wrap"><table class="od-staff"><thead><tr><th>Person</th><th>Overdue</th><th>Due 7 days</th><th>Waiting data</th><th>All open</th><th>Filed this month</th><th>Requests</th><th></th></tr></thead><tbody>
@@ -8825,10 +8839,10 @@ async function dashMine(body) {
   body.innerHTML = `
     <div class="page-head"><h2>${hello}, ${esc((me.full_name || '').split(' ')[0] || 'there')}</h2><span class="muted">${now.toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' })}</span></div>
     <div class="bento-stats card stats4" style="margin-bottom:14px">
-      <a class="mini red" href="#/work" data-mq="overdue"><span>Overdue</span><b>${overdue.length}</b></a>
-      <a class="mini amber" href="#/work" data-mq="soon"><span>Due today &amp; this week</span><b>${todayL.length + week.length}</b></a>
-      <a class="mini blue" href="#/work" data-mq="waiting"><span>Waiting for client data</span><b>${waiting.length}</b></a>
-      <div class="mini green"><span>Filed this month · on time</span><b>${filed.length}</b><small>${filed.length ? Math.round(100 * ontime / filed.length) + '% on time' : '—'}</small></div></div>
+      <a class="mini red k-late" href="#/work" data-mq="overdue">${kpiIco('late')}<span>Overdue</span><b>${overdue.length}</b></a>
+      <a class="mini amber k-soon" href="#/work" data-mq="soon">${kpiIco('soon')}<span>Due today &amp; this week</span><b>${todayL.length + week.length}</b></a>
+      <a class="mini blue k-wait" href="#/work" data-mq="waiting">${kpiIco('wait')}<span>Waiting for client data</span><b>${waiting.length}</b></a>
+      <div class="mini green k-done">${kpiIco('done')}<span>Filed this month · on time</span><b>${filed.length}</b><small>${filed.length ? Math.round(100 * ontime / filed.length) + '% on time' : '—'}</small></div></div>
     ${reqs && reqs.length ? `<div class="card wr-card"><h3>Requests for you (${reqs.length})</h3><div id="mReq"></div></div>` : ''}
     ${!reqs ? '' : !reqs.length ? '' : ''}
     <div class="card"><h3>Overdue (${overdue.length})</h3><div data-t="late"></div></div>
@@ -9366,6 +9380,66 @@ function demoBanner() {
   return `<p class="note warn small demo-banner">Sample data is loaded (DEMO-01 to DEMO-20). Clear it in <a href="#/settings">Settings → Sample data for the demo</a> before real work starts.</p>`;
 }
 
-window.__tracker = { ACK, dashTabs, AUDIT, IDLE, clientProblems, HEALTH, HELP, noticeLetter, BANK, bankReadFile, TDSW, MCA, BILL, parseMcaSheets, mcaPlanAll, fillGstWorkings, G1, GR, RECO, gstr3bFromApi, periodToMonth, strongPassword, periodFor, dueDateFor, parseCSV, toCSV, gstLateFee, gstInterest, tdsCalc, rocCalc, monthsSpan, tdsDepositDue, g1json, clientReportHtml, clientReportMsg, rnStage, anyDate, parseRenewalRows, gstPayDue, tdsPayDue, advInstalment, advCurrent, advDue, recurringPlan, taxMsg, addMonths, fyEndOf, obProgress, rnKind };
+/* =====================================================================
+   v32  THEMES: Professional (everyone) and Game (Admin & Team members can choose)
+   Game adds points, a level and a filing streak, worked out from real filings:
+     10 points for every return filed this financial year, +5 when it was filed by the due date,
+     +10 for every work request done. Level = every 1,000 points. Streak = working days in a row
+     (Sundays skipped) with at least one filing. Admin sees the office's numbers, a team member their own.
+   ===================================================================== */
+const KPI_SVG = {
+  late: '<path d="M4 6h16v14H4zM8 3v4M16 3v4M4 10h16"></path><path d="M12 13v3M12 18.5h.01"></path>',
+  soon: '<path d="M4 6h16v14H4zM8 3v4M16 3v4M4 10h16"></path><path d="M9 15l2 2 4-4"></path>',
+  wait: '<path d="M7 3h10M7 21h10M8 3c0 5 8 5 8 9s-8 4-8 9M16 3c0 5-8 5-8 9s8 4 8 9"></path>',
+  note: '<path d="M18 16V11a6 6 0 0 0-12 0v5l-2 2h16zM10 21h4"></path>',
+  done: '<path d="M20 6L9 17l-5-5"></path>'
+};
+const kpiIco = k => `<i class="kpi-ico" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${KPI_SVG[k]}</svg></i>`
+  + `<i class="kpi-wm" aria-hidden="true"><svg viewBox="0 0 24 24" width="56" height="56" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${KPI_SVG[k]}</svg></i><i class="kpi-go" aria-hidden="true">›</i>`;
+const GAME = {
+  cache: null, at: 0,
+  on() { return document.documentElement.dataset.look === 'game' && !!me && canLayoutB(); },
+  async stats(force) {
+    if (!force && this.cache && this.cache.uid === me.id && Date.now() - this.at < 300000) return this.cache;
+    const now = new Date(), fy0 = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1, t = today();
+    const mine = q => (isAdmin() ? q : q.eq('assigned_to', me.id));
+    const [f, o, w] = await Promise.all([
+      safe(mine(sb.from('tasks').select('due_date,filed_on').eq('status', 'Filed').gte('filed_on', `${fy0}-04-01`)).limit(20000)),
+      safe(mine(sb.from('tasks').select('id,due_date').not('status', 'in', '("Filed","Not applicable")').lt('due_date', t)).limit(5000)),
+      safe(mine(sb.from('work_requests').select('done_at').eq('status', 'Done')).limit(5000))]);
+    const filed = f.error ? [] : f.data || [], done = w.error ? [] : (w.data || []).filter(x => x.done_at && x.done_at.slice(0, 10) >= `${fy0}-04-01`);
+    const pts = filed.reduce((a, x) => a + 10 + (x.due_date && x.filed_on && x.filed_on <= x.due_date ? 5 : 0), 0) + done.length * 10;
+    const days = new Set(filed.map(x => x.filed_on));
+    let d = new Date(), streak = 0;
+    if (!days.has(iso(d))) d = addDays(d, -1);
+    for (let i = 0; i < 400; i++) { const k = iso(d); if (days.has(k)) { streak++; d = addDays(d, -1); } else if (d.getDay() === 0) d = addDays(d, -1); else break; }
+    const mo = t.slice(0, 7), month = filed.filter(x => (x.filed_on || '').slice(0, 7) === mo);
+    this.cache = { uid: me.id, pts, level: 1 + Math.floor(pts / 1000), into: pts % 1000, streak, overdue: o.error ? 0 : (o.data || []).length,
+      month: month.length, ontime: month.filter(x => x.due_date && x.filed_on <= x.due_date).length };
+    this.at = Date.now();
+    return this.cache;
+  },
+  async bar() {
+    const el = $('#gameBar'); if (!el) return;
+    if (!this.on()) { el.hidden = true; el.innerHTML = ''; return; }
+    const s = await this.stats().catch(() => null); if (!s) return;
+    el.hidden = false;
+    el.innerHTML = `<span class="gb-pts" title="10 points for each return filed this year, +5 when filed by the due date, +10 for each work request done">⭐ <b>${s.pts.toLocaleString('en-IN')}</b> pts</span>
+      <span class="gb-lvl" title="${1000 - s.into} points to level ${s.level + 1}">🏆 <span><b>Level ${s.level}</b><i class="gb-prog"><i style="width:${Math.round(s.into / 10)}%"></i></i></span></span>`;
+  },
+  async hero(el) {
+    if (!el) return;
+    const s = await this.stats().catch(() => null); if (!s) { el.remove(); return; }
+    const who = isAdmin() ? 'The office is' : 'You’re';
+    const [h, sub] = s.overdue ? [`${s.overdue} item${s.overdue > 1 ? 's' : ''} overdue — let’s clear ${s.overdue > 1 ? 'them' : 'it'}!`, `${s.month} filed this month · finish the overdue work to keep the streak going.`]
+      : [s.month ? 'Keep up the great work!' : 'A fresh month — let’s go!', `${who} on track this month · ${s.month} filed${s.month ? `, ${Math.round(100 * s.ontime / s.month)}% on time` : ''}.`];
+    el.innerHTML = `<div class="gh-trophy" aria-hidden="true">🏆</div>
+      <div class="gh-text"><b>${esc(h)}</b><span>${esc(sub)}</span></div>
+      <div class="gh-art" aria-hidden="true"><span class="gh-mtn">⛰️</span><span class="gh-flag">🚩</span><span class="gh-rocket">🚀</span></div>
+      <div class="gh-streak" title="Working days in a row with at least one filing (Sundays skipped)"><span aria-hidden="true">🔥</span><span><small>${isAdmin() ? 'Office streak' : 'Your streak'}</small><b>${s.streak} day${s.streak === 1 ? '' : 's'}</b></span></div>`;
+  }
+};
+
+window.__tracker = { GAME, ACK, dashTabs, AUDIT, IDLE, clientProblems, HEALTH, HELP, noticeLetter, BANK, bankReadFile, TDSW, MCA, BILL, parseMcaSheets, mcaPlanAll, fillGstWorkings, G1, GR, RECO, gstr3bFromApi, periodToMonth, strongPassword, periodFor, dueDateFor, parseCSV, toCSV, gstLateFee, gstInterest, tdsCalc, rocCalc, monthsSpan, tdsDepositDue, g1json, clientReportHtml, clientReportMsg, rnStage, anyDate, parseRenewalRows, gstPayDue, tdsPayDue, advInstalment, advCurrent, advDue, recurringPlan, taxMsg, addMonths, fyEndOf, obProgress, rnKind };
 start();
 })();
