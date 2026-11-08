@@ -8740,7 +8740,7 @@ async function dashSystemTab(body) {
     const n = nw.data || {}, a = aw.data || {}, c = ch.data || {}, mm = ml.data || {}, b = (bk.data || [])[0], ia = ai.data || {}, w = ws.data || {};
     const bkAge = b ? (Date.now() - new Date(b.taken_at)) / 36e5 : null;
     $('#sysGrid', body).innerHTML = [
-      tile('WhatsApp reminders', wa.error || ws.error ? null : !!w.enabled, wa.error || ws.error ? 'not set up' : w.enabled ? 'on — staff 9:30 AM daily' : 'switched off', '#/settings'),
+      tile('WhatsApp reminders', wa.error || ws.error || !w.enabled ? null : true, wa.error || ws.error ? 'not set up' : w.enabled ? 'on — staff 9:30 AM daily' : 'switched off', '#/settings'),
       tile('Notice watch', nw.error ? null : n.connected && n.enabled ? !n.last_error && !!n.last_check_at && (Date.now() - new Date(n.last_check_at)) < 3 * 36e5 : null, nw.error ? 'not installed' : !n.connected ? 'not set up' : n.last_error ? 'problem: ' + esc(n.last_error) : 'last check ' + when(n.last_check_at), '#/notices'),
       tile('Automatic GST work', aw.error ? null : a.gst_enabled ? true : null, aw.error ? 'not installed' : a.gst_enabled ? 'last run ' + when(a.last_run_at) + (a.last_made != null ? ` · ${a.last_made} made` : '') : 'switched off', '#/settings'),
       tile('Data chasing', ch.error ? null : c.enabled ? !c.failed_7 : null, ch.error ? 'not installed' : c.enabled ? `on · ${c.sent_7 || 0} clients reminded in 7 days${c.failed_7 ? ` · ${c.failed_7} failed` : ''}${c.queued ? ` · ${c.queued} emails waiting` : ''}` : 'switched off', '#/settings'),
