@@ -424,6 +424,7 @@ const NI = {   // menu icons (stroke SVG paths)
   gstw: '<path d="M4 4h16v16H4z"></path><path d="M8 9h8M8 13h8M8 17h5"></path>',
   acks: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"></path><path d="M14 3v5h5M9 14l2 2 4-4"></path>',
   docs: '<path d="M9 11l3 3L22 4"></path><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>',
+  profit: '<path d="M3 17l6-6 4 4 8-8"></path><path d="M14 7h7v7"></path>',
   activity: '<path d="M12 8v4l3 2"></path><circle cx="12" cy="12" r="9"></circle>',
   health: '<path d="M3 12h4l2-5 4 10 2-5h6"></path>',
   refresh: '<path d="M21 12a9 9 0 1 1-2.6-6.4M21 3v6h-6"></path>',
@@ -458,7 +459,7 @@ function navGroups() {
     ['Tools', [['bank', 'Bank statements', 'bank'], ['acks', 'Filing acknowledgements'], ['calc', 'Late fee calculator'], ['checklists', 'Checklists'], ['updates', 'Law updates']]],
     ['Clients', [isManager() && ['clients', 'Clients'], ['docs', 'Documents for the month'], ['onboarding', 'Onboarding'], ['renewals', 'Renewals (DSC, LUT…)'], ['inbox', 'Client mail'], ['clientreport', 'Monthly client reports']]],
     ['Payments & billing', [['taxpay', 'Tax payment intimation'], isManager() && ['billing', 'Billing & fees']]],
-    (isManager() || isPartner()) && ['Office', [['health', 'Client health'], isManager() && ['workload', 'Team workload'], isPartner() && ['reports', 'Reports'], isPartner() && ['activity', 'Activity log']]],
+    (isManager() || isPartner()) && ['Office', [['health', 'Client health'], isManager() && ['workload', 'Team workload'], isPartner() && ['profit', 'Fees & profitability'], isPartner() && ['reports', 'Reports'], isPartner() && ['activity', 'Activity log']]],
     isAdmin() && ['Admin', [['team', 'Team & logins'], ['settings', 'Settings']]]
   ].filter(Boolean);
   return G.map(([g, items]) => `<div class="side-g"><span class="side-gl">${esc(g)}</span>${items.filter(Boolean).map(([k, l, ic]) => {
@@ -649,7 +650,7 @@ async function route() {
   if (!me) return;
   const key = location.hash.replace(/^#\/?/, '').split('?')[0] || 'dashboard';
   const adminOnly = ['clients', 'team', 'settings', 'billing', 'reports'];
-  const need = { team: isAdmin, settings: isAdmin, reports: isPartner, clients: isManager, billing: isManager, workload: isManager, health: () => isManager() || isPartner(), activity: isPartner }[key];
+  const need = { team: isAdmin, settings: isAdmin, reports: isPartner, clients: isManager, billing: isManager, workload: isManager, health: () => isManager() || isPartner(), activity: isPartner, profit: () => isPartner() && P4() }[key];
   if (!VIEWS[key] || (need && !need())) { location.hash = '#/dashboard'; return; }
   const navKey = key === 'work' ? ({ GST: 'work-gst', TDS: 'work-tds', 'ROC/MCA': 'work-mca' }[wf.type] || 'work') : key === 'notices' ? ({ GST: 'notices-gst', TDS: 'notices-tds', 'ROC/MCA': 'notices-mca' }[nf.dept] || 'notices') : key;
   $$('#nav a').forEach(a => { const on = a.dataset.k === navKey; a.classList.toggle('active', on); if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
@@ -1675,7 +1676,10 @@ function editClient(c) {
     ${P4() ? `<label class="full">Address (for invoices)<textarea name="address" rows="2">${esc(c.address || '')}</textarea></label>` : ''}
     <p class="full muted small" style="margin:0">Several emails? Separate them with commas — reminders go to the first one.</p>
     <div class="full"><div class="small muted" style="margin-bottom:6px;font-weight:500">Services you handle for this client</div>
-      <div class="toolbar" style="margin:0" data-svc>${[...WORK_TYPES, ...(c.services || []).filter(x => !WORK_TYPES.includes(x))].map(w => `<label class="check"><input type="checkbox" value="${esc(w)}" ${(c.services || []).includes(w) ? 'checked' : ''}> ${wtIcon(w, 16)} ${esc(w)}</label>`).join('')}</div></div>
+      <div class="toolbar" style="margin:0" data-svc>${[...WORK_TYPES, ...(c.services || []).filter(x => !WORK_TYPES.includes(x))].map(w => `<label class="check"><input type="checkbox" value="${esc(w)}" ${(c.services || []).includes(w) ? 'checked' : ''}> ${wtIcon(w, 16)} ${esc(w)}</label>`).join('')}</div>
+      ${'tds_pay_work' in c || isNew && clients.some(x => 'tds_pay_work' in x) ? `<div class="toolbar" style="margin:6px 0 0"><span class="small muted">TDS data emails on the 1st:</span>
+        <label class="check"><input type="checkbox" name="tds_pay_work" ${c.tds_pay_work ? 'checked' : ''}> TDS payment workings (monthly)</label>
+        <label class="check"><input type="checkbox" name="tds_return" ${c.tds_return ? 'checked' : ''}> TDS return filing (quarterly)</label></div>` : ''}</div>
     <label class="full">Notes<textarea name="notes">${esc(c.notes || '')}</textarea></label>
     <label class="check full"><input type="checkbox" name="active" ${c.active ? 'checked' : ''}> Active client</label>
     ${'chase_off' in c ? `<label class="check full"><input type="checkbox" name="chase_off" ${c.chase_off ? 'checked' : ''}> Don't send automatic “please send your documents” reminders to this client</label>` : ''}
@@ -1697,7 +1701,8 @@ function editClient(c) {
         contact_person: fv(el, 'contact_person') || null, phone: cleanPhone(fv(el, 'phone')), email: cleanEmail(fv(el, 'email')),
         ...(P4() ? { address: fv(el, 'address') || null } : {}),
         notes: fv(el, 'notes') || null, active: $('[name=active]', el).checked, ...($('[name=chase_off]', el) ? { chase_off: $('[name=chase_off]', el).checked } : {}),
-        services: $$('[data-svc] input:checked', el).map(i => i.value)
+        services: $$('[data-svc] input:checked', el).map(i => i.value),
+        ...($('[name=tds_pay_work]', el) ? { tds_pay_work: $('[name=tds_pay_work]', el).checked, tds_return: $('[name=tds_return]', el).checked } : {})
       };
       const probs = clientProblems(rec, isNew ? null : c.id);
       $$('.bad', el).forEach(x => x.classList.remove('bad'));
@@ -1821,6 +1826,9 @@ VIEWS.settings = async v => {
   const ch = document.createElement('div');
   v.appendChild(ch);
   renderChaseSettings(ch);
+  const dr = document.createElement('div');
+  v.appendChild(dr);
+  renderDataRequestSettings(dr);
   const ai = document.createElement('div');
   v.appendChild(ai);
   renderAiSettings(ai);
@@ -2129,6 +2137,7 @@ VIEWS.billing = async v => {
     try { const r = await zohoCall('sync'); toast(r.summary || 'Synced'); route(); } catch (err) { toast(friendly(err), true); e.target.disabled = false; }
   };
   const box = $('#billBody', v);
+  renderClaims(box, invoices);
   if (billTab === 'toinv') renderToInvoice(box, toInv, fees);
   if (billTab === 'inv') renderInvoices(box, invoices);
   if (billTab === 'due') renderDue(box, due);
@@ -2224,6 +2233,34 @@ function renderToInvoice(box, rows, fees = []) {
   });
 }
 
+/* v29: payments reported by clients in the portal */
+async function renderClaims(box, invoices) {
+  const r = await safe(sb.from('payment_claims').select('*').eq('status', 'New').order('created_at'));
+  if (r.error || !r.data.length || !document.body.contains(box)) return;
+  const host = document.createElement('div'); box.before(host);
+  host.innerHTML = `<div class="card claim-card"><h3 style="margin-top:0">Payments reported by clients (${r.data.length})</h3>
+    <p class="muted small" style="margin-top:-6px">Clients said they paid from the portal. Check the bank, then confirm (it is recorded as a payment) or reject.</p>
+    <div class="table-wrap"><table><thead><tr><th>Client</th><th>Invoice</th><th class="r">Amount</th><th>Paid on</th><th>Mode · reference</th><th></th></tr></thead><tbody>
+    ${r.data.map(c => { const inv = invoices.find(i => i.id === c.invoice_id); return `<tr><td>${esc(cLabel(clientById(c.client_id) || { name: '—' }))}</td><td>${inv ? esc(inv.inv_no) : '<span class="muted">not chosen</span>'}</td>
+      <td class="r"><b>${inr(c.amount)}</b></td><td>${fmtDate(c.paid_on)}</td><td class="small">${esc(c.mode)} · ${esc(c.ref || '')}${c.note ? `<div class="muted">${esc(c.note)}</div>` : ''}</td>
+      <td class="row-btns"><button class="btn sm primary" data-clok="${c.id}">Confirm</button><button class="btn sm ghost" data-clno="${c.id}">Reject</button></td></tr>`; }).join('')}</tbody></table></div></div>`;
+  host.onclick = async e => {
+    const ok = e.target.dataset.clok, no = e.target.dataset.clno, c = r.data.find(x => x.id === (ok || no)); if (!c) return;
+    if (no) {
+      const why = prompt('Reason (the client sees this), e.g. "Not received in the bank yet"'); if (why === null) return;
+      try { await must(sb.from('payment_claims').update({ status: 'Rejected', reply: why || null, handled_by: me.id, handled_at: new Date().toISOString() }).eq('id', c.id)); toast('Rejected'); route(); } catch (err) { toast(friendly(err), true); }
+      return;
+    }
+    const open = invoices.filter(i => i.client_id === c.client_id && num(i.total) - num(i.paid) > 0.009);
+    const done = async pay => { await must(sb.from('payment_claims').update({ status: 'Confirmed', payment_id: pay ? pay.id : null, handled_by: me.id, handled_at: new Date().toISOString() }).eq('id', c.id)); };
+    const inv = invoices.find(i => i.id === c.invoice_id) || (open.length === 1 ? open[0] : null);
+    if (inv) return addPayment(inv, c, done);
+    if (!open.length) return toast('This client has no unpaid invoice — record it manually', true);
+    const m = modal('Which invoice?', `<label class="full">Invoice<select name="i">${opts(open, '', i => `${i.inv_no} · ${fmtDate(i.inv_date)} · balance ${inr(num(i.total) - num(i.paid))}`, i => i.id)}</select></label>`,
+      { saveText: 'Next', onSave: async el => { const pick = open.find(i => i.id === fv(el, 'i')); setTimeout(() => addPayment(pick, c, done), 0); } });
+  };
+}
+
 function invStatus(i) {
   if (i.zoho_status === 'void') return '<span class="st st-not-applicable">Void</span>';
   const bal = num(i.total) - num(i.paid);
@@ -2259,18 +2296,20 @@ function renderInvoices(box, invoices) {
     }
   };
 }
-function addPayment(i) {
+function addPayment(i, pre = null, after = null) {
   const bal = (num(i.total) - num(i.paid)).toFixed(2);
   modal(`Payment for ${i.inv_no}`, `<p class="muted small" style="margin-top:0">${esc(clientName(i.client_id))} · Total ${inr(i.total)} · Balance <b>${inr(bal)}</b></p>
-    <div class="form-grid"><label>Received on<input type="date" name="d" value="${today()}"></label>
-      <label>Amount (₹)<input type="number" name="a" min="1" step="0.01" value="${bal}"></label>
-      <label>Mode<select name="m">${opts(['Bank transfer', 'UPI', 'Cheque', 'Cash', 'Other'], 'Bank transfer')}</select></label>
-      <label>Reference (UTR / cheque no.)<input name="r"></label></div>`, {
+    ${pre ? '<p class="note small">Reported by the client in the portal — check it reached the bank before saving.</p>' : ''}
+    <div class="form-grid"><label>Received on<input type="date" name="d" value="${esc(pre ? pre.paid_on : today())}"></label>
+      <label>Amount (₹)<input type="number" name="a" min="1" step="0.01" value="${pre ? esc(pre.amount) : bal}"></label>
+      <label>Mode<select name="m">${opts(['Bank transfer', 'UPI', 'Cheque', 'Cash', 'Other'], pre && ['Bank transfer', 'UPI', 'Cheque', 'Cash', 'Other'].includes(pre.mode) ? pre.mode : 'Bank transfer')}</select></label>
+      <label>Reference (UTR / cheque no.)<input name="r" value="${esc(pre ? pre.ref || '' : '')}"></label></div>`, {
     saveText: 'Save payment',
     onSave: async el => {
       const amount = num(fv(el, 'a')); if (!(amount > 0)) { toast('Enter the amount', true); return false; }
       const { data: pay } = await must(sb.from('payments').insert({ invoice_id: i.id, paid_on: fv(el, 'd') || today(), amount, mode: fv(el, 'm'), ref: fv(el, 'r') || null }).select().single());
       toast('Payment saved');
+      if (after) await after(pay);
       if (i.zoho_invoice_id && zohoOn() && pay) {
         try { await zohoCall('push_payment', { payment_id: pay.id }); toast('Payment recorded in Zoho too'); }
         catch (zerr) { toast('Saved here, but not in Zoho: ' + friendly(zerr), true); }
@@ -2407,6 +2446,7 @@ function invoiceSettingsCard() {
       ${f('invoice_prefix', 'Invoice prefix', 'JLR')}${f('next_invoice_no', 'Next invoice number', '1', 'number')}
       ${f('gst_rate', 'GST rate %', '18', 'number')}${f('sac_code', 'SAC code', 'e.g. 998221')}
       <label class="full">Bank details (for invoices & payment reminders)<textarea name="bank_details" rows="3" placeholder="Bank, A/c no., IFSC, UPI ID">${esc(settings.bank_details || '')}</textarea></label>
+      ${'upi_id' in settings ? `<label>UPI ID (clients can pay from the portal)<input name="upi_id" value="${esc(settings.upi_id || '')}" placeholder="e.g. jlrco@okhdfcbank"></label>` : ''}
     </div><div class="toolbar" style="margin-top:12px"><button class="btn primary" id="saveInv">Save invoice details</button>
       <span class="muted small">Invoice numbers look like ${esc(settings.invoice_prefix || 'JLR')}/2026-27/${String(settings.next_invoice_no || 1).padStart(3, '0')}</span></div></div>`;
 }
@@ -2417,6 +2457,7 @@ function bindInvoiceSettings(v) {
     const rec = {};
     ['firm_address', 'firm_gstin', 'firm_pan', 'firm_phone', 'firm_email', 'invoice_prefix', 'sac_code', 'bank_details'].forEach(k => rec[k] = fv(box, k) || null);
     rec.invoice_prefix = rec.invoice_prefix || 'JLR';
+    if ($('[name=upi_id]', box)) { rec.upi_id = fv(box, 'upi_id').trim() || null; if (rec.upi_id && !/^[\w.\-]{2,}@[a-zA-Z]{2,}$/.test(rec.upi_id)) return toast('UPI ID looks wrong (e.g. name@okhdfcbank)', true); }
     if (rec.firm_gstin) rec.firm_gstin = rec.firm_gstin.toUpperCase();
     rec.next_invoice_no = Math.max(1, parseInt(fv(box, 'next_invoice_no'), 10) || 1);
     rec.gst_rate = num(fv(box, 'gst_rate'));
@@ -9105,6 +9146,159 @@ VIEWS.docs = async v => {
   $('#mdQ').oninput = e => { mdf.q = e.target.value; render(); };
   render();
 };
+
+
+/* =====================================================================
+   v29  FEES & PROFITABILITY (#/profit, Partners & Admin)
+   Per client for a financial year: work done, billed (before GST), received, outstanding,
+   average fee per return against the Fee list, unbilled filed work, effort (notices, follow-ups),
+   days to pay — and flags: under-charged, not billed, slow payer.
+   ===================================================================== */
+let pf = { fy: 0, flag: '', q: '', sort: 'billed' };
+VIEWS.profit = async v => {
+  await loadRefs();
+  const now = new Date(), curFy = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+  if (!pf.fy) pf.fy = curFy;
+  const from = `${pf.fy}-04-01`, to = `${pf.fy + 1}-03-31`, fyL = `FY ${pf.fy}-${String(pf.fy + 1).slice(2)}`;
+  v.innerHTML = `<div class="page-head"><h2>Fees &amp; profitability</h2><span class="muted">${fyL}</span><span class="spacer"></span><button class="btn" id="pfCsv">Export CSV</button></div>
+    <div class="toolbar"><select id="pfFy">${[0, 1, 2].map(k => curFy - k).map(y => `<option value="${y}" ${y === pf.fy ? 'selected' : ''}>FY ${y}-${String(y + 1).slice(2)}</option>`).join('')}</select>
+      <select id="pfFlag"><option value="">All clients</option><option value="under">Under-charged</option><option value="unbilled">Work not billed</option><option value="slow">Slow payers</option><option value="nofee">Work with no fee</option></select>
+      <select id="pfSort"><option value="billed">Sort: billed (high → low)</option><option value="rate">Sort: % of standard fee (low → high)</option><option value="work">Sort: work done</option><option value="due">Sort: outstanding</option></select>
+      <input type="search" id="pfQ" placeholder="Search client" value="${esc(pf.q)}"></div><div id="pfBody"><div class="loading">Working it out…</div></div>`;
+  $('#pfFlag').value = pf.flag; $('#pfSort').value = pf.sort;
+  const [tk, iv, py, fr, nt, fu] = await Promise.all([
+    must(sb.from('tasks').select('id,client_id,work_type,return_name,period,due_date,status,filed_on,fee,invoice_id').eq('status', 'Filed').gte('due_date', from).lte('due_date', iso(addDays(new Date(to + 'T00:00:00'), 31))).limit(20000)),
+    safe(sb.from('invoices').select('id,client_id,inv_no,inv_date,subtotal,total,paid').gte('inv_date', from).lte('inv_date', to).limit(10000)),
+    safe(sb.from('payments').select('invoice_id,amount,paid_on').gte('paid_on', from).limit(20000)),
+    must(sb.from('fee_rates').select('*')),
+    safe(sb.from('notices').select('client_id,notice_date').gte('notice_date', from).lte('notice_date', to).limit(5000)),
+    safe(sb.from('followups').select('client_id,kind,on_date').gte('on_date', from).lte('on_date', to).limit(20000))
+  ]);
+  const tasks = tk.data || [], invs = iv.error ? [] : iv.data || [], pays = py.error ? [] : py.data || [], fees = fr.data || [];
+  const nots = nt.error ? [] : nt.data || [], fus = fu.error ? [] : fu.data || [];
+  const std = r => { const f = fees.find(x => !x.client_id && lc(x.return_name) === lc(r.return_name)); return f ? num(f.amount) : null; };
+  const own = r => { const f = fees.find(x => x.client_id === r.client_id && lc(x.return_name) === lc(r.return_name)); return f ? num(f.amount) : null; };
+  const charged = r => r.fee != null ? num(r.fee) : own(r) ?? std(r) ?? 0;
+  const rows = clients.filter(c => c.active || tasks.some(t => t.client_id === c.id) || invs.some(i => i.client_id === c.id)).map(c => {
+    const w = tasks.filter(t => t.client_id === c.id), ci = invs.filter(i => i.client_id === c.id);
+    const billed = ci.reduce((a, i) => a + num(i.subtotal != null ? i.subtotal : i.total), 0), billedG = ci.reduce((a, i) => a + num(i.total), 0);
+    const recd = ci.reduce((a, i) => a + num(i.paid), 0), due = billedG - recd;
+    const unb = w.filter(t => !t.invoice_id), unbVal = unb.reduce((a, t) => a + charged(t), 0);
+    const withStd = w.filter(t => std(t) != null && std(t) > 0), stdVal = withStd.reduce((a, t) => a + std(t), 0), chVal = withStd.reduce((a, t) => a + charged(t), 0);
+    const pct = stdVal ? Math.round(100 * chVal / stdVal) : null;
+    const nofee = w.filter(t => charged(t) === 0).length;
+    const dpay = ci.filter(i => num(i.total) - num(i.paid) <= 0.009).map(i => { const ps = pays.filter(p => p.invoice_id === i.id).map(p => p.paid_on).sort(); return ps.length ? (new Date(ps[ps.length - 1]) - new Date(i.inv_date)) / 864e5 : null; }).filter(x => x != null);
+    const oldDue = ci.filter(i => num(i.total) - num(i.paid) > 0.009).map(i => (now - new Date(i.inv_date)) / 864e5);
+    const days = dpay.length ? Math.round(dpay.reduce((a, b) => a + b, 0) / dpay.length) : null;
+    const flags = [];
+    if (pct != null && pct < 80) flags.push(['under', `Under-charged (${pct}% of standard)`, 'amber']);
+    if (unb.length) flags.push(['unbilled', `${unb.length} filed, not billed`, 'red']);
+    if ((days != null && days > 60) || oldDue.some(d => d > 90)) flags.push(['slow', days != null && days > 60 ? `Pays in ~${days} days` : 'Unpaid over 90 days', 'red']);
+    if (nofee) flags.push(['nofee', `${nofee} with no fee set`, 'amber']);
+    return { c, work: w.length, billed, recd, due, avg: w.length ? billed / Math.max(1, w.length - unb.length) : 0, pct, unb: unb.length, unbVal,
+      notices: nots.filter(n => n.client_id === c.id).length, fups: fus.filter(f => f.client_id === c.id).length, days, flags };
+  });
+  const render = () => {
+    const s = pf.q.toLowerCase();
+    let list = rows.filter(r => (!s || cLabel(r.c).toLowerCase().includes(s)) && (!pf.flag || r.flags.some(f => f[0] === pf.flag)));
+    const by = { billed: (a, b) => b.billed - a.billed, rate: (a, b) => (a.pct ?? 999) - (b.pct ?? 999), work: (a, b) => b.work - a.work, due: (a, b) => b.due - a.due }[pf.sort];
+    list.sort(by);
+    const T = k => rows.reduce((a, r) => a + r[k], 0);
+    const under = rows.filter(r => r.flags.some(f => f[0] === 'under')).length;
+    $('#pfBody').innerHTML = `<div class="bento-stats card stats4" style="margin-bottom:14px">
+        <div class="mini blue"><span>Billed (before GST)</span><b>${inr(T('billed'))}</b></div>
+        <div class="mini green"><span>Received</span><b>${inr(T('recd'))}</b></div>
+        <div class="mini red"><span>Outstanding</span><b>${inr(T('due'))}</b></div>
+        <div class="mini amber"><span>Filed but not billed</span><b>${inr(T('unbVal'))}</b><small>${rows.reduce((a, r) => a + r.unb, 0)} returns · ${under} client${under === 1 ? '' : 's'} under-charged</small></div></div>
+      ${list.length ? `<div class="table-wrap"><table class="pf-table"><thead><tr><th>Client</th><th class="r">Returns filed</th><th class="r">Billed</th><th class="r">Received</th><th class="r">Outstanding</th>
+        <th class="r">Avg fee / return</th><th class="r">vs standard fee</th><th class="r">Not billed</th><th class="r">Effort</th><th>Flags</th></tr></thead><tbody>
+        ${list.map(r => `<tr><td class="wrap"><b>${esc(cLabel(r.c))}</b>${r.c.active ? '' : ' <span class="badge">inactive</span>'}</td><td class="r">${r.work}</td><td class="r">${inr(r.billed)}</td><td class="r">${inr(r.recd)}</td>
+          <td class="r ${r.due > 0.009 ? 'late' : ''}">${inr(r.due)}</td><td class="r">${r.work ? inr(Math.round(r.avg)) : '—'}</td>
+          <td class="r">${r.pct == null ? '<span class="muted">—</span>' : `<span class="${r.pct < 80 ? 'late' : r.pct >= 100 ? 'ok-t' : ''}">${r.pct}%</span>`}</td>
+          <td class="r">${r.unb ? `${r.unb} · ${inr(r.unbVal)}` : '—'}</td>
+          <td class="r small" title="Notices handled · follow-ups logged">${r.notices} notices · ${r.fups} follow-ups</td>
+          <td class="wrap">${r.flags.map(f => `<span class="chip ${f[2]} small">${esc(f[1])}</span>`).join(' ') || '<span class="muted small">OK</span>'}</td></tr>`).join('')}
+        </tbody></table></div>` : '<div class="table-wrap"><div class="empty">No clients match.</div></div>'}
+      <p class="muted small">“vs standard fee” compares what was charged for each return with the standard Fee list (100% = standard). “Not billed” = filed returns with no invoice yet (valued at their fee). Effort counts notices and client follow-ups in the year. Invoices and payments are for invoices dated in ${fyL}.</p>`;
+  };
+  render();
+  $('#pfFy').onchange = e => { pf.fy = +e.target.value; route(); };
+  $('#pfFlag').onchange = e => { pf.flag = e.target.value; render(); };
+  $('#pfSort').onchange = e => { pf.sort = e.target.value; render(); };
+  $('#pfQ').oninput = e => { pf.q = e.target.value; render(); };
+  $('#pfCsv').onclick = () => download(`fees-profitability-${fyL.replace(/\s/g, '')}.csv`, toCSV([['Client code', 'Client', 'Returns filed', 'Billed (before GST)', 'Received', 'Outstanding', 'Avg fee per return', '% of standard fee', 'Filed not billed (count)', 'Filed not billed (value)', 'Notices', 'Follow-ups', 'Avg days to pay', 'Flags'],
+    ...rows.map(r => [r.c.client_code || '', r.c.name, r.work, Math.round(r.billed), Math.round(r.recd), Math.round(r.due), Math.round(r.avg), r.pct ?? '', r.unb, Math.round(r.unbVal), r.notices, r.fups, r.days ?? '', r.flags.map(f => f[1]).join('; ')])]));
+};
+
+
+/* =====================================================================
+   v30  MONTHLY DATA REQUEST EMAILS (Settings card)
+   GST data · TDS payment workings · TDS return filing — sent on the 1st at 9 AM IST
+   ===================================================================== */
+const DR_KIND = { gst: 'GST data request', tds_pay: 'TDS payment workings', tds_return: 'TDS return filing' };
+const DR_TAGS = { gst: '{contact} {client} {period} {returns} {due_line} {reply_by} {portal} {firm} {firm_phone}',
+  tds_pay: '{contact} {client} {period} {due} {reply_by} {portal} {firm} {firm_phone}',
+  tds_return: '{contact} {client} {quarter} {fy} {quarter_months} {forms} {due} {reply_by} {portal} {firm} {firm_phone}' };
+async function renderDataRequestSettings(box) {
+  const r = await safe(sb.rpc('dr_status'));
+  if (r.error) { box.innerHTML = '<div class="card"><h3>Monthly data request emails</h3><p class="note small">Run <b>update-session13.sql</b> in Supabase to switch this on.</p></div>'; return; }
+  const s = r.data || {}, edit = isPartner(), plan = s.plan || [], cur = s.this_month || [];
+  const nd = s.next_day ? fmtDate(s.next_day) : '1st of next month', count = k => plan.filter(p => p.kind === k).length;
+  const noMail = plan.filter(p => !p.to), curLeft = cur.filter(p => !p.already && p.to);
+  box.innerHTML = `<div class="card"><h3>Monthly data request emails</h3>
+    <p class="muted">On the 1st of every month at 9 AM the office mailbox sends each client the data request they need — <b>GST data</b> (monthly filers every month, QRMP clients after each quarter), <b>TDS payment workings</b> (every month) and <b>TDS return filing</b> (1 Jul, 1 Oct, 1 Jan, 1 Apr). Signed with the firm name. Clients reply to the email or upload on the client portal; if nothing comes by the reply-by date, data chasing takes over.</p>
+    <div class="mail-stat"><span class="pill ${s.enabled ? 'g' : 'a'}">${s.enabled ? '● On' : 'Off'}</span>
+      <span class="small">Last run: <b>${s.last_run_at ? new Date(s.last_run_at).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : '—'}</b>${s.last_note ? ' · ' + esc(s.last_note) : ''}</span></div>
+    <div class="form-grid" style="margin-top:12px">
+      <label>GST data — reply by (day of month)<input type="number" id="drG" min="1" max="28" value="${esc(s.gst_reply_day)}"></label>
+      <label>TDS payment workings — reply by<input type="number" id="drP" min="1" max="28" value="${esc(s.tdsp_reply_day)}"></label>
+      <label>TDS return filing — reply by<input type="number" id="drR" min="1" max="28" value="${esc(s.tdsr_reply_day)}"></label></div>
+    <label class="check" style="margin-top:8px"><input type="checkbox" id="drOn" ${s.enabled ? 'checked' : ''}> <b>Switched on</b> — send automatically on the 1st</label>
+    <div class="toolbar" style="margin-top:12px">${edit ? '<button class="btn primary" id="drSave">Save</button><button class="btn" id="drTpl">Edit email text</button>' : ''}<span class="spacer"></span>
+      ${curLeft.length ? `<button class="btn" id="drNow">Send this month's ${curLeft.length} unsent email${curLeft.length > 1 ? 's' : ''} now</button>` : ''}</div>
+    <h4 style="margin:16px 0 6px">On ${esc(nd)}: ${plan.length} email${plan.length === 1 ? '' : 's'} — ${count('gst')} GST · ${count('tds_pay')} TDS payment · ${count('tds_return')} TDS return</h4>
+    ${noMail.length ? `<p class="note warn small">${noMail.length} client${noMail.length > 1 ? 's have' : ' has'} no email saved and will be skipped: ${[...new Set(noMail.map(p => p.client))].map(esc).join(', ')}.</p>` : ''}
+    ${plan.length ? `<div class="table-wrap"><table class="small"><thead><tr><th>Client</th><th>Email</th><th>For</th><th>Sent to</th><th></th></tr></thead><tbody>
+      ${plan.map((p, i) => `<tr><td>${esc(cLabel(clientById(p.client_id) || { name: p.client }))}</td><td>${esc(DR_KIND[p.kind])}</td><td>${esc(p.period)}</td>
+        <td class="wrap">${p.to ? esc(p.to.replace(/,/g, ', ')) : '<span class="late">no email</span>'}</td><td><button class="btn sm ghost" data-drpv="${i}">Preview</button></td></tr>`).join('')}</tbody></table></div>`
+      : '<p class="muted small">No client is set up for these emails yet. Tick GST in a client\'s services (with GST scheme Monthly or QRMP), or the TDS ticks on the client form.</p>'}
+    <p class="muted small">To leave a client out, open the client and tick “Don't send automatic reminders”.</p></div>`;
+  if (!edit) $$('input', box).forEach(x => x.disabled = true);
+  $$('[data-drpv]', box).forEach(b => b.onclick = async () => {
+    const p = plan[+b.dataset.drpv];
+    const q = await safe(sb.rpc('dr_preview', { p_client: p.client_id, p_kind: p.kind, p_day: s.next_day }));
+    if (q.error || !q.data) return toast(q.error ? friendly(q.error) : 'Nothing to preview', true);
+    modal(DR_KIND[p.kind] + ' — ' + p.client, `<p class="small" style="margin-top:0"><b>To:</b> ${esc((q.data.to || '—').replace(/,/g, ', '))}<br><b>Subject:</b> ${esc(q.data.subject)}</p>
+      <pre class="dr-mail">${esc(q.data.body)}</pre>`, { wide: true });
+  });
+  if ($('#drSave', box)) $('#drSave', box).onclick = async () => {
+    const n = id => Math.round(num($(id, box).value));
+    try { await must(sb.rpc('dr_save', { p: { enabled: $('#drOn', box).checked, gst_reply_day: n('#drG'), tdsp_reply_day: n('#drP'), tdsr_reply_day: n('#drR') } })); toast('Saved'); renderDataRequestSettings(box); }
+    catch (e) { toast(friendly(e), true); }
+  };
+  if ($('#drNow', box)) $('#drNow', box).onclick = async e => {
+    if (!confirm(`Send ${curLeft.length} data request email${curLeft.length > 1 ? 's' : ''} for this month now?\n${curLeft.slice(0, 8).map(p => '• ' + p.client + ' – ' + DR_KIND[p.kind]).join('\n')}${curLeft.length > 8 ? '\n…' : ''}`)) return;
+    e.target.disabled = true;
+    try { const { data } = await must(sb.rpc('dr_run_now')); toast(`${data} email${data === 1 ? '' : 's'} queued — the office mailbox sends them within a minute`); renderDataRequestSettings(box); }
+    catch (err) { toast(friendly(err), true); e.target.disabled = false; }
+  };
+  if ($('#drTpl', box)) $('#drTpl', box).onclick = () => {
+    const T = s.templates || {};
+    const m = modal('Edit data request emails', `<div class="dr-tabs">${Object.keys(DR_KIND).map((k, i) => `<button type="button" class="chip ${i ? '' : 'on'}" data-drk="${k}">${esc(DR_KIND[k])}</button>`).join('')}</div>
+      <label class="full">Subject<input name="sub"></label>
+      <label class="full">Email text<textarea name="body" rows="18" class="dr-body"></textarea></label>
+      <p class="muted small" data-tags></p>`, { wide: true, saveText: 'Save this email', onSave: async el => {
+        await must(sb.rpc('dr_save_template', { p_kind: cur, p_subject: fv(el, 'sub'), p_body: $('[name=body]', el).value }));
+        T[cur] = { subject: fv(el, 'sub'), body: $('[name=body]', el).value }; toast(DR_KIND[cur] + ' saved'); return false;
+      } });
+    let cur = 'gst';
+    const show = k => { cur = k; $$('[data-drk]', m.el).forEach(b => b.classList.toggle('on', b.dataset.drk === k));
+      $('[name=sub]', m.el).value = (T[k] || {}).subject || ''; $('[name=body]', m.el).value = (T[k] || {}).body || '';
+      $('[data-tags]', m.el).innerHTML = 'Filled in for each client: ' + DR_TAGS[k].split(' ').map(t => `<code>${esc(t)}</code>`).join(' '); };
+    $$('[data-drk]', m.el).forEach(b => b.onclick = () => show(b.dataset.drk));
+    show('gst');
+  };
+}
 
 window.__tracker = { ACK, dashTabs, AUDIT, IDLE, clientProblems, HEALTH, HELP, noticeLetter, BANK, bankReadFile, TDSW, MCA, BILL, parseMcaSheets, mcaPlanAll, fillGstWorkings, G1, GR, RECO, gstr3bFromApi, periodToMonth, strongPassword, periodFor, dueDateFor, parseCSV, toCSV, gstLateFee, gstInterest, tdsCalc, rocCalc, monthsSpan, tdsDepositDue, g1json, clientReportHtml, clientReportMsg, rnStage, anyDate, parseRenewalRows, gstPayDue, tdsPayDue, advInstalment, advCurrent, advDue, recurringPlan, taxMsg, addMonths, fyEndOf, obProgress, rnKind };
 start();

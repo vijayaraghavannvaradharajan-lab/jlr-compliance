@@ -82,6 +82,8 @@
     data = me;
     const rp = await sb.rpc('portal_reports');
     data.reports = rp.error ? null : (rp.data || []);
+    const ex = await sb.rpc('portal_extra');
+    data.extra = ex.error || !ex.data ? { acks: [], claims: [], upi: null } : ex.data;
     render();
     if (!idleT) idleStart();
   }
@@ -95,11 +97,21 @@
     const cnt = st => tasks.filter(t => t.status === st).length;
     const due = invs.reduce((a, i) => a + num(i.total) - num(i.paid), 0);
     const need = tasks.filter(t => t.status === 'Pending data');
+    // one line per missing document, covering every return that needs it
+    const byDoc = {};
+    need.forEach(t => (t.docs || []).filter(d => !d.received).forEach(d => { (byDoc[d.name] = byDoc[d.name] || []).push({ t, d }); }));
+    const noList = need.filter(t => !(t.docs || []).some(d => !d.received));
+    const docNames = Object.keys(byDoc).sort((a, b) => { const da = Math.min(...byDoc[a].map(x => x.t.due_date || '9')), db = Math.min(...byDoc[b].map(x => x.t.due_date || '9')); return String(da).localeCompare(String(db)) || a.localeCompare(b); });
+    needDocs = byDoc;
     const needBox = need.length ? `<section class="card need-box"><h3 style="margin:0 0 4px">What we need from you</h3>
-      <p class="muted small" style="margin:0 0 10px">Send these so we can file on time. You can upload here, or send them on WhatsApp / email.</p>
-      ${need.map(t => { const miss = (t.docs || []).filter(d => !d.received).map(d => d.name), late = t.due_date && t.due_date < today;
+      <p class="muted small" style="margin:0 0 10px">Upload each document once — we use it for every return that needs it. You can also send them on WhatsApp or email.</p>
+      ${docNames.map(n => { const xs = byDoc[n], first = xs.map(x => x.t.due_date).filter(Boolean).sort()[0], late = first && first < today;
+        return `<div class="need-item ${late ? 'late-item' : ''}"><div><b>${esc(n)}</b>
+          <div class="small ${late ? 'late' : 'muted'}">For ${xs.map(x => esc(x.t.return_name + ' · ' + x.t.period)).join(', ')} · ${late ? 'was due ' : 'due '}${fmt(first)}</div></div>
+          <button class="btn sm primary" data-updoc="${esc(n)}">Upload</button></div>`; }).join('')}
+      ${noList.map(t => { const late = t.due_date && t.due_date < today;
         return `<div class="need-item ${late ? 'late-item' : ''}"><div><b>${esc(t.return_name)} · ${esc(t.period)}</b>
-          <div class="small ${late ? 'late' : 'muted'}">${late ? 'Was due ' : 'Due '}${fmt(t.due_date)}${miss.length ? ' · still needed: ' + miss.map(esc).join(', ') : ' · your documents / data'}</div></div>
+          <div class="small ${late ? 'late' : 'muted'}">${late ? 'Was due ' : 'Due '}${fmt(t.due_date)} · your documents / data</div></div>
           <button class="btn sm primary" data-up="${t.id}">Upload</button></div>`; }).join('')}</section>` : '';
     out.innerHTML = needBox + `<div class="stats">
         <div class="stat amber"><div class="n">${cnt('Pending data')}</div><div class="l">Waiting for your documents</div></div>
@@ -110,6 +122,7 @@
       <div id="pv"></div>`;
     $$('[data-tab]').forEach(b => b.onclick = () => { tab = b.dataset.tab; render(); });
     $$('.need-box [data-up]', out).forEach(b => b.onclick = () => upload(tasks.find(t => t.id === b.dataset.up)));
+    $$('.need-box [data-updoc]', out).forEach(b => b.onclick = () => uploadDoc(b.dataset.updoc));
     const pv = $('#pv');
     if (tab === 'work') {
       pv.innerHTML = tasks.length ? tasks.map(t => {
@@ -119,10 +132,17 @@
           <div class="pt-meta small"><span class="${late ? 'late' : ''}">Due ${fmt(t.due_date)}</span>${t.filed_on ? `<span>Filed ${fmt(t.filed_on)}${t.arn ? ' · ' + esc(t.arn) : ''}</span>` : ''}${t.data_received_on ? `<span>Your data received ${fmt(t.data_received_on)}</span>` : ''}</div>
           ${docs.length && t.status !== 'Filed' ? `<div class="docs-pub">${docs.map(d => `<span class="${d.received ? 'ok' : 'need'}">${d.received ? '✓' : '○'} ${esc(d.name)}</span>`).join('')}</div>` : ''}
           ${ups.length ? `<div class="muted small" style="margin-top:6px">Uploaded: ${ups.map(u => esc(u.name)).join(', ')}</div>` : ''}
-          ${t.status !== 'Filed' ? `<div style="margin-top:10px"><button class="btn sm primary" data-up="${t.id}">Upload documents</button></div>` : ''}</div>`;
+          ${t.status !== 'Filed' ? `<div style="margin-top:10px"><button class="btn sm primary" data-up="${t.id}">Upload documents</button></div>` : ''}
+          ${(data.extra.acks || []).filter(a => a.task_id === t.id).map(a => `<div style="margin-top:8px"><button class="btn sm" data-ack="${a.id}">⬇ Filing acknowledgement${a.arn ? ' · ' + esc(a.arn) : ''}</button></div>`).join('')}</div>`;
       }).join('') + '<p class="muted small">○ = still needed, ✓ = received. Upload files here or share them with your consultant.</p>'
         : '<div class="table-wrap"><div class="empty">No work items yet.</div></div>';
       $$('[data-up]', pv).forEach(b => b.onclick = () => upload(tasks.find(t => t.id === b.dataset.up)));
+      $$('[data-ack]', pv).forEach(b => b.onclick = async () => {
+        const a = data.extra.acks.find(x => x.id === b.dataset.ack);
+        const { data: u, error } = await sb.storage.from('filing-acks').createSignedUrl(a.file_path, 120);
+        if (error) return toast('Could not open the file — please ask your consultant', true);
+        window.open(u.signedUrl, '_blank', 'noopener');
+      });
     } else if (tab === 'rep' && data.reports) {
       pv.innerHTML = `<div class="table-wrap"><table><thead><tr><th>Month</th><th>Published</th><th></th></tr></thead><tbody>${data.reports.map((r, k) => { const [y, m] = r.period.split('-');
         return `<tr><td><b>${MONTHS[+m - 1]} ${y}</b></td><td class="muted small">${fmt(r.published_at)}</td><td><button class="btn sm primary" data-rep="${k}">Open / PDF</button></td></tr>`; }).join('')}</tbody></table></div>
@@ -131,10 +151,12 @@
     } else {
       pv.innerHTML = invs.length ? `<div class="table-wrap"><table><thead><tr><th>Invoice</th><th>Date</th><th class="r">Amount</th><th class="r">Paid</th><th class="r">Balance</th><th></th></tr></thead><tbody>
         ${invs.map(i => `<tr><td><b>${esc(i.inv_no)}</b></td><td>${fmt(i.inv_date)}</td><td class="r">${inr(i.total)}</td><td class="r">${inr(i.paid)}</td>
-          <td class="r"><b>${inr(num(i.total) - num(i.paid))}</b></td><td><button class="btn sm" data-inv="${i.id}">Download</button></td></tr>`).join('')}</tbody></table></div>
+          <td class="r"><b>${inr(num(i.total) - num(i.paid))}</b></td><td class="row-btns"><button class="btn sm" data-inv="${i.id}">Download</button>${num(i.total) - num(i.paid) > 0.009 ? `<button class="btn sm primary" data-pay="${i.id}">Pay / I have paid</button>` : ''}</td></tr>`).join('')}</tbody></table></div>
+        ${(data.extra.claims || []).length ? `<div class="card" style="margin-top:12px"><b>Payments you reported</b>${data.extra.claims.map(c => `<div class="small" style="margin-top:6px">${inr(c.amount)} on ${fmt(c.paid_on)} · ${esc(c.mode)} ${esc(c.ref || '')} — ${c.status === 'New' ? '<span class="st st-pending-data">waiting for confirmation</span>' : c.status === 'Confirmed' ? '<span class="st st-filed">confirmed ✓</span>' : `<span class="st st-not-applicable">not confirmed</span>${c.reply ? ' · ' + esc(c.reply) : ''}`}</div>`).join('')}</div>` : ''}
         ${f.bank ? `<div class="card" style="margin-top:12px"><b>Payment details</b><div class="small" style="white-space:pre-line;margin-top:4px">${esc(f.bank)}</div></div>` : ''}`
         : '<div class="table-wrap"><div class="empty">No invoices yet.</div></div>';
       $$('[data-inv]', pv).forEach(b => b.onclick = () => printInvoice(invs.find(i => i.id === b.dataset.inv)));
+      $$('[data-pay]', pv).forEach(b => b.onclick = () => payInvoice(invs.find(i => i.id === b.dataset.pay)));
     }
   }
 
@@ -167,6 +189,64 @@
         }
         toast('Uploaded — thank you'); close(); load();
       } catch (err) { toast('Upload failed: ' + (err.message || err), true); e.target.disabled = false; st.textContent = ''; }
+    };
+  }
+
+  let needDocs = {};
+  function sheet(title, body, foot) {
+    const wrap = document.createElement('div'); wrap.className = 'modal-back';
+    wrap.innerHTML = `<div class="modal" role="dialog" aria-modal="true"><div class="modal-head"><h3>${esc(title)}</h3><button class="icon-btn" data-x aria-label="Close">×</button></div>
+      <div class="modal-body">${body}</div><div class="modal-foot"><span class="spacer"></span><button class="btn ghost" data-x>Close</button>${foot || ''}</div></div>`;
+    document.body.appendChild(wrap);
+    $$('[data-x]', wrap).forEach(b => b.onclick = () => wrap.remove());
+    return wrap;
+  }
+  // one document for several returns: upload once, recorded against each return
+  function uploadDoc(name) {
+    const xs = needDocs[name] || []; if (!xs.length) return;
+    const wrap = sheet('Upload: ' + name, `<p class="muted small" style="margin-top:0">For ${xs.map(x => esc(x.t.return_name + ' · ' + x.t.period)).join(', ')}</p>
+      <label class="full">Files (PDF, Excel, images — max 25 MB each)<input type="file" name="f" multiple accept=".pdf,.xls,.xlsx,.csv,.jpg,.jpeg,.png,.zip,.doc,.docx,.txt,.json"></label>
+      <p class="muted small" data-st></p>`, '<button class="btn primary" data-go>Upload</button>');
+    $('[data-go]', wrap).onclick = async e => {
+      const files = [...$('[name=f]', wrap).files]; if (!files.length) return toast('Choose at least one file', true);
+      const big = files.find(x => x.size > 25 * 1024 * 1024); if (big) return toast(`${big.name} is larger than 25 MB`, true);
+      e.target.disabled = true; const st = $('[data-st]', wrap);
+      try {
+        for (const [k, file] of files.entries()) {
+          st.textContent = `Uploading ${k + 1} of ${files.length}: ${file.name}…`;
+          const safe = file.name.replace(/[^A-Za-z0-9._-]+/g, '_').slice(-120), first = xs[0].t;
+          const path = `${data.client.id}/${first.id}/${Date.now()}-${safe}`;
+          const { error } = await sb.storage.from('client-docs').upload(path, file, { contentType: file.type || 'application/octet-stream', upsert: false });
+          if (error) throw error;
+          for (const x of xs) { const r = await sb.rpc('portal_record_upload', { p_task: x.t.id, p_doc: k === 0 ? x.d.id : null, p_path: path, p_name: file.name, p_size: file.size }); if (r.error) throw r.error; }
+        }
+        toast('Uploaded — thank you'); wrap.remove(); load();
+      } catch (err) { toast('Upload failed: ' + (err.message || err), true); e.target.disabled = false; st.textContent = ''; }
+    };
+  }
+  // pay by UPI / bank, then tell the office
+  function payInvoice(i) {
+    const f = data.firm, upi = data.extra.upi, bal = Math.round((num(i.total) - num(i.paid)) * 100) / 100;
+    const link = upi ? `upi://pay?pa=${encodeURIComponent(upi)}&pn=${encodeURIComponent(f.name || '')}&am=${bal.toFixed(2)}&cu=INR&tn=${encodeURIComponent('Invoice ' + i.inv_no)}` : '';
+    const wrap = sheet('Pay invoice ' + i.inv_no, `<p style="margin-top:0">Balance due: <b>${inr(bal)}</b></p>
+      ${upi ? `<div class="card" style="margin:0 0 10px"><b>Pay by UPI</b><div class="small" style="margin-top:4px">UPI ID: <b>${esc(upi)}</b> <button class="link small" data-cpupi>Copy</button></div>
+        <a class="btn primary sm" style="margin-top:8px" href="${esc(link)}">Open my UPI app (phone)</a><div class="muted small" style="margin-top:4px">Opens Google Pay / PhonePe / Paytm with the amount filled in.</div></div>` : ''}
+      ${f.bank ? `<div class="card" style="margin:0 0 10px"><b>Bank transfer</b><div class="small" style="white-space:pre-line;margin-top:4px">${esc(f.bank)}</div></div>` : ''}
+      <h4 style="margin:14px 0 6px">Already paid? Tell us</h4>
+      <div class="form-grid"><label>Amount (₹)<input type="number" name="a" min="1" step="0.01" value="${bal.toFixed(2)}"></label>
+        <label>Paid on<input type="date" name="d" value="${today}"></label>
+        <label>Mode<select name="m"><option>UPI</option><option>Bank transfer</option><option>Cheque</option><option>Other</option></select></label>
+        <label>UTR / transaction reference<input name="r" placeholder="e.g. 431256789012"></label>
+        <label class="full">Note (optional)<input name="n" maxlength="200"></label></div>`, '<button class="btn primary" data-claim>I have paid</button>');
+    const cp = $('[data-cpupi]', wrap); if (cp) cp.onclick = () => navigator.clipboard && navigator.clipboard.writeText(upi).then(() => toast('UPI ID copied'));
+    $('[data-claim]', wrap).onclick = async e => {
+      const v = n => ($(`[name=${n}]`, wrap).value || '').trim();
+      if (!(num(v('a')) > 0)) return toast('Enter the amount paid', true);
+      if (!v('r')) return toast('Enter the UTR / transaction reference', true);
+      e.target.disabled = true;
+      const r = await sb.rpc('portal_claim_payment', { p_invoice: i.id, p_amount: num(v('a')), p_date: v('d') || today, p_mode: v('m'), p_ref: v('r'), p_note: v('n') || null });
+      if (r.error) { e.target.disabled = false; return toast(r.error.message || 'Could not send', true); }
+      toast('Thank you — we will confirm once it reaches our bank'); wrap.remove(); load();
     };
   }
 

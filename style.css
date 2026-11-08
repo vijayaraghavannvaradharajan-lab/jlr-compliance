@@ -1085,3 +1085,15 @@ tr.ak-done td{opacity:.65}
 .md-foot{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
 .gst-run{border-left:4px solid var(--brand)}.gst-run.today{border-left-color:var(--amber);background:var(--amber-soft)}
 .gst-run .toolbar{gap:12px;flex-wrap:wrap}
+
+/* ---------- v29: profitability, payment reports ---------- */
+.pf-table td{vertical-align:middle}.pf-table .chip{display:inline-block;margin:2px 2px 2px 0}
+.ok-t{color:var(--green);font-weight:700}
+.claim-card{border-left:4px solid var(--amber)}
+
+/* ---------- v30: data request emails ---------- */
+pre.dr-mail{white-space:pre-wrap;font-family:inherit;font-size:.88rem;line-height:1.5;background:var(--bg);padding:14px;border-radius:10px;max-height:60vh;overflow:auto;margin:0}
+.dr-tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
+.dr-tabs .chip{border:1px solid var(--line);background:var(--surface);color:var(--ink);font:inherit;font-size:.85rem;padding:6px 12px;border-radius:999px;cursor:pointer}
+.dr-tabs .chip.on{background:var(--brand);color:var(--brand-ink);border-color:transparent}
+textarea.dr-body{font-family:inherit;line-height:1.5}
