@@ -6719,16 +6719,28 @@ const TDS_SEC = [
   { k: '194R', o: '194R', n: '393(1) Sl. 8(iv)', name: 'Business benefit / perquisite', r: 10, th: { fy: 20000 }, f: '26Q', code: '1033' },
   { k: '194S', o: '194S', n: '393(1) Sl. 8(vi)', name: 'Transfer of virtual digital asset (crypto)', r: 1, th: { fy: 50000 }, f: '26Q', code: '1037' },
   { k: '194T', o: '194T', n: '393(3) Sl. 7', name: 'Salary, remuneration, commission, interest to partners', r: 10, th: { fy: 20000 }, f: '26Q', code: '1067' },
-  { k: '195', o: '195', n: '393(2)', name: 'Payment to a non-resident (rate as per Act / DTAA)', r: null, th: {}, f: '27Q', code: '1057', note: 'Type the rate as per the Act or the DTAA (with TRC and Form 41, old 10F).' }
+  { k: '195', o: '195', n: '393(2)', name: 'Payment to a non-resident (rate as per Act / DTAA)', r: null, th: {}, f: '27Q', code: '1057', note: 'Type the rate as per the Act or the DTAA (with TRC and Form 41, old 10F).' },
+  // ---- TCS (old sec 206C → new sec 394) · return Form 143 (old 27EQ) · rates from 1 April 2026 (for FY 2025-26 and earlier, type the rate)
+  { k: '206C-LQ', o: '206C(1)', n: '394(1)', name: 'TCS – alcoholic liquor for human consumption', r: 2, th: {}, f: '27EQ', code: '1068' },
+  { k: '206C-TL', o: '206C(1)', n: '394(1)', name: 'TCS – tendu leaves', r: 2, th: {}, f: '27EQ', code: '1069' },
+  { k: '206C-FP', o: '206C(1)', n: '394(1)', name: 'TCS – timber / other forest produce', r: 2, th: {}, f: '27EQ', code: '1070' },
+  { k: '206C-SC', o: '206C(1)', n: '394(1)', name: 'TCS – scrap', r: 2, th: {}, f: '27EQ', code: '1073' },
+  { k: '206C-MN', o: '206C(1)', n: '394(1)', name: 'TCS – minerals (coal, lignite, iron ore)', r: 2, th: {}, f: '27EQ', code: '1074' },
+  { k: '206C1C', o: '206C(1C)', n: '394(2)', name: 'TCS – parking lot, toll plaza, mining / quarrying lease', r: 2, th: {}, f: '27EQ', code: '1090' },
+  { k: '206C1F', o: '206C(1F)', n: '394(3)', name: 'TCS – motor vehicle above ₹10 lakh', r: 1, th: { one: 1000000 }, f: '27EQ', code: '1075' },
+  { k: '206C1G-ED', o: '206C(1G)', n: '394(1)', name: 'TCS – LRS remittance for education / medical treatment', r: 2, th: { over: 1000000 }, f: '27EQ', code: '1086', note: 'Only on the amount above ₹10 lakh in the year. Nil if paid out of an education loan from a financial institution — use reason B.' },
+  { k: '206C1G-OT', o: '206C(1G)', n: '394(1)', name: 'TCS – LRS remittance for other purposes', r: 20, th: { over: 1000000 }, f: '27EQ', code: '1087', note: 'Only on the amount above ₹10 lakh in the year.' },
+  { k: '206C1G-TP', o: '206C(1G)', n: '394(1)', name: 'TCS – overseas tour programme package', r: 2, th: {}, f: '27EQ', code: '1088' },
 ];
 const TDS_BY = Object.fromEntries(TDS_SEC.map(s => [s.k, s]));
 const TDS_TYPES = [['IND', 'Individual / HUF'], ['CO', 'Company'], ['OTH', 'Firm / LLP / others']];
 const TDS_REASONS = [['', 'Normal'], ['A', 'A – lower / nil (certificate)'], ['B', 'B – no TDS (15G / 15H)'], ['C', 'C – higher rate (no PAN)'], ['T', 'T – transporter declaration'], ['Y', 'Y – below threshold']];
 // return forms: [old name, new name]   — the new names apply from FY 2026-27
-const TDS_FORMS = { '24Q': ['24Q', '138', 'Salary'], '26Q': ['26Q', '140', 'Other than salary'], '27Q': ['27Q', '144', 'Non-resident'] };
+const TDS_FORMS = { '24Q': ['24Q', '138', 'Salary'], '26Q': ['26Q', '140', 'Non Salary'], '27Q': ['27Q', '144', 'NRI'], '27EQ': ['27EQ', '143', 'TCS'] };
 const TDS_CERT = { '24Q': ['Form 16', 'Form 130'], '26Q': ['Form 16A', 'Form 131'], '27Q': ['Form 16A', 'Form 131'] };
 const tdsNewAct = fy0 => fy0 >= 2026;
-const tdsFormName = (f, fy0) => { const [o, n] = TDS_FORMS[f]; return tdsNewAct(fy0) ? `Form ${n} (old ${o})` : `${o} (new Form ${n})`; };
+const tdsFormName = (f, fy0) => { const [o, n] = TDS_FORMS[f]; return tdsNewAct(fy0) ? `Form ${n}-${o}` : `${o} (Form ${n})`; };
+const tdsFormTab = (f, fy0) => `${tdsFormName(f, fy0)} ${TDS_FORMS[f][2]}`;   // e.g. Form 138-24Q Salary
 const tdsCertName = (f, fy0) => { const [o, n] = TDS_CERT[f]; return tdsNewAct(fy0) ? `${n} (old ${o})` : `${o} (new ${n})`; };
 const tdsSecShort = (s, fy0) => s ? (tdsNewAct(fy0) ? `${s.n} · old ${s.o}` : `${s.o} · new ${s.n}`) : '—';
 const tdsSecLabel = s => `${s.o} → ${s.n} · ${s.name}`;
@@ -6739,12 +6751,13 @@ const tdsFyOf = ym => { const [y, m] = ym.split('-').map(Number); return m >= 4 
 const tdsQOf = ym => { const m = +ym.split('-')[1]; return m >= 4 && m <= 6 ? 1 : m <= 9 && m >= 7 ? 2 : m >= 10 ? 3 : 4; };
 const tdsFyMonths = fy0 => Array.from({ length: 12 }, (_, i) => { const m = (i + 3) % 12 + 1, y = m >= 4 ? fy0 : fy0 + 1; return `${y}-${pad(m)}`; });
 const tdsQMonths = (fy0, q) => tdsFyMonths(fy0).slice((q - 1) * 3, q * 3);
-const tdsRetDue = (fy0, q) => [`${fy0}-07-31`, `${fy0}-10-31`, `${fy0 + 1}-01-31`, `${fy0 + 1}-05-31`][q - 1];
+const tdsRetDue = (fy0, q, f) => f === '27EQ' ? [`${fy0}-07-15`, `${fy0}-10-15`, `${fy0 + 1}-01-15`, `${fy0 + 1}-05-15`][q - 1]   // TCS return: 15th
+  : [`${fy0}-07-31`, `${fy0}-10-31`, `${fy0 + 1}-01-31`, `${fy0 + 1}-05-31`][q - 1];
 const tdsCertDue = (fy0, q, f) => f === '24Q' ? (q === 4 ? `${fy0 + 1}-06-15` : null) : [`${fy0}-08-15`, `${fy0}-11-15`, `${fy0 + 1}-02-15`, `${fy0 + 1}-06-15`][q - 1];
 function tdsRate(s, type, pan) {                       // standard rate for the section, deductee type and PAN
   if (!s || s.r == null) return null;
   let r = typeof s.r === 'number' ? s.r : (s.r[type] ?? s.r.OTH);
-  if (!PAN_RE.test(String(pan || '').toUpperCase())) r = Math.max(r, ['194O', '194Q'].includes(s.k) ? 5 : 20);   // no / invalid PAN: higher rate (old sec 206AA)
+  if (!PAN_RE.test(String(pan || '').toUpperCase())) r = s.f === '27EQ' ? Math.max(2 * r, 5) : Math.max(r, ['194O', '194Q'].includes(s.k) ? 5 : 20);   // no / invalid PAN: higher rate (old sec 206AA)
   return r;
 }
 // Work out every row of the year (rows = all entries of the FY, in any order). Returns a Map row → result.
@@ -6796,12 +6809,13 @@ function tdsCalcRows(rows) {
 }
 // interest on one challan (late deduction 1% + late deposit 1.5% a month; part of a month = a full month)
 function tdsInterest(entries, calc, ym, paidOn) {
-  const due = tdsPayDue(ym);
+  const tcs = entries.some(r => TDS_BY[r.sec] && TDS_BY[r.sec].f === '27EQ');
+  const due = tcs ? nextMonthDay(ym, 7) : tdsPayDue(ym);          // TCS: 7th of next month, March too
   let i1 = 0, i2 = 0;
   for (const r of entries) {
     const x = calc.get(r); if (!x || !x.tds) continue;
     i1 += Math.round(x.tds * 0.01 * x.lateM);
-    if (paidOn && paidOn > due) i2 += Math.round(x.tds * 0.015 * monthsSpan(x.ded, paidOn));
+    if (paidOn && paidOn > due) i2 += Math.round(x.tds * (tcs ? 0.01 : 0.015) * monthsSpan(x.ded, paidOn));
   }
   return { due, i1, i2, total: i1 + i2 };
 }
@@ -6818,8 +6832,10 @@ function parseTdsSec(v) {
 const TDS_COLS = [['paid_on', 'Date paid / credited', 'date', 128], ['name', 'Deductee name', 'text', 180], ['pan', 'PAN', 'pan', 112], ['dtype', 'Type', TDS_TYPES, 120],
   ['sec', 'Section (old → new)', 'sec', 250], ['amount', 'Amount paid / credited', 'num', 110], ['reason', 'Reason', TDS_REASONS, 120], ['rate', 'Rate % (blank = auto)', 'num', 78],
   ['tds_man', 'TDS (blank = auto)', 'num', 92], ['ded_on', 'Deducted on (blank = same date)', 'date', 128], ['cert', 'Lower-deduction cert. no.', 'text', 120], ['bill', 'Bill / voucher no.', 'text', 100], ['remarks', 'Remarks', 'text', 140]];
+const TCS_LBL = { paid_on: 'Date of sale / receipt', name: 'Buyer (collectee) name', amount: 'Sale value / amount received', tds_man: 'TCS (blank = auto)', ded_on: 'Collected on (blank = same date)', cert: 'Lower-collection cert. no.' };
 const TDS_STATUS = ['Not started', 'Data pending', 'Prepared', 'Filed', 'Revised'];
 
+let tdsDedF = 'all';   // Deductions tab: which return form's rows to show
 let tdsClient = '', tdsMonth = prevMonth(), tdsTab = 'ded', tdsQ = 0, tdsForm = '26Q', tdsDraft = null, tdsDirty = false;
 const tdsClients = () => myClients().filter(c => (c.services || []).includes('TDS') || c.tan);
 window.addEventListener('beforeunload', e => { if (tdsDirty) { e.preventDefault(); e.returnValue = ''; } });
@@ -6909,10 +6925,14 @@ async function tdsOverview(body, list, fy0) {
 function tdsDeductions(body, ctx) {
   const { c, fy0 } = ctx;
   const rows = ctx.grid;
-  const show = () => { while (rows.length < Math.max(rows.filter(r => r.name || r.amount || r.sec).length + 5, 10)) rows.push({ rate: '', tds_man: '' }); };
+  const F = tdsDedF, filled = r => r.name || r.amount || r.sec;
+  // a row belongs to the return form of its section; a row without a section stays on the tab it was typed in
+  const vis = r => F === 'all' || (r.sec ? (TDS_BY[r.sec] || {}).f === F : !r._f || r._f === F);
+  const visIdx = () => rows.map((r, j) => j).filter(j => vis(rows[j]));
+  const show = () => { while (visIdx().length < Math.max(rows.filter(r => vis(r) && filled(r)).length + 5, 10)) rows.push({ rate: '', tds_man: '', _f: F === 'all' ? undefined : F }); };
   show();
   const keep = () => { tdsDraft = { client: c.id, month: tdsMonth, rows }; };
-  const secOpts = sel => `<option value=""></option>` + TDS_SEC.map(s => `<option value="${s.k}" ${s.k === sel ? 'selected' : ''}>${esc(tdsNewAct(fy0) ? `${s.n} [old ${s.o}] · ${s.name}` : `${s.o} [new ${s.n}] · ${s.name}`)}</option>`).join('');
+  const secOpts = sel => `<option value=""></option>` + TDS_SEC.filter(s => F === 'all' || s.f === F || s.k === sel).map(s => `<option value="${s.k}" ${s.k === sel ? 'selected' : ''}>${esc(tdsNewAct(fy0) ? `${s.n} [old ${s.o}] · ${s.name}` : `${s.o} [new ${s.n}] · ${s.name}`)}</option>`).join('');
   const cell = (col, v, i) => {
     const [k, , kind] = col;
     if (kind === 'sec') return `<select data-k="${k}" data-i="${i}" style="width:250px">${secOpts(v || '')}</select>`;
@@ -6937,13 +6957,16 @@ function tdsDeductions(body, ctx) {
   const draw = () => {
     show();
     const cl = calc();
-    body.innerHTML = `<div class="g1-bar"><span class="${tdsDirty ? 'late' : 'muted'} small" id="tdsDirty">${tdsDirty ? '● Unsaved changes' : 'Saved'}</span><span class="spacer"></span>
+    const cnt = f => rows.filter(r => filled(r) && (f === 'all' || (TDS_BY[r.sec] || {}).f === f)).length;
+    body.innerHTML = `<div class="seg tds-ftabs" role="tablist">${[['all', 'All entries'], ...Object.keys(TDS_FORMS).map(f => [f, tdsFormTab(f, fy0)])].map(([f, l]) => `<button type="button" data-df="${f}" class="${f === F ? 'on' : ''}">${esc(l)} <small>${cnt(f)}</small></button>`).join('')}</div>
+      ${F === '27EQ' ? '<p class="muted small">TCS: one row per sale / receipt. Name and PAN are the buyer’s; the amount is the sale value or amount received; the TCS fills in from the section. No PAN = twice the rate or 5%, whichever is higher. TCS is deposited by the 7th of the next month (March too); interest is 1% a month.</p>' : ''}
+      <div class="g1-bar"><span class="${tdsDirty ? 'late' : 'muted'} small" id="tdsDirty">${tdsDirty ? '● Unsaved changes' : 'Saved'}</span><span class="spacer"></span>
         <button class="btn sm" id="tdsCopy">Copy deductees from last month</button><button class="btn sm" id="tdsTpl">Excel template</button>
         <label class="btn sm">Import Excel / CSV<input type="file" id="tdsImp" accept=".xlsx,.xls,.csv" hidden></label>
         <button class="btn sm" id="tdsXl">Download Excel</button><button class="btn primary" id="tdsSave">Save</button></div>
       <p class="muted small">One row per payment or credit to a deductee. Rate and TDS fill in from the section, deductee type and PAN (no PAN = higher rate); type a rate or TDS only to override. <b>Tip:</b> copy rows from Excel and paste into the first cell — they fill across.</p>
-      <div class="table-wrap g1-wrap"><table class="g1-grid"><thead><tr><th>#</th>${TDS_COLS.map(([, l, , w]) => `<th style="min-width:${Math.min(w, 140)}px">${esc(l)}</th>`).join('')}<th class="g1-auto">Rate used</th><th class="g1-auto">TDS</th><th class="g1-auto">Paid earlier in FY</th><th class="g1-auto">Check</th><th></th></tr></thead>
-      <tbody>${rows.map((r, i) => `<tr data-row="${i}"><td class="muted small">${i + 1}</td>${TDS_COLS.map(col => `<td>${cell(col, r[col[0]], i)}</td>`).join('')}${autoCells(cl.get(r))}<td><button class="link small danger-t" data-del="${i}" aria-label="Remove row" title="Remove row">×</button></td></tr>`).join('')}</tbody></table></div>
+      <div class="table-wrap g1-wrap"><table class="g1-grid"><thead><tr><th>#</th>${TDS_COLS.map(([k, l, , w]) => `<th style="min-width:${Math.min(w, 140)}px">${esc(F === '27EQ' ? TCS_LBL[k] || l : l)}</th>`).join('')}<th class="g1-auto">Rate used</th><th class="g1-auto">${F === '27EQ' ? 'TCS' : 'TDS'}</th><th class="g1-auto">Paid earlier in FY</th><th class="g1-auto">Check</th><th></th></tr></thead>
+      <tbody>${visIdx().map((i, pos) => [rows[i], i, pos]).map(([r, i, pos]) => `<tr data-row="${i}"><td class="muted small">${pos + 1}</td>${TDS_COLS.map(col => `<td>${cell(col, r[col[0]], i)}</td>`).join('')}${autoCells(cl.get(r))}<td><button class="link small danger-t" data-del="${i}" aria-label="Remove row" title="Remove row">×</button></td></tr>`).join('')}</tbody></table></div>
       <div class="toolbar" style="margin-top:8px"><button class="btn sm" id="tdsAdd">+ 10 rows</button><span class="muted small">Blank rows are ignored.</span></div>
       <div id="tdsSum">${summary(cl)}</div>`;
   };
@@ -6964,26 +6987,31 @@ function tdsDeductions(body, ctx) {
     if (col[2] === 'sec') x = parseTdsSec(x);
     if (Array.isArray(col[2]) && x) { const m = col[2].find(([a, l]) => lc(a) === lc(x) || lc(l) === lc(x) || lc(l).startsWith(lc(x))); x = m ? m[0] : ''; }
     rows[i][k] = x;
+    if (F !== 'all' && !rows[i].sec) { rows[i]._f = F; if (F === '24Q' && k !== 'sec' && x !== '') rows[i].sec = '192'; }
     if (k === 'pan' && x && !rows[i].dtype) rows[i].dtype = panType(x);
   };
   body.addEventListener('input', e => { const k = e.target.dataset.k; if (!k) return; setVal(+e.target.dataset.i, k, e.target.value); dirty(); refresh(); });
   body.addEventListener('change', e => { const k = e.target.dataset.k; if (!k) return; const i = +e.target.dataset.i; setVal(i, k, e.target.value); dirty();
     if (k === 'pan') { const sel = $(`[data-k="dtype"][data-i="${i}"]`, body); if (sel) sel.value = rows[i].dtype || ''; }
+    if (k !== 'sec') { const ss = $(`[data-k="sec"][data-i="${i}"]`, body); if (ss && rows[i].sec && !ss.value) ss.value = rows[i].sec; }
     refresh(); });
   body.addEventListener('paste', e => {
     const inp = e.target.closest('[data-k]'); if (!inp) return;
     const text = (e.clipboardData || window.clipboardData).getData('text'); if (!/[\t\n]/.test(text)) return;
     e.preventDefault();
     const lines = text.replace(/\r/g, '').split('\n').filter((l, j, a) => l !== '' || j < a.length - 1);
-    const i0 = +inp.dataset.i, c0 = TDS_COLS.findIndex(x => x[0] === inp.dataset.k);
-    lines.forEach((ln, di) => { while (rows.length <= i0 + di) rows.push({ rate: '', tds_man: '' }); ln.split('\t').forEach((val, dj) => { const col = TDS_COLS[c0 + dj]; if (col) setVal(i0 + di, col[0], val); }); });
+    const V = visIdx(), p0 = Math.max(0, V.indexOf(+inp.dataset.i)), c0 = TDS_COLS.findIndex(x => x[0] === inp.dataset.k);
+    lines.forEach((ln, di) => { let i = V[p0 + di]; if (i == null) { rows.push({ rate: '', tds_man: '', _f: F === 'all' ? undefined : F }); i = rows.length - 1; V.push(i); }
+      ln.split('\t').forEach((val, dj) => { const col = TDS_COLS[c0 + dj]; if (col) setVal(i, col[0], val); }); });
     dirty(); draw(); toast(`${lines.length} row${lines.length > 1 ? 's' : ''} pasted`);
   });
   body.addEventListener('click', async e => {
     const del = e.target.closest('[data-del]');
     if (del) { rows.splice(+del.dataset.del, 1); dirty(); draw(); return; }
     const id = e.target.id;
-    if (id === 'tdsAdd') { for (let j = 0; j < 10; j++) rows.push({ rate: '', tds_man: '' }); keep(); draw(); }
+    if (id === 'tdsAdd') { for (let j = 0; j < 10; j++) rows.push({ rate: '', tds_man: '', _f: F === 'all' ? undefined : F }); keep(); draw(); }
+    const df = e.target.closest('[data-df]');
+    if (df) { tdsDedF = df.dataset.df; keep(); route(); return; }
     if (id === 'tdsCopy') {
       const pm = addMonths(tdsMonth + '-01', -1).slice(0, 7), prev = tdsMonthOf(ctx, pm);
       if (!prev.length) { toast(`No entries in ${monthLabel(pm)} to copy`, true); return; }
@@ -7139,7 +7167,7 @@ function tdsReturnData(ctx, q, form) {
     if (x && x.paid_on && (!x.bsr || !x.chno)) checks.push(['err', `${monthLabel(m)} ${TDS_BY[k].o}: BSR code / challan no. missing.`]);
     if (x && it.total > num(x.intr) + 0.5) checks.push(['warn', `${monthLabel(m)} ${TDS_BY[k].o}: interest ${inr(it.total)} worked out, ${inr(x.intr)} paid.`]);
   }));
-  const due = tdsRetDue(ctx.fy0, q), rec = ctx.returns.find(x => x.q === q && x.form === form) || null;
+  const due = tdsRetDue(ctx.fy0, q, form), rec = ctx.returns.find(x => x.q === q && x.form === form) || null;
   const totTds = groups.reduce((a, g) => a + g.work, 0);
   const lateDays = Math.max(0, daysFrom(due, (rec && rec.filed_on) || today()));
   const lateFee = rec && rec.status === 'Filed' && !rec.filed_on ? 0 : Math.min(lateDays * 200, totTds);
@@ -7153,7 +7181,7 @@ function tdsReturn(body, ctx) {
   const D = tdsReturnData(ctx, q, tdsForm), rec = D.rec || {};
   const filed = rec.status === 'Filed' || rec.status === 'Revised';
   body.innerHTML = `<div class="toolbar"><div class="seg">${[1, 2, 3, 4].map(k => `<button data-q="${k}" class="${k === q ? 'on' : ''}">Q${k}</button>`).join('')}</div>
-      <div class="seg">${counts.map(([f, n]) => `<button data-f="${f}" class="${f === tdsForm ? 'on' : ''}">${esc(tdsFormName(f, fy0))} <small>${n}</small></button>`).join('')}</div></div>
+      <div class="seg">${counts.map(([f, n]) => `<button data-f="${f}" class="${f === tdsForm ? 'on' : ''}">${esc(tdsFormTab(f, fy0))} <small>${n}</small></button>`).join('')}</div></div>
     <div class="bento-stats card stats4" style="margin-bottom:14px"><div class="mini blue"><span>Deductee rows</span><b>${D.ent.length}</b></div><div class="mini"><span>TDS in the quarter</span><b class="tp-amt">${inr(D.totTds)}</b></div>
       <div class="mini ${!D.ent.length ? '' : D.checks.some(x => x[0] === 'err') ? 'red' : 'green'}"><span>Checks</span><b>${!D.ent.length ? '—' : D.checks.filter(x => x[0] === 'err').length ? D.checks.filter(x => x[0] === 'err').length + ' ✗' : '✓'}</b></div>
       <div class="mini ${!filed && today() > D.due ? 'red' : 'amber'}"><span>Due date</span><b class="tp-amt">${fmtDate(D.due)}</b></div></div>
@@ -7209,7 +7237,7 @@ async function tdsReturnExcel(ctx, D, q) {
 /* ---------- 4. Form 16 / 16A (130 / 131) issue tracker ---------- */
 function tdsCerts(body, ctx) {
   const { c, fy0 } = ctx, q = tdsQ;
-  const form = tdsForm === '24Q' ? '24Q' : tdsForm;
+  const form = TDS_CERT[tdsForm] ? tdsForm : '26Q';
   const annual = form === '24Q';
   const ms = annual ? tdsFyMonths(fy0) : tdsQMonths(fy0, q);
   const ent = ms.flatMap(m => tdsMonthOf(ctx, m)).filter(r => TDS_BY[r.sec] && TDS_BY[r.sec].f === form);
@@ -7223,7 +7251,7 @@ function tdsCerts(body, ctx) {
   const nIss = L.filter(p => certs[p.k]).length, late = due && today() > due && nIss < L.length;
   const cname = tdsCertName(form, fy0);
   body.innerHTML = `<div class="toolbar">${annual ? '' : `<div class="seg">${[1, 2, 3, 4].map(k => `<button data-q="${k}" class="${k === q ? 'on' : ''}">Q${k}</button>`).join('')}</div>`}
-      <div class="seg">${Object.keys(TDS_FORMS).map(f => `<button data-f="${f}" class="${f === form ? 'on' : ''}">${esc(tdsCertName(f, fy0))}${f === '24Q' ? ' – salary (yearly)' : f === '27Q' ? ' – non-resident' : ''}</button>`).join('')}</div></div>
+      <div class="seg">${Object.keys(TDS_CERT).map(f => `<button data-f="${f}" class="${f === form ? 'on' : ''}">${esc(tdsCertName(f, fy0))}${f === '24Q' ? ' – salary (yearly)' : f === '27Q' ? ' – non-resident' : ''}</button>`).join('')}</div></div>
     <div class="bento-stats card stats4" style="margin-bottom:14px"><div class="mini blue"><span>Deductees</span><b>${L.length}</b></div><div class="mini green"><span>Issued</span><b>${nIss}</b></div>
       <div class="mini ${late ? 'red' : 'amber'}"><span>Not issued</span><b>${L.length - nIss}</b></div><div class="mini"><span>Issue by</span><b class="tp-amt">${due ? fmtDate(due) : '—'}</b></div></div>
     <div class="card"><h3 style="margin-top:0">${esc(cname)} – ${annual ? `FY ${esc(ctx.fyk)}` : `Q${q} FY ${esc(ctx.fyk)}`}</h3>

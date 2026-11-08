@@ -1097,3 +1097,14 @@ pre.dr-mail{white-space:pre-wrap;font-family:inherit;font-size:.88rem;line-heigh
 .dr-tabs .chip{border:1px solid var(--line);background:var(--surface);color:var(--ink);font:inherit;font-size:.85rem;padding:6px 12px;border-radius:999px;cursor:pointer}
 .dr-tabs .chip.on{background:var(--brand);color:var(--brand-ink);border-color:transparent}
 textarea.dr-body{font-family:inherit;line-height:1.5}
+
+/* v31.1 TDS form tabs (Form 138-24Q Salary · 140-26Q Non Salary · 144-27Q NRI · 143-27EQ TCS) */
+.tds-ftabs{display:flex;flex-wrap:wrap;margin-bottom:10px}
+#tdsBody .seg{flex-wrap:wrap;max-width:100%}
+.tds-ftabs button small{opacity:.65;margin-left:4px}
+.tds-ftabs{box-sizing:border-box;max-width:100%}
+@media (max-width:600px){ .seg{flex-wrap:wrap;max-width:100%;box-sizing:border-box} .seg button{white-space:normal} }
+.seg.tds-ftabs{display:flex;flex-wrap:wrap;gap:6px;width:100%;border:0;border-radius:0;overflow:visible}
+.seg.tds-ftabs button{border:1px solid var(--line);border-radius:8px;white-space:nowrap}
+.seg.tds-ftabs button+button{border-left:1px solid var(--line)}
+#tdsBody{min-width:0;max-width:100%}
