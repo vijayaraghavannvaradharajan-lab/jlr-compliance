@@ -4196,25 +4196,68 @@ VIEWS.gst = async v => {
   const ITCM = { books_2b: ['Books matched with 2B', 'Purchase register is matched with GSTR-2B. Bills in 2B but not in books go to the client to mark.'],
     books: ['Credit as per books', 'ITC is taken on the purchase register. GSTR-2B is tracked alongside for missing and late bills.'],
     '2b_confirm': ['2B — client confirms', 'No purchase register. The GSTR-2B list goes to the client, who marks each bill: take credit, not now, or not mine.'] };
-  const item = (k, title, d, info, btns) => `<div class="grb-it ${d ? 'ok' : ''}"><span class="grb-dot" aria-hidden="true">${d ? '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2"><path d="M5 12l5 5L20 7"/></svg>' : ''}</span>
-      <div class="grb-it-b"><b>${title}</b><div class="small">${info}</div>${srcLine(d)}<div class="grb-it-a">${btns}${d ? `<button class="link small danger-t" data-clr="${k}">Remove</button>` : ''}</div></div></div>`;
+  // v33.2: each step can be opened (see the invoices / figures) and ticked as checked, or marked not needed
+  const stepOf = k => (((row.reco || {}).steps) || {})[k] || null;
+  const item = (k, title, d, info, btns) => { const s = stepOf(k), chk = s && s.ok, na = s && s.na;
+    return `<div class="grb-it ${d ? 'ok' : ''} ${chk ? 'chk' : ''} ${na ? 'na' : ''}"><span class="grb-dot" aria-hidden="true">${d || chk ? '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2"><path d="M5 12l5 5L20 7"/></svg>' : na ? '–' : ''}</span>
+      <div class="grb-it-b">${d ? `<button class="grb-open" data-view="${k}" title="Open the ${esc(title)}">${title} <span aria-hidden="true">›</span></button>` : `<b>${title}</b>`}<div class="small">${na ? 'Marked not needed this month' : info}</div>${na ? '' : srcLine(d)}
+        <div class="grb-it-a">${na ? '' : btns}${d ? `<button class="link small" data-view="${k}">View</button><button class="link small danger-t" data-clr="${k}">Remove</button>` : ''}</div>
+        <div class="grb-step">${na ? `<span class="small muted">Not needed · ${esc(profName(s.by) || '')}</span> <button class="link small" data-step="${k}" data-sv="clear">Undo</button>`
+          : `<label class="check small"><input type="checkbox" data-step="${k}" ${chk ? 'checked' : ''}> Checked${chk ? ` <span class="muted">· ${esc(profName(s.by) || '')} · ${new Date(s.at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}</span>` : ''}</label>${!d && !chk ? ` <button class="link small" data-step="${k}" data-sv="na">Not needed</button>` : ''}`}</div></div></div>`; };
+  const stepsDone = keys => keys.filter(k => { const s = stepOf(k); return s && (s.ok || s.na); }).length;
+  async function setStep(k, v) {
+    const reco = JSON.parse(JSON.stringify(row.reco || {})); reco.steps = reco.steps || {};
+    if (v === 'clear') delete reco.steps[k]; else reco.steps[k] = { [v]: true, by: me.id, at: new Date().toISOString() };
+    if (v === 'ok' && !row[k] && !confirm('Nothing has been added for this step. Mark it as checked anyway?')) { render(); return; }
+    try { await save({ reco }); } catch (e) { toast(friendly(e), true); render(); }
+  }
+  function viewData(k) {
+    const d = row[k]; if (!d) return;
+    const title = { sales: 'Sales register', purchases: 'Purchase register', gstr2b: 'GSTR-2B', gstr1: 'GSTR-1 (filed)', gstr3b: 'GSTR-3B (filed)' }[k];
+    const fig = (l, o) => `<tr><td>${l}</td><td class="r">${o.t != null ? gst$(o.t) : ''}</td><td class="r">${gst$(o.ig)}</td><td class="r">${gst$(o.cg)}</td><td class="r">${gst$(o.sg)}</td><td class="r">${gst$(o.cs)}</td></tr>`;
+    if (k === 'gstr1' || k === 'gstr3b') {
+      modal(`${title} — ${c.name} · ${RECO.monthName(period)}`, `<div class="table-wrap"><table><thead><tr><th></th><th class="r">Taxable</th><th class="r">IGST</th><th class="r">CGST</th><th class="r">SGST</th><th class="r">Cess</th></tr></thead><tbody>
+        ${k === 'gstr1' ? fig('Total (net of credit notes)', d) + (d.secs || []).map(s => fig(`&nbsp;&nbsp;${esc(s.nm)}${s.sign < 0 ? ' (less)' : s.sign ? '' : ' (not added)'}`, s)).join('')
+          : fig('3.1(a) Outward taxable supplies', d.t31a || {}) + fig('4(C) Net ITC', { t: null, ...(d.itc_net || {}) }) + fig('Tax paid in cash', { t: null, ...(d.cash || {}) })}
+        </tbody></table></div><p class="muted small">${srcLine(d)}</p>`, { wide: true });
+      return;
+    }
+    const rows = (d.rows || []).map(r => k === 'sales' ? r : r);
+    const m = modal(`${title} — ${c.name} · ${RECO.monthName(period)}`, `<div class="toolbar" style="margin:0 0 8px"><input type="search" data-vq placeholder="Search party, GSTIN or bill no" style="flex:1;min-width:200px" aria-label="Search"><span class="muted small" data-vn></span></div>
+      <div class="table-wrap" style="max-height:60vh;overflow:auto" data-vt></div><p class="muted small" style="margin-bottom:0">${srcLine(d)}</p>`, { wide: true, extra: '<button class="btn" data-vx>Download Excel</button>' });
+    const draw = () => {
+      const q = ($('[data-vq]', m.el).value || '').trim().toUpperCase();
+      const list = rows.filter(r => !q || [r.n, r.g, r.i].some(v => String(v || '').toUpperCase().includes(q)));
+      const T = list.reduce((a, r) => { a.t += r.t || 0; a.tax += gTax(r); return a; }, { t: 0, tax: 0 });
+      $('[data-vn]', m.el).textContent = `${list.length} of ${rows.length} documents · taxable ${gst$(T.t)} · tax ${gst$(T.tax)}`;
+      $('[data-vt]', m.el).innerHTML = list.length ? `<table><thead><tr><th>#</th><th>${k === 'sales' ? 'Customer' : 'Supplier'}</th><th>GSTIN</th><th>Bill no</th><th>Date</th><th class="r">Taxable</th><th class="r">IGST</th><th class="r">CGST</th><th class="r">SGST</th><th class="r">Total tax</th><th></th></tr></thead><tbody>
+        ${list.slice(0, 1000).map((r, i) => `<tr><td class="muted small">${i + 1}</td><td class="wrap">${esc(r.n || '')}</td><td class="small">${esc(r.g || '')}</td><td>${esc(r.i || '')}</td><td class="small">${/^\d{4}-\d{2}-\d{2}$/.test(r.d || '') ? fmtDate(r.d) : esc(r.d || '')}</td>
+          <td class="r">${gst$(r.t)}</td><td class="r">${gst$(r.ig)}</td><td class="r">${gst$(r.cg)}</td><td class="r">${gst$(r.sg)}</td><td class="r"><b>${gst$(gTax(r))}</b></td>
+          <td class="small">${[r.cn ? 'Credit note' : '', r.rc ? 'Reverse charge' : '', r.na ? 'ITC not available' : '', r.nil || '', r.src && r.src !== 'B2B' ? r.src : ''].filter(Boolean).join(' · ')}</td></tr>`).join('')}</tbody></table>${list.length > 1000 ? '<p class="muted small">Showing the first 1,000 — download Excel for all.</p>' : ''}` : '<div class="empty">No documents match.</div>';
+    };
+    $('[data-vq]', m.el).oninput = draw; draw();
+    $('[data-vx]', m.el).onclick = () => loadXlsx().then(X => { const wb = X.utils.book_new();
+      X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet([[k === 'sales' ? 'Customer' : 'Supplier', 'GSTIN', 'Bill no', 'Date', 'Taxable', 'IGST', 'CGST', 'SGST', 'Cess', 'Total tax', 'Type']].concat(rows.map(r => [r.n, r.g, r.i, r.d, r.t, r.ig, r.cg, r.sg, r.cs, gTax(r), [r.cn ? 'Credit note' : '', r.rc ? 'RCM' : '', r.na ? 'ITC not available' : '', r.src || ''].filter(Boolean).join(' ')]))), title.slice(0, 30));
+      X.writeFile(wb, `${slug(title)}-${slug(c.name)}-${grMonth}.xlsx`); }).catch(e => toast(friendly(e), true));
+  }
   function render() {
     const sm = gsum(row), mLabel = (() => { const [y, m] = grMonth.split('-'); return `${MONTHS_FULL[+m - 1]} ${y}`; })();
     const S = row.sales, P = row.purchases, B = row.gstr2b, G3 = row.gstr3b, G1 = row.gstr1, M = meth();
     const n1 = [S, G1].filter(Boolean).length, need3 = M === '2b_confirm' ? [B, G3] : [P, B, G3], n3 = need3.filter(Boolean).length;
+    const k3 = M === '2b_confirm' ? ['gstr2b', 'gstr3b'] : ['purchases', 'gstr2b', 'gstr3b'], c1 = stepsDone(['sales', 'gstr1']), c3 = stepsDone(k3);
     const myRules = grRules.filter(r => r.client_id === c.id && r.active !== false).length, offRules = grRules.filter(r => !r.client_id && r.active !== false).length;
     const recLabel = M === '2b_confirm' ? '2B — client confirms' : '2B vs purchases';
     body.innerHTML = `<div class="grb">
       <aside class="grb-side card" aria-label="Client, month and data">
         <div class="grb-pick">${pickers()}</div>
         <div class="grb-meta"><b>${esc(c.name)}</b> · ${esc(c.gstin)}<br>${mLabel}</div>
-        <section class="grb-g" aria-label="GSTR-1 data"><div class="grb-gh"><h3>GSTR-1</h3><small>${n1} of 2 added</small></div>
+        <section class="grb-g" aria-label="GSTR-1 data"><div class="grb-gh"><h3>GSTR-1</h3><small>${n1} of 2 added · ${c1} checked</small></div>
           ${item('sales', 'Sales register', S, S ? `${S.rows.length} documents · taxable ${gst$(sm.out.t)} · tax ${gst$(gTax(sm.out))}` : 'Type in GSTR-1 entry, or upload Excel / CSV / Tally / Zoho',
             `<button class="btn sm" data-up="sales">Upload</button><button class="link small" data-tpl="sales">Template</button>`)}
           ${item('gstr1', 'GSTR-1 (filed)', G1, G1 ? `Taxable ${gst$(G1.t)} · tax ${gst$(gTax(G1))}` : 'Filed totals — fetch from the portal, copy from our working, or type in',
             `<button class="btn sm" data-portal-api="g1">Fetch</button>${S ? '<button class="btn sm" data-g1copy title="Use the GSTR-1 entry totals as the filed figures">Same as working</button>' : ''}<button class="link small" data-ent="gstr1">${G1 ? 'Edit' : 'Type in'}</button>`)}
         </section>
-        <section class="grb-g" aria-label="GSTR-3B data"><div class="grb-gh"><h3>GSTR-3B</h3><small>${n3} of ${need3.length} added</small></div>
+        <section class="grb-g" aria-label="GSTR-3B data"><div class="grb-gh"><h3>GSTR-3B</h3><small>${n3} of ${need3.length} added · ${c3} checked</small></div>
           ${M === '2b_confirm' ? `<div class="grb-it na"><span class="grb-dot" aria-hidden="true"></span><div class="grb-it-b"><b>Purchase register</b><div class="small muted">Not used — this client confirms bills from 2B</div>${P ? `<div class="grb-it-a"><button class="link small danger-t" data-clr="purchases">Remove</button></div>` : ''}</div></div>`
             : item('purchases', 'Purchase register', P, P ? `${P.rows.length} documents · ITC in books ${gst$(gTax(sm.itcBooks))}` : 'Purchases as per books, for the 2B match',
             `<button class="btn sm" data-up="purchases">Upload</button><button class="btn sm" data-bills title="PDF or photo bills: read and add to the purchase register">Read bills</button><button class="link small" data-tpl="purchases">Template</button>`)}
@@ -4592,11 +4635,14 @@ VIEWS.gst = async v => {
       X.writeFile(wb, `${kind}-register-template.xlsx`);
     }).catch(e => toast(friendly(e), true));
   }
+  body.addEventListener('change', e => { const x = e.target; if (x.matches('input[type=checkbox][data-step]')) setStep(x.dataset.step, x.checked ? 'ok' : 'clear'); });
   body.addEventListener('click', async e => {
     const b = e.target.closest('button'); if (!b) return;
     const d = b.dataset;
     if (d.gt) { grTab = d.gt; render(); }
     if ('itcm' in d) itcMethodDialog();
+    if (d.view) viewData(d.view);
+    if (d.step && d.sv) setStep(d.step, d.sv);
     if ('rules' in d) rulesDialog(c, () => render());
     if (d.up) upload(d.up);
     if (d.bills != null) { const fs = await pickFiles('.pdf,image/*'); if (fs.length) readBillsDialog({ c, month: grMonth, files: fs, getRow: () => row, save }).catch(err => toast(friendly(err), true)); }

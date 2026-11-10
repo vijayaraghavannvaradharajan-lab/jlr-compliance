@@ -1247,3 +1247,11 @@ textarea.dr-body{font-family:inherit;line-height:1.5}
 @media (max-width:760px){.grb-side{max-width:none}}
 .itc-btns{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end}
 @media (max-width:600px){.itc-box .need-item{flex-direction:column;align-items:stretch}.itc-btns{justify-content:flex-start}}
+/* v33.2 open a step / tick it as checked */
+.grb-open{all:unset;cursor:pointer;font-weight:700;font-size:.88rem;color:var(--brand);border-radius:6px}
+.grb-open:hover{text-decoration:underline}.grb-open:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+.grb-step{margin-top:6px;display:flex;flex-wrap:wrap;gap:4px 10px;align-items:center}
+.grb-step .check{display:inline-flex;gap:6px;align-items:center;min-height:28px}
+.grb-it.chk .grb-dot{border:0;background:var(--brand);color:var(--surface)}
+.grb-it.ok.chk .grb-dot{background:var(--green)}
+.grb-it.na .grb-dot{border-style:solid;color:var(--muted);font-weight:800;opacity:.7}
