@@ -3690,7 +3690,7 @@ const GR = (() => {
     const g1 = m.gstr1 || null, g3 = m.gstr3b || null, checks = [];
     const cmp = (label, a, b) => { if (!a || !b) return; const d = r2(tax(a) - tax(b)), dt = r2((a.t || 0) - (b.t || 0)); checks.push({ label, a: fix({ t: a.t || 0, tax: tax(a) }), b: fix({ t: b.t || 0, tax: tax(b) }), dt, d, ok: Math.abs(d) <= 1 && Math.abs(dt) <= 1 }); };
     const t31 = g3 && g3.t31a ? g3.t31a : null;
-    if (S.length) { cmp('Books (sales register) vs GSTR-1', out, g1); cmp('Books (sales register) vs GSTR-3B 3.1(a)', out, t31); }
+    if (S.length) { cmp('Books (sales register) vs GSTR-1' + (g1 && g1.source === 'working' ? ' (GSTR-1 copied from working — fetch or type the filed figures to really check)' : ''), out, g1); cmp('Books (sales register) vs GSTR-3B 3.1(a)', out, t31); }
     cmp('GSTR-1 vs GSTR-3B 3.1(a)', g1, t31);
     if (g3 && g3.itc_net && has2b) cmp('GSTR-2B ITC vs GSTR-3B ITC claimed', itc2b, { t: itc2b.t, ...g3.itc_net });
     const over2b = method === 'books' && has2b ? r2(tax(itcBooks) - tax(itc2b)) : 0;
@@ -4189,7 +4189,7 @@ VIEWS.gst = async v => {
     row = data || { ...next, ...patch }; render();
   };
   const by = () => ({ at: new Date().toISOString(), by: me.id });
-  const srcLine = d => d ? `<span class="muted small">${d.source === 'api' ? 'From GST portal' : d.file ? esc(d.file) : 'Entered'} · ${new Date(d.at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}${d.by ? ' · ' + esc(profName(d.by)) : ''}</span>` : '<span class="muted small">Not added</span>';
+  const srcLine = d => d ? `<span class="muted small">${d.source === 'api' ? 'From GST portal' : d.source === 'working' ? '<span class="late">Copied from our working — not from the portal</span>' : d.file ? esc(d.file) : 'Entered'} · ${new Date(d.at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}${d.by ? ' · ' + esc(profName(d.by)) : ''}</span>` : '<span class="muted small">Not added</span>';
   const card = (k, title, d, info, btns) => `<div class="gr-src ${d ? 'ok' : ''}"><div class="gr-src-h"><span class="gr-dot" aria-hidden="true"></span><b>${title}</b></div>
       <div class="small">${info}</div>${srcLine(d)}<div class="gr-src-b">${btns}${d ? `<button class="link small danger-t" data-clr="${k}">Remove</button>` : ''}</div></div>`;
 
@@ -4211,8 +4211,8 @@ VIEWS.gst = async v => {
         <section class="grb-g" aria-label="GSTR-1 data"><div class="grb-gh"><h3>GSTR-1</h3><small>${n1} of 2 added</small></div>
           ${item('sales', 'Sales register', S, S ? `${S.rows.length} documents · taxable ${gst$(sm.out.t)} · tax ${gst$(gTax(sm.out))}` : 'Type in GSTR-1 entry, or upload Excel / CSV / Tally / Zoho',
             `<button class="btn sm" data-up="sales">Upload</button><button class="link small" data-tpl="sales">Template</button>`)}
-          ${item('gstr1', 'GSTR-1 (filed)', G1, G1 ? `Taxable ${gst$(G1.t)} · tax ${gst$(gTax(G1))}` : 'Filed totals from the portal summary',
-            `<button class="btn sm" data-ent="gstr1">${G1 ? 'Edit' : 'Enter'} totals</button>`)}
+          ${item('gstr1', 'GSTR-1 (filed)', G1, G1 ? `Taxable ${gst$(G1.t)} · tax ${gst$(gTax(G1))}` : 'Filed totals — fetch from the portal, copy from our working, or type in',
+            `<button class="btn sm" data-portal-api="g1">Fetch</button>${S ? '<button class="btn sm" data-g1copy title="Use the GSTR-1 entry totals as the filed figures">Same as working</button>' : ''}<button class="link small" data-ent="gstr1">${G1 ? 'Edit' : 'Type in'}</button>`)}
         </section>
         <section class="grb-g" aria-label="GSTR-3B data"><div class="grb-gh"><h3>GSTR-3B</h3><small>${n3} of ${need3.length} added</small></div>
           ${M === '2b_confirm' ? `<div class="grb-it na"><span class="grb-dot" aria-hidden="true"></span><div class="grb-it-b"><b>Purchase register</b><div class="small muted">Not used — this client confirms bills from 2B</div>${P ? `<div class="grb-it-a"><button class="link small danger-t" data-clr="purchases">Remove</button></div>` : ''}</div></div>`
@@ -4603,7 +4603,13 @@ VIEWS.gst = async v => {
     if (d.ent) enterFigures(d.ent);
     if (d.tpl) template(d.tpl);
     if (d.clr) { if (!confirm('Remove this data for the month?')) return; await save({ [d.clr]: null }).catch(err => toast(friendly(err), true)); }
-    if ('portalApi' in d) gstPortalFetch(c, grMonth, async patch => { await save(patch); });
+    if ('portalApi' in d) gstPortalFetch(c, grMonth, async patch => { await save(patch); }, d.portalApi || '');
+    if ('g1copy' in d) {
+      const o2 = gsum(row).out;
+      if (row.gstr1 && row.gstr1.source === 'api' && !confirm('The filed GSTR-1 was fetched from the portal. Replace it with our working?')) return;
+      if (!confirm(`Use our working as the filed GSTR-1?\n\nTaxable ${gst$(o2.t)} · IGST ${gst$(o2.ig)} · CGST ${gst$(o2.cg)} · SGST ${gst$(o2.sg)} · Cess ${gst$(o2.cs)}\n\nOnly do this when GSTR-1 was filed exactly from this working. It will be marked "copied from our working", and the GSTR-1 vs books check will not catch differences.`)) return;
+      await save({ gstr1: { t: o2.t, ig: o2.ig, cg: o2.cg, sg: o2.sg, cs: o2.cs, source: 'working', ...by() } }).catch(err => toast(friendly(err), true)); toast('GSTR-1 (filed) set from our working');
+    }
     if (b.id === 'grSaveNotes') { await save({ notes: $('#grNotes', body).value.trim() || null }).catch(err => toast(friendly(err), true)); toast('Notes saved'); }
     if (b.id === 'grVer') { if (!gsum(row).counts.sales && !row.gstr2b) return toast('Add the data first', true); await save({ status: 'Verified', notes: $('#grNotes', body).value.trim() || null }).catch(err => toast(friendly(err), true)); toast('Marked as verified'); }
     if (b.id === 'grUnver') { await save({ status: 'Draft' }).catch(err => toast(friendly(err), true)); }
@@ -4621,7 +4627,22 @@ VIEWS.gst = async v => {
 };
 
 // ----- GST portal fetch (OTP) through the "gst-data" server function -----
-async function gstPortalFetch(c, month, onData) {
+// GSTR-1 summary from the portal (GSTN RETSUM: sec_sum[] with ttl_tax = taxable, ttl_igst …). Notes and adjusted advances reduce, amendments are shown but not added.
+function gstr1FromApi(j) {
+  let d = j; for (let k = 0; k < 3 && d && !d.sec_sum && d.data; k++) d = d.data;
+  if (!d || !Array.isArray(d.sec_sum)) return null;
+  const n = x => GR.amt(x), tot = { t: 0, ig: 0, cg: 0, sg: 0, cs: 0 }, secs = [];
+  const ADD = ['B2B', 'B2CL', 'B2CS', 'EXP', 'AT', 'SEZWP', 'SEZWOP', 'DE'], SUB = ['CDNR', 'CDNUR', 'TXPD', 'ATADJ'];
+  d.sec_sum.forEach(s => {
+    const nm = String(s.sec_nm || '').toUpperCase(), v = { t: n(s.ttl_tax ?? s.ttl_txval), ig: n(s.ttl_igst), cg: n(s.ttl_cgst), sg: n(s.ttl_sgst), cs: n(s.ttl_cess) };
+    if (!v.t && !v.ig && !v.cg && !v.sg && !v.cs) return;
+    const sign = ADD.includes(nm) ? 1 : SUB.includes(nm) ? -1 : 0;
+    secs.push({ nm, n: s.ttl_rec || s.ttl_doc || '', ...v, sign });
+    if (sign) for (const k in tot) tot[k] = GR.r2(tot[k] + sign * v[k]);
+  });
+  return { tot, secs, period: d.ret_period || '' };
+}
+async function gstPortalFetch(c, month, onData, only = '') {
   const m = modal(`Fetch from GST portal · ${c.name}`, '<div data-gp><div class="loading">Checking…</div></div>', { wide: true });
   const box = $('[data-gp]', m.el), [yy, mm] = month.split('-').map(Number);
   let st;
@@ -4631,7 +4652,7 @@ async function gstPortalFetch(c, month, onData) {
     if (!st.keys) { box.innerHTML = '<p class="note">Add your Sandbox API key and secret in <b>Settings → GST</b> first.</p>'; return; }
     box.innerHTML = `<div class="small" style="line-height:1.7"><b>GSTIN</b> ${esc(c.gstin)} · <b>GST username</b> ${st.username ? esc(st.username) : '<span class="late">not saved — add a GST login under 🔑 Logins</span>'}<br>
       ${st.active ? `<span class="ok-t">● Connected until ${new Date(st.expires_at).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' })}</span>` : '<span class="muted">Not connected — an OTP is needed</span>'}</div>
-      ${st.active ? `<div class="toolbar" style="margin-top:14px"><button class="btn primary" data-f2b>Fetch GSTR-2B (${MONTHS[mm - 1]} ${yy})</button><button class="btn" data-f3b>Fetch filed GSTR-3B</button></div>`
+      ${st.active ? `<div class="toolbar" style="margin-top:14px">${only === 'g1' ? `<button class="btn primary" data-f1>Fetch filed GSTR-1 (${MONTHS[mm - 1]} ${yy})</button><button class="btn" data-f2b>Fetch GSTR-2B</button>` : `<button class="btn primary" data-f2b>Fetch GSTR-2B (${MONTHS[mm - 1]} ${yy})</button><button class="btn" data-f1>Fetch filed GSTR-1</button>`}<button class="btn" data-f3b>Fetch filed GSTR-3B</button></div>`
         : `<ol class="small" style="line-height:1.8;padding-left:18px"><li>The client must have <b>API access ON</b> on the GST portal (Profile → Manage API Access → Yes).</li><li>Click <b>Send OTP</b> — the OTP goes to the client's registered mobile / email.</li><li>Ask the client for the OTP and enter it below. The connection lasts about 6 hours.</li></ol>
           <div class="toolbar"><button class="btn" data-otp ${st.username ? '' : 'disabled'}>Send OTP</button><input data-otpv inputmode="numeric" maxlength="6" placeholder="6-digit OTP" style="width:130px"><button class="btn primary" data-ver>Verify</button></div>`}
       <div data-gmsg class="small" style="margin-top:10px"></div>`;
@@ -4647,6 +4668,16 @@ async function gstPortalFetch(c, month, onData) {
       if ('f2b' in b.dataset) { msg('Fetching GSTR-2B…'); const r = await fnCall('gst-data', 'fetch_2b', { client_id: c.id, year: yy, month: mm });
         const p = GR.parse2BJson(r.data); if (p.error) { msg(`<span class="late">${esc(r.message || p.error)}</span>`); return; }
         await onData({ gstr2b: { rows: p.rows, source: 'api', at: new Date().toISOString(), by: me.id } }); msg(`<span class="ok-t">GSTR-2B saved — ${p.rows.length} documents.</span>`); }
+      if ('f1' in b.dataset) { msg('Fetching filed GSTR-1…');
+        let r; try { r = await fnCall('gst-data', 'fetch_1', { client_id: c.id, year: yy, month: mm }); }
+        catch (err) { msg(/unknown|not supported|invalid action|bad action/i.test(friendly(err)) ? '<span class="late">The office\'s GST server function does not fetch GSTR-1 yet — it needs a small update (ask your developer). Use “Same as working” or type the totals meanwhile.</span>' : `<span class="late">${esc(friendly(err))}</span>`); return; }
+        const g = gstr1FromApi(r.data || r); if (!g) { msg(`<span class="late">${esc(r.message || 'GSTR-1 summary not available for this month (not filed yet?)')}</span>`); return; }
+        msg(`<div class="table-wrap"><table><thead><tr><th>Section</th><th class="r">Docs</th><th class="r">Taxable</th><th class="r">IGST</th><th class="r">CGST</th><th class="r">SGST</th><th class="r">Cess</th><th></th></tr></thead><tbody>
+          ${g.secs.map(s => `<tr><td>${esc(s.nm)}</td><td class="r">${esc(String(s.n))}</td><td class="r">${gst$(s.t)}</td><td class="r">${gst$(s.ig)}</td><td class="r">${gst$(s.cg)}</td><td class="r">${gst$(s.sg)}</td><td class="r">${gst$(s.cs)}</td><td class="small muted">${s.sign > 0 ? 'added' : s.sign < 0 ? 'less' : 'not added (amendment) — check'}</td></tr>`).join('')}
+          <tr class="tot"><td><b>Total</b></td><td></td>${['t', 'ig', 'cg', 'sg', 'cs'].map(k => `<td class="r"><b>${gst$(g.tot[k])}</b></td>`).join('')}<td></td></tr></tbody></table></div>
+          <div class="toolbar" style="margin-top:8px"><button class="btn primary" data-f1save>Save as filed GSTR-1</button></div>`);
+        $('[data-f1save]', box).onclick = async () => { await onData({ gstr1: { ...g.tot, secs: g.secs, source: 'api', at: new Date().toISOString(), by: me.id } }); msg('<span class="ok-t">Filed GSTR-1 totals saved.</span>'); };
+      }
       if ('f3b' in b.dataset) { msg('Fetching GSTR-3B…'); const r = await fnCall('gst-data', 'fetch_3b', { client_id: c.id, year: yy, month: mm });
         const g = gstr3bFromApi(r.data); if (!g) { msg(`<span class="late">${esc(r.message || 'GSTR-3B not available for this month (not filed yet?)')}</span>`); return; }
         await onData({ gstr3b: { ...g, source: 'api', at: new Date().toISOString(), by: me.id } }); msg('<span class="ok-t">Filed GSTR-3B figures saved.</span>'); }
@@ -9815,6 +9846,6 @@ const GAME = {
   }
 };
 
-window.__tracker = { RULES, GAME, ACK, dashTabs, AUDIT, IDLE, clientProblems, HEALTH, HELP, noticeLetter, BANK, bankReadFile, TDSW, MCA, BILL, parseMcaSheets, mcaPlanAll, fillGstWorkings, G1, GR, RECO, gstr3bFromApi, periodToMonth, strongPassword, periodFor, dueDateFor, parseCSV, toCSV, gstLateFee, gstInterest, tdsCalc, rocCalc, monthsSpan, tdsDepositDue, g1json, clientReportHtml, clientReportMsg, rnStage, anyDate, parseRenewalRows, gstPayDue, tdsPayDue, advInstalment, advCurrent, advDue, recurringPlan, taxMsg, addMonths, fyEndOf, obProgress, rnKind };
+window.__tracker = { RULES, gstr1FromApi, GAME, ACK, dashTabs, AUDIT, IDLE, clientProblems, HEALTH, HELP, noticeLetter, BANK, bankReadFile, TDSW, MCA, BILL, parseMcaSheets, mcaPlanAll, fillGstWorkings, G1, GR, RECO, gstr3bFromApi, periodToMonth, strongPassword, periodFor, dueDateFor, parseCSV, toCSV, gstLateFee, gstInterest, tdsCalc, rocCalc, monthsSpan, tdsDepositDue, g1json, clientReportHtml, clientReportMsg, rnStage, anyDate, parseRenewalRows, gstPayDue, tdsPayDue, advInstalment, advCurrent, advDue, recurringPlan, taxMsg, addMonths, fyEndOf, obProgress, rnKind };
 start();
 })();
