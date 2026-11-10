@@ -84,6 +84,8 @@
     data.reports = rp.error ? null : (rp.data || []);
     const ex = await sb.rpc('portal_extra');
     data.extra = ex.error || !ex.data ? { acks: [], claims: [], upi: null } : ex.data;
+    const ic = await sb.rpc('portal_itc_list');
+    data.itc = ic.error ? [] : (ic.data || []);
     render();
     if (!idleT) idleStart();
   }
@@ -113,7 +115,15 @@
         return `<div class="need-item ${late ? 'late-item' : ''}"><div><b>${esc(t.return_name)} · ${esc(t.period)}</b>
           <div class="small ${late ? 'late' : 'muted'}">${late ? 'Was due ' : 'Due '}${fmt(t.due_date)} · your documents / data</div></div>
           <button class="btn sm primary" data-up="${t.id}">Upload</button></div>`; }).join('')}</section>` : '';
-    out.innerHTML = needBox + `<div class="stats">
+    // v33: purchase bills in GSTR-2B the office asked the client to confirm
+    const itc = data.itc || [], open = itc.filter(x => !x.answer), ANS = [['take', 'Take credit'], ['skip', "Don't take now"], ['notmine', 'Not my purchase']];
+    const MN = p => { const [y, m] = String(p).split('-'); return `${MONTHS[+m - 1]} ${y}`; };
+    const itcBox = itc.length ? `<section class="card need-box itc-box" aria-label="Bills to confirm"><h3 style="margin:0 0 4px">Purchase bills to confirm${open.length ? ` · ${open.length} waiting` : ''}</h3>
+      <p class="muted small" style="margin:0 0 10px">These bills are in your GSTR-2B. Tell us for each one whether we should take input tax credit.</p>
+      ${itc.map((x, n) => `<div class="need-item"><div><b>${esc(x.n || x.g)}</b> · ${esc(x.i)}${x.cn ? ' (credit note)' : ''}
+          <div class="small muted">${x.d ? fmt(x.d) + ' · ' : ''}GST ${inr(x.tax)} · GSTR-2B ${MN(x.period)}${x.answer ? ` · <b>${esc((ANS.find(a => a[0] === x.answer) || [])[1] || x.answer)}</b>${x.by_staff ? ' (noted by us)' : ''}` : ''}</div></div>
+        <div class="itc-btns">${ANS.map(([k, l]) => `<button class="btn sm ${x.answer === k ? 'primary' : ''}" data-itc="${n}" data-a="${k}" aria-pressed="${x.answer === k}">${l}</button>`).join('')}</div></div>`).join('')}</section>` : '';
+    out.innerHTML = itcBox + needBox + `<div class="stats">
         <div class="stat amber"><div class="n">${cnt('Pending data')}</div><div class="l">Waiting for your documents</div></div>
         <div class="stat blue"><div class="n">${cnt('In progress') + cnt('Ready to file')}</div><div class="l">In progress</div></div>
         <div class="stat green"><div class="n">${cnt('Filed')}</div><div class="l">Filed</div></div>
@@ -121,6 +131,15 @@
       <div class="toolbar"><div class="tabs"><button data-tab="work" class="${tab === 'work' ? 'on' : ''}">Work status</button><button data-tab="inv" class="${tab === 'inv' ? 'on' : ''}">Invoices (${invs.length})</button>${data.reports && data.reports.length ? `<button data-tab="rep" class="${tab === 'rep' ? 'on' : ''}">Monthly reports (${data.reports.length})</button>` : ''}</div></div>
       <div id="pv"></div>`;
     $$('[data-tab]').forEach(b => b.onclick = () => { tab = b.dataset.tab; render(); });
+    $$('[data-itc]', out).forEach(b => b.onclick = async () => {
+      const x = (data.itc || [])[+b.dataset.itc], a = b.dataset.a; let note = null;
+      if (a === 'notmine') { note = prompt('Anything to add? (optional)', ''); if (note === null) return; }
+      b.disabled = true;
+      const r = await sb.rpc('portal_itc_answer', { p_period: x.period, p_key: x.k, p_answer: a, p_note: note || null });
+      b.disabled = false;
+      if (r.error) return toast(r.error.message || 'Could not save — please try again', true);
+      x.answer = a; x.by_staff = false; toast('Thank you — noted'); render();
+    });
     $$('.need-box [data-up]', out).forEach(b => b.onclick = () => upload(tasks.find(t => t.id === b.dataset.up)));
     $$('.need-box [data-updoc]', out).forEach(b => b.onclick = () => uploadDoc(b.dataset.updoc));
     const pv = $('#pv');

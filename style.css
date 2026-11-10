@@ -1207,3 +1207,43 @@ textarea.dr-body{font-family:inherit;line-height:1.5}
 :root[data-look="pro"] .bento-stats .mini{padding-right:76px}
 :root[data-look="game"] .bento-stats .mini{padding-right:56px}
 @media (max-width:760px){.gh-text{flex:1 1 180px}.gh-streak{flex:1 1 100%;justify-content:center}}
+
+/* ===== v33 GST review: checklist sidebar layout (Option B) ===== */
+.grb{display:flex;flex-wrap:wrap;gap:18px;align-items:flex-start}
+.grb-side{flex:1 1 290px;max-width:330px;display:flex;flex-direction:column;gap:14px;margin:0;box-sizing:border-box}
+.grb-main{flex:999 1 560px;min-width:0;display:flex;flex-direction:column;gap:14px}
+.grb-main>.card{margin:0}
+.grb-pick{display:flex;flex-direction:column;gap:8px}
+.grb-pick label{display:flex;flex-direction:column;gap:4px;font-size:.8rem;font-weight:600;color:var(--muted)}
+.grb-pick select,.grb-pick input{width:100%}
+.grb-meta{font-size:.85rem;color:var(--muted);line-height:1.45}
+.grb-meta b{color:var(--ink)}
+.grb-g{border:1px solid var(--line);border-radius:12px;padding:10px 12px;display:flex;flex-direction:column}
+.grb-gh{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:2px}
+.grb-gh h3{margin:0;font-size:.95rem;font-weight:800;color:var(--brand)}
+.grb-gh small{color:var(--muted);font-size:.75rem}
+.grb-it{display:flex;gap:10px;padding:9px 0;border-top:1px solid var(--line)}
+.grb-gh+.grb-it{border-top:0}
+.grb-dot{flex:none;width:20px;height:20px;border-radius:50%;border:2px dashed color-mix(in srgb,var(--muted) 55%,transparent);box-sizing:border-box;display:flex;align-items:center;justify-content:center;margin-top:1px}
+.grb-it.ok .grb-dot{border:0;background:var(--green);color:var(--surface)}
+.grb-it.na .grb-dot{border-style:solid;opacity:.4}
+.grb-it-b{min-width:0;flex:1;display:flex;flex-direction:column;gap:2px}
+.grb-it-b>b{font-size:.88rem}
+.grb-it-b .small{color:var(--muted);line-height:1.35}
+.grb-it-a{display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center;margin-top:5px}
+.grb-row{display:flex;align-items:center;justify-content:space-between;gap:8px;border-top:1px solid var(--line);padding-top:10px;font-size:.86rem}
+.grb-row small{font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.03em}
+.grb-st{display:flex}
+.grb-btns{display:flex;flex-wrap:wrap;gap:8px}
+.gr-tabs button[disabled]{opacity:.7;cursor:not-allowed}
+.gr-tabs .soon{font-size:.68rem;font-weight:700;padding:1px 6px;border-radius:999px;background:var(--grey-soft,#eef1f6);color:var(--muted);margin-left:4px}
+.rc-head{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-bottom:12px}
+.itcm{display:flex;flex-direction:column;gap:8px}
+.itcm-o{display:flex;gap:10px;align-items:flex-start;border:1px solid var(--line);border-radius:12px;padding:12px;cursor:pointer}
+.itcm-o:has(input:checked){border-color:var(--brand);background:var(--brand-soft)}
+.itcm-o span{display:flex;flex-direction:column;gap:3px}
+.itcm-o small{color:var(--muted);line-height:1.4}
+.rule-form select,.rule-form input{width:100%}
+@media (max-width:760px){.grb-side{max-width:none}}
+.itc-btns{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end}
+@media (max-width:600px){.itc-box .need-item{flex-direction:column;align-items:stretch}.itc-btns{justify-content:flex-start}}
