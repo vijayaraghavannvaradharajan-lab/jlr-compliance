@@ -1312,3 +1312,11 @@ textarea.dr-body{font-family:inherit;line-height:1.5}
 .pill.b{background:var(--blue-soft);color:var(--blue)}
 @media (max-width:900px){.grs{grid-template-columns:repeat(2,minmax(0,1fr))}.grs-ov{grid-column:1/-1;padding:6px 0}}
 .gr-fold .gr-payh[hidden]{display:none}
+
+/* v35 senior verification */
+.rev-p{border:1px solid var(--line);border-radius:14px;padding:14px 16px;margin-top:14px;background:var(--surface)}
+.rev-p.rev-changes{border-color:color-mix(in srgb,var(--red) 40%,var(--line))}
+.rev-p.rev-approved,.rev-p.rev-sent_client{border-color:color-mix(in srgb,var(--green) 40%,var(--line))}
+.rev-h{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:6px}.rev-h h3{margin:0;font-size:1rem}
+.rev-p h4{margin:12px 0 4px;font-size:.85rem}
+.rev-l{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px;font-size:.88rem}

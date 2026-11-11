@@ -1811,12 +1811,33 @@ VIEWS.settings = async v => {
       <div class="linkbox"><input readonly value="${esc(boardUrl(settings.board_token))}"><button class="btn sm" id="cpBoard">Copy</button>
         <a class="btn sm ghost" href="${esc(boardUrl(settings.board_token))}" target="_blank" rel="noopener">Open</a><button class="btn sm" id="regenBoard">New link</button></div>
       <p class="note warn small" style="margin-top:12px">Anyone with this link can see all your client names. For clients, prefer each client's own private link (Clients page → Copy link).</p></div>
+    <div class="card" id="revCard"><h3>Senior verification &amp; filing mails</h3>
+      <div class="form-grid g2"><label>Senior who verifies GST workings<select id="revSenior"><option value="">— choose —</option>${profiles.filter(p => p.active !== false && ['manager', 'partner', 'admin'].includes(p.role)).map(p => `<option value="${p.id}" ${settings.senior_id === p.id ? 'selected' : ''}>${esc(p.full_name || p.email)} · ${esc(p.email || '')}</option>`).join('')}</select></label></div>
+      <label class="check" style="margin-top:8px"><input type="checkbox" id="revAuto" ${settings.auto_send_filed ? 'checked' : ''}> After filing, send the acknowledgement and workings to the client automatically</label>
+      <p class="muted small">Sends when the GSTR-1 / GSTR-3B acknowledgement is uploaded, only for months the senior approved. A “Send to client” button is always there too.</p>
+      <h4 style="margin:14px 0 6px">Mailbox key for these emails</h4>
+      <p class="muted small">The office Gmail script sends these emails with their attachments and reads the senior's replies. ${settings.mailjob_key_hash ? `Key is set. ${settings.mailjob_seen_at ? 'Script last checked ' + new Date(settings.mailjob_seen_at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }) + '.' : '<span class="late">The script has not checked in yet — add MAILJOB_KEY to it (steps below).</span>'}` : '<span class="late">No key yet.</span>'}</p>
+      <div class="toolbar"><button class="btn sm" id="revKey">${settings.mailjob_key_hash ? 'Make a new key' : 'Make the key'}</button><span class="muted small" id="revOut"></span></div>
+      <p class="muted small">Script steps: script.google.com → “JLR mail intake” → paste the new <b>mail-intake-apps-script.gs</b> → Save → Project Settings → Script properties → add <b>MAILJOB_KEY</b> = the key → Run <b>setup</b> once and allow access.</p></div>
     <div class="card"><h3>Notices module</h3>
       <label class="check"><input type="checkbox" id="noticesOn" ${settings.notices_off ? '' : 'checked'}> Show Notices in the tracker</label>
       <p class="muted small">Switch off to hide All notices, GST / TDS / MCA notices and the notice alerts on the dashboard for everyone (for example when notices move to their own site). Nothing is deleted — switch it back on any time.</p></div>`;
   const save = async patch => { await must(sb.from('settings').update(patch).eq('id', 1)); Object.assign(settings, patch); toast('Saved'); };
   $('#saveFirm').onclick = async () => { try { await save({ firm_name: $('#firm').value.trim() || 'Our Office' }); $('.brand').textContent = settings.firm_name; } catch (e) { toast(friendly(e), true); } };
   $('#boardOn').onchange = async e => { try { await save({ board_enabled: e.target.checked }); } catch (err) { toast(friendly(err), true); } };
+  $('#revSenior').onchange = async e => { try { await save({ senior_id: e.target.value || null }); } catch (err) { toast(/senior_id/.test(err.message || '') ? 'Run update-session18.sql in Supabase first' : friendly(err), true); } };
+  $('#revAuto').onchange = async e => { try { await save({ auto_send_filed: e.target.checked }); } catch (err) { toast(/auto_send/.test(err.message || '') ? 'Run update-session18.sql in Supabase first' : friendly(err), true); e.target.checked = !e.target.checked; } };
+  $('#revKey').onclick = async () => {
+    if (settings.mailjob_key_hash && !confirm('Make a new key? The script stops sending until you paste the new key into it.')) return;
+    const key = 'mj_' + REV.rand(32), hash = await REV.sha(key);
+    const { error } = await safe(sb.rpc('set_mailjob_key', { p_hash: hash }));
+    if (error) return toast(/set_mailjob_key/.test(error.message || '') ? 'Run update-session18.sql in Supabase first' : friendly(error), true);
+    settings.mailjob_key_hash = hash;
+    const m = modal('Mailbox key — copy it now', `<p>Paste this into the Gmail script as the script property <b>MAILJOB_KEY</b>. It is shown only once.</p><div class="linkbox"><input readonly value="${key}" id="mjk"><button class="btn sm" id="mjc">Copy</button></div>`);
+    $('#mjc', m.el).onclick = () => copySecret(key, 'Key copied');
+    safe(sb.from('mail_jobs').select('id', { count: 'exact', head: true }).eq('status', 'new')).then(r => { if (!r.error) $('#revOut').textContent = `${r.count || 0} email(s) waiting to be sent`; });
+  };
+  safe(sb.from('mail_jobs').select('id,status').eq('status', 'new').limit(200)).then(r => { if (!r.error && $('#revOut')) $('#revOut').textContent = r.data.length ? `${r.data.length} email(s) waiting to be sent` : ''; });
   $('#noticesOn').onchange = async e => { try { await save({ notices_off: !e.target.checked }); $("#nav").innerHTML = navGroups(); } catch (err) { toast(/notices_off/.test(err.message || '') ? 'Run update-session16.sql in Supabase first' : friendly(err), true); e.target.checked = !e.target.checked; } };
   $('#cpBoard').onclick = () => copy(boardUrl(settings.board_token));
   $('#regenBoard').onclick = async () => {
@@ -4213,14 +4234,20 @@ VIEWS.gst = async v => {
   loadClientRules(grClient).catch(() => {});
   const r = await safe(sb.from('gst_months').select('*').eq('client_id', grClient).eq('period', period).maybeSingle());
   if (r.error) { body.innerHTML = '<div class="card"><p class="note">GST review is not set up yet — run <b>update-gst-review.sql</b> in Supabase.</p></div>'; return; }
-  let row = r.data || { client_id: grClient, period, status: 'Draft' }, recoHist = null;
+  let row = r.data || { client_id: grClient, period, status: 'Draft' }, recoHist = null, rev = await REV.load(c, period).catch(() => null);
+  if (rev && rev.missing) rev = null;
   const save = async patch => {
     const next = { ...row, ...patch };
     const sm = gsum(next);
     const st2 = recoHist ? itcState(sm, next) : null, d3s = draft3b(next, sm, c, st2 && st2.ready ? st2.cl.claim : null);
     patch.summary = { ...sm.trend, sales_n: sm.counts.sales, b2b_n: sm.counts.b2b, cash_draft: d3s.cashTotal, cash: { ...d3s.cashNeed }, cash_total: next.gstr3b && next.gstr3b.cash ? sm.trend.cash : d3s.cashTotal, deposit: d3s.depositTotal, at: new Date().toISOString() };
     const { data } = await must(sb.from('gst_months').upsert({ client_id: grClient, period, ...patch }, { onConflict: 'client_id,period' }).select().single());
-    row = data || { ...next, ...patch }; render();
+    row = data || { ...next, ...patch };
+    if (rev && ['sent', 'approved'].includes(rev.state) && Object.keys(patch).some(k => ['sales', 'purchases', 'gstr2b', 'g1'].includes(k))) {
+      const u = await safe(sb.from('gst_reviews').update({ state: 'draft', token_hash: null }).eq('client_id', c.id).eq('period', period));
+      if (!u.error) { rev.state = 'draft'; toast('The workings changed after they were sent to the senior — send for verification again', true); }
+    }
+    render();
   };
   const by = () => ({ at: new Date().toISOString(), by: me.id });
   const srcLine = d => d ? `<span class="muted small">${d.source === 'api' ? 'From GST portal' : d.source === 'working' ? '<span class="late">Copied from our working — not from the portal</span>' : d.file ? esc(d.file) : 'Entered'} · ${new Date(d.at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}${d.by ? ' · ' + esc(profName(d.by)) : ''}</span>` : '<span class="muted small">Not added</span>';
@@ -4271,11 +4298,11 @@ VIEWS.gst = async v => {
       s1: !S && !G1f ? ['Nothing added', 'todo'] : !G1f ? ['Filed GSTR-1 not added', 'warn'] : G1f.source === 'working' ? ['Filed = copied from working', 'ok'] : g1chk && !g1chk.ok ? ['Filed ≠ working — check', 'bad'] : ['Filed ✓', 'ok'],
       s2: !st.ready ? [M === '2b_confirm' ? 'Add GSTR-2B' : 'Add books and 2B', 'todo'] : st.decideN ? [`${st.decideN} to decide`, 'warn'] : st.openN ? [M === '2b_confirm' ? `${st.openN} waiting for client` : `${st.openN} not in books — open`, 'warn'] : ['All decided ✓', 'ok'],
       s3: !(sm.counts.sales || sm.counts.b2b || sm.counts.purchases || G1f) ? ['Waiting for data', 'todo'] : [`Cash ${gst$(D3.depositTotal)} to deposit`, G3 ? 'ok' : 'info'],
-      s4: row.status === 'Verified' ? ['Verified ✓', 'ok'] : sm.checks.some(x => !x.ok) ? [`${sm.checks.filter(x => !x.ok).length} check${sm.checks.filter(x => !x.ok).length > 1 ? 's' : ''} to look at`, 'bad'] : ['Not verified yet', 'info']
+      s4: rev && rev.state === 'sent_client' ? ['Filed & sent to client ✓', 'ok'] : rev && rev.state === 'approved' ? ['Approved — file now', 'ok'] : rev && rev.state === 'changes' ? ['Changes needed', 'bad'] : rev && rev.state === 'sent' ? ['Waiting for the senior', 'warn'] : row.status === 'Verified' ? ['Verified ✓', 'ok'] : sm.checks.some(x => !x.ok) ? [`${sm.checks.filter(x => !x.ok).length} check${sm.checks.filter(x => !x.ok).length > 1 ? 's' : ''} to look at`, 'bad'] : ['Not verified yet', 'info']
     };
     const head = `<div class="grh"><div class="grh-pick"><label>Client<select id="grC">${gClients.length ? opts(gClients, grClient, x => `${x.name} · ${x.gstin}`, x => x.id) : '<option value="">No GST clients</option>'}</select></label>
         <label>Month<input type="month" id="grM" value="${esc(grMonth)}"></label></div>
-      ${row.status === 'Verified' ? `<span class="st st-filed">✓ Verified · ${esc(profName(row.verified_by) || '')}</span>` : '<span class="st st-pending-data">Draft</span>'}
+      ${rev && rev.state !== 'draft' ? `<span class="pill ${REV.STATE[rev.state][1]}">${REV.STATE[rev.state][0]}</span>` : row.status === 'Verified' ? `<span class="st st-filed">✓ Verified · ${esc(profName(row.verified_by) || '')}</span>` : '<span class="st st-pending-data">Draft</span>'}
       <span class="spacer"></span><button class="btn sm" data-portal-api>Fetch from GST portal</button><a class="btn sm" href="#/clientreport" data-crgo>Client report</a>
       ${isManager() ? (row.status === 'Verified' ? '<button class="btn sm" id="grUnver">Back to draft</button>' : '<button class="btn sm primary" id="grVer">✓ Mark as verified</button>') : ''}</div>`;
     if (grOv) { body.innerHTML = head + overviewHtml(sm, st, D3, stat, mLabel); bindPickers(body); return; }
@@ -4301,13 +4328,63 @@ VIEWS.gst = async v => {
         <div id="grOut"></div>
         ${sNow === 's4' ? `<div class="gr-verify"><label class="full">Review notes<textarea id="grNotes" rows="3" placeholder="e.g. Reversed ITC on 2 invoices missing in 2B; client informed">${esc(row.notes || '')}</textarea></label>
           <div class="toolbar" style="margin:8px 0 0"><button class="btn sm" id="grSaveNotes">Save notes</button><span class="spacer"></span>
-          ${isManager() ? (row.status === 'Verified' ? '<button class="btn" id="grUnver">Back to draft</button>' : '<button class="btn primary" id="grVer">✓ Mark as verified</button>') : '<span class="muted small">A manager or partner marks this as verified.</span>'}</div></div>` : ''}
+          ${isManager() && !(rev && ['sent', 'approved', 'sent_client'].includes(rev.state)) ? (row.status === 'Verified' ? '<button class="btn sm" id="grUnver">Back to draft</button>' : '<button class="btn sm" id="grVer" title="Without sending to the senior">Mark as verified here</button>') : ''}</div></div>
+          ${revPanel()}` : ''}
       </section>
       <div class="grs-nav">${si > 0 ? `<button class="btn" data-go="${STEPS[si - 1][0]}">← ${si} · ${STEPS[si - 1][1]}</button>` : '<button class="btn" data-ov>← Overview</button>'}
         <span class="spacer"></span><label class="check small grs-chk"><input type="checkbox" data-step="${sNow}" ${chk && chk.ok ? 'checked' : ''}> Step checked${chk && chk.ok ? ` <span class="muted">· ${esc(profName(chk.by) || '')}</span>` : ''}</label>
         ${si < 3 ? `<button class="btn primary" data-go="${STEPS[si + 1][0]}">Next: ${si + 2} · ${STEPS[si + 1][1]} →</button>` : '<button class="btn primary" data-ov>Done — overview</button>'}</div>`;
     bindPickers(body);
     renderOut(sm, st);
+  }
+  function revPanel() {
+    const sr = REV.senior(), RS = rev ? rev.state : 'draft', sh = d => d ? new Date(d).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }) : '';
+    const canDecide = (settings.senior_id && me.id === settings.senior_id) || isManager();
+    const rem = ((rev && rev.remarks) || []).slice().reverse().map(x => `<li><b>${esc(x.by || '')}</b> <span class="muted small">${sh(x.at)} · ${x.via === 'link' ? 'by link' : x.via === 'email' ? 'by email reply' : 'in tracker'}</span><div>${esc(x.text)}</div></li>`).join('');
+    const sent = ((rev && rev.client_sent) || []).slice().reverse().map(x => `<li>${esc(x.what || 'Workings')} → ${esc(x.to)} <span class="muted small">${sh(x.at)}${x.auto ? ' · automatic' : ''} · ${esc(profName(x.by) || '')}</span></li>`).join('');
+    const body = {
+      draft: `<p>Send the workings (PDF summary + Excel) to <b>${esc(sr ? sr.full_name || sr.email : 'the senior')}</b> for verification. The senior approves or asks for changes from the email — by clicking a button or by replying.</p>
+        ${sr ? '' : '<p class="note warn small">Choose the senior first: Settings → Senior verification &amp; filing mails.</p>'}
+        <div class="toolbar"><button class="btn primary" id="revSend" ${sr ? '' : 'disabled'}>Send for verification</button></div>`,
+      sent: `<p>Sent to <b>${esc(sr ? sr.full_name || sr.email : 'the senior')}</b> on ${sh(rev && rev.sent_at)}${rev && rev.sends > 1 ? ` (${rev.sends} times)` : ''} by ${esc(profName(rev && rev.sent_by) || '')}. Waiting for the answer.</p>
+        <div class="toolbar"><button class="btn" id="revSend">Send again</button>${canDecide ? '<span class="spacer"></span><button class="btn" id="revChanges">Needs changes</button><button class="btn primary" id="revApprove">✓ Approve</button>' : ''}</div>`,
+      changes: `<p class="late"><b>The senior asked for changes.</b> Update the workings, then send again.</p><div class="toolbar"><button class="btn primary" id="revSend">Send again for verification</button></div>`,
+      approved: `<p class="ok-t"><b>Approved</b> ${rev && rev.decided_at ? 'on ' + sh(rev.decided_at) : ''}${rev && rev.decided_via ? ` (${rev.decided_via === 'link' ? 'by link' : rev.decided_via === 'email' ? 'by email reply' : 'in the tracker'})` : ''}. File the returns on the portal, then upload the acknowledgement.</p>
+        <p class="small muted">${settings.auto_send_filed ? 'Automatic: when the GSTR-1 / GSTR-3B acknowledgement is uploaded, it goes to the client with the workings.' : 'Automatic sending is off (Settings). Use the button after filing.'}</p>
+        <div class="toolbar"><button class="btn primary" id="revClient">Send acknowledgement &amp; workings to client</button><button class="btn" id="revWa">WhatsApp</button></div>`,
+      sent_client: `<p class="ok-t"><b>Filed and sent to the client.</b></p><div class="toolbar"><button class="btn" id="revClient">Send again to client</button><button class="btn" id="revWa">WhatsApp</button></div>`
+    }[RS];
+    return `<section class="rev-p rev-${RS}" aria-label="Senior verification"><div class="rev-h"><h3>Senior verification</h3><span class="pill ${REV.STATE[RS][1]}">${REV.STATE[RS][0]}</span></div>${body}
+      ${rem ? `<h4>Remarks</h4><ul class="rev-l">${rem}</ul>` : ''}${sent ? `<h4>Sent to the client</h4><ul class="rev-l">${sent}</ul>` : ''}</section>`;
+  }
+  async function revAction(id, btn) {
+    const sm = gsum(row), st = itcState(sm), D3 = draft3b(row, sm, c, st.ready ? st.cl.claim : null);
+    btn.disabled = true; const old = btn.textContent; btn.textContent = 'Working…';
+    try {
+      if (id === 'revSend') {
+        if (st.decideN && !confirm(`${st.decideN} bill(s) in step 2 are not decided yet. Send for verification anyway?`)) return;
+        await REV.send({ c, period, row, sm, st, D3, rev }); rev = await REV.load(c, period);
+        toast(`Sent to ${(REV.senior() || {}).full_name || 'the senior'} for verification`);
+      }
+      if (id === 'revApprove' || id === 'revChanges') {
+        const txt = id === 'revChanges' ? prompt('Changes needed (the team sees this):', '') : null; if (id === 'revChanges' && !txt) return;
+        const { error } = await safe(sb.rpc('review_decide_staff', { p_client: c.id, p_period: period, p_decision: id === 'revApprove' ? 'approve' : 'changes', p_remarks: txt }));
+        if (error) throw error; rev = await REV.load(c, period);
+        const gm = await safe(sb.from('gst_months').select('*').eq('client_id', c.id).eq('period', period).maybeSingle()); if (gm.data) row = gm.data;
+        toast(id === 'revApprove' ? 'Approved — ready to file' : 'Changes sent to the team');
+      }
+      if (id === 'revClient') {
+        const S0 = rev && rev.summary && ['approved', 'sent_client'].includes(rev.state) ? rev : null;
+        const r = await REV.toClient({ c, period, row, sm, st, D3, rev: S0 || rev }); rev = await REV.load(c, period);
+        toast(`Queued to ${c.name}: ${r.what} acknowledgement + workings (${r.to})`);
+      }
+      if (id === 'revWa') {
+        const txt = `Dear ${c.contact_person || c.name}, your GST returns for ${REV.mon(period)} are filed. The acknowledgements and workings have been emailed to you, and you can also download them from your client portal: ${new URL('portal.html', location.href).href} — ${settings.firm_name || cfg.FIRM_NAME || ''}`;
+        window.open(waShare(txt, c.phone), '_blank', 'noopener'); return;
+      }
+    } catch (e) { toast(friendly(e), true); }
+    finally { btn.disabled = false; btn.textContent = old; }
+    render();
   }
   function overviewHtml(sm, st, D3, stat, mLabel) {
     const S = row.sales, P = row.purchases, B = row.gstr2b, G3 = row.gstr3b, G1f = row.gstr1, M = meth();
@@ -4330,6 +4407,11 @@ VIEWS.gst = async v => {
     if (st.lw.wait.length) todo.push(['s2', `${st.lw.wait.length} earlier bill${st.lw.wait.length > 1 ? 's' : ''} still waiting for the client`, 'earlier']);
     if (!G3 && (S || G1f)) todo.push(['s3', 'Add the filed GSTR-3B after filing']);
     if (sm.checks.some(x => !x.ok)) todo.push(['s4', 'Look at the GSTR-1 vs 3B checks']);
+    const RS = rev ? rev.state : 'draft';
+    if (RS === 'changes') todo.unshift(['s4', `Senior asked for changes: ${((rev.remarks || []).slice(-1)[0] || {}).text || ''}`.slice(0, 120)]);
+    else if (RS === 'sent') todo.push(['s4', `Waiting for ${(REV.senior() || {}).full_name || 'the senior'} to verify (sent ${new Date(rev.sent_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })})`]);
+    else if (RS === 'approved') todo.unshift(['s4', 'Approved — file on the portal, then upload the acknowledgement (sends to the client)']);
+    else if (RS === 'draft' && (S || G1f) && (B || P) && !st.decideN) todo.push(['s4', 'Workings ready — send for verification to the senior']);
     if (!todo.length && row.status !== 'Verified') todo.push(['s4', 'Everything is in — review and mark as verified']);
     return `<div class="gro">
       <div class="gro-cards">
@@ -4799,6 +4881,7 @@ VIEWS.gst = async v => {
       if (!confirm(`Use our working as the filed GSTR-1?\n\nTaxable ${gst$(o2.t)} · IGST ${gst$(o2.ig)} · CGST ${gst$(o2.cg)} · SGST ${gst$(o2.sg)} · Cess ${gst$(o2.cs)}\n\nOnly do this when GSTR-1 was filed exactly from this working. It will be marked "copied from our working", and the GSTR-1 vs books check will not catch differences.`)) return;
       await save({ gstr1: { t: o2.t, ig: o2.ig, cg: o2.cg, sg: o2.sg, cs: o2.cs, source: 'working', ...by() } }).catch(err => toast(friendly(err), true)); toast('GSTR-1 (filed) set from our working');
     }
+    if (/^rev(Send|Approve|Changes|Client|Wa)$/.test(b.id)) { revAction(b.id, b); return; }
     if (b.id === 'grSaveNotes') { await save({ notes: $('#grNotes', body).value.trim() || null }).catch(err => toast(friendly(err), true)); toast('Notes saved'); }
     if (b.id === 'grVer') { if (!gsum(row).counts.sales && !row.gstr2b) return toast('Add the data first', true); await save({ status: 'Verified', notes: $('#grNotes', body).value.trim() || null }).catch(err => toast(friendly(err), true)); toast('Marked as verified'); }
     if (b.id === 'grUnver') { await save({ status: 'Draft' }).catch(err => toast(friendly(err), true)); }
@@ -5495,6 +5578,161 @@ async function downloadGstWorkings(c, period) {
   document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
   toast(`GST workings downloaded — ${months.length} month${months.length > 1 ? 's' : ''} of FY ${fy}`);
 }
+
+
+/* =====================================================================
+   v35 · SENIOR VERIFICATION BY MAIL + WORKINGS & ACKNOWLEDGEMENT TO THE CLIENT
+   Workings = Excel (GST workings master, FY) + one-page PDF summary (GSTR-1 as per portal, draft GSTR-3B, 2B vs books).
+   Mails go into mail_jobs; the office Gmail script (section D) sends them with the files.
+   ===================================================================== */
+const REV = (() => {
+  const H = ['t', 'ig', 'cg', 'sg', 'cs'], r2 = n => Math.round((+n || 0) * 100) / 100, tx = o => r2((o && (+o.ig || 0) + (+o.cg || 0) + (+o.sg || 0) + (+o.cs || 0)) || 0);
+  const row5 = (l, o) => [l, ...H.map(k => r2(o && o[k]))];
+  const STATE = { draft: ['Not sent', ''], sent: ['Sent for verification', 'a'], changes: ['Changes needed', 'r'], approved: ['Approved — ready to file', 'g'], sent_client: ['Filed & sent to client', 'g'] };
+  const b64 = async blob => { const u = new Uint8Array(await blob.arrayBuffer()); let s = ''; for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000)); return btoa(s); };
+  const rand = n => { const a = new Uint8Array(n); crypto.getRandomValues(a); return btoa(String.fromCharCode(...a)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); };
+  const sha = async s => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s)))].map(b => b.toString(16).padStart(2, '0')).join('');
+  const mon = period => { const [y, m] = period.split('-'); return `${MONTHS[+m - 1]} ${y}`; };
+  const senior = () => profiles.find(p => p.id === settings.senior_id) || null;
+  async function loadJsPdf() {
+    if (!(window.jspdf && window.jspdf.jsPDF)) await new Promise((ok, bad) => { const s = document.createElement('script'); s.src = 'jspdf.umd.min.js'; s.onload = ok; s.onerror = () => bad(new Error('Could not load the PDF maker')); document.head.appendChild(s); });
+    if (!window.jspdf.jsPDF.API.autoTable) await new Promise((ok, bad) => { const s = document.createElement('script'); s.src = 'jspdf.plugin.autotable.min.js'; s.onload = ok; s.onerror = () => bad(new Error('Could not load the PDF table maker')); document.head.appendChild(s); });
+    return window.jspdf.jsPDF;
+  }
+  // the figures the senior sees (PDF + review page), from the same engine as the GST review page
+  function summary({ c, period, row, sm, st, D3 }) {
+    const W = row.g1 && (row.g1.sales || []).length ? G1.summary(row.g1, c).tables : null;
+    const pick = (...ks) => { if (!W) return null; const z = { t: 0, ig: 0, cg: 0, sg: 0, cs: 0 }; let any = false; ks.forEach(k => { if (W[k]) { any = true; H.forEach(h => z[h] = r2(z[h] + (+W[k][h] || 0))); } }); return any ? z : null; };
+    const g1 = W ? [['4A/4B/6B/6C — B2B, SEZ, deemed exports', pick('B2B', 'SEZ')], ['5 — B2C (Large)', pick('B2CL')], ['6A — Exports', pick('EXP')], ['7 — B2C (Others)', pick('B2CS')],
+      ['8 — Nil / exempt / non-GST', pick('NIL')], ['9B — Credit / debit notes (registered) — less', pick('CDNR')], ['9B — Credit / debit notes (unregistered) — less', pick('CDNUR')],
+      ['11A — Advances received', pick('AT')], ['11B — Advances adjusted — less', pick('AT_ADJ')]].filter(x => x[1]).map(([l, o]) => row5(l, o)) : [];
+    const g1tot = W ? (() => { const z = { t: 0, ig: 0, cg: 0, sg: 0, cs: 0 }; [['B2B', 1], ['SEZ', 1], ['B2CL', 1], ['EXP', 1], ['B2CS', 1], ['AT', 1], ['CDNR', -1], ['CDNUR', -1], ['AT_ADJ', -1]].forEach(([k, s]) => { if (W[k]) H.forEach(h => z[h] = r2(z[h] + s * (+W[k][h] || 0))); }); return z; })() : sm.out;
+    const list = st && st.ready ? st.list : [], L = s => list.filter(x => x.st === s);
+    const brief = x => { const d = x.b || x.x; return [d.n || '', d.g || '', d.i || '', tx(x.b || null) || null, tx(x.x || null) || null]; };
+    return {
+      client: c.name, gstin: c.gstin, period, prepared_by: me.full_name || me.email, at: new Date().toISOString(), method: (c.itc_method || 'books_2b'),
+      g1, g1_total: row5('Total liability (net of notes)', g1tot), g1_from: W ? 'GSTR-1 entry (our working)' : 'sales register', g1_filed: row.gstr1 ? row5('Filed GSTR-1 (' + (row.gstr1.source === 'api' ? 'portal' : row.gstr1.source === 'working' ? 'copied from working' : 'typed') + ')', row.gstr1) : null,
+      b31: [row5('(a) Outward taxable', D3.a), row5('(b) Zero rated', D3.b), row5('(c) Nil / exempt', D3.c), row5('(d) Inward — reverse charge', D3.d), row5('(e) Non-GST', D3.e)],
+      b4: [row5('(A)(1) Import of goods', D3.imp), row5('(A)(3) Reverse charge', D3.d), row5('(A)(4) ISD', D3.isd), row5('(A)(5) All other ITC', D3.a5), row5('(B)(1) Reversed — rules 38/42/43, 17(5)', D3.B1),
+        row5('(B)(2) Reversed — temporary', D3.B2), row5('(C) Net ITC', D3.C), row5('(D)(2) Not available in 2B (info)', D3.D2)],
+      b61: ['ig', 'cg', 'sg', 'cs'].map(k => [{ ig: 'IGST', cg: 'CGST', sg: 'SGST', cs: 'Cess' }[k], r2((D3.L[k] || 0) + (D3.d[k] || 0)), r2(D3.so.used.ig[k] + D3.so.used.cg[k] + D3.so.used.sg[k] + D3.so.used.cs[k]), r2(D3.d[k] || 0), r2(D3.cashUsed[k]), r2(D3.deposit[k])]),
+      cash: r2(D3.depositTotal), credit_cf: tx(D3.so.balance), net_itc: tx(D3.C), tax_sales: r2(tx(D3.a) + tx(D3.b)),
+      itc: st && st.ready ? { in2b: tx(sm.itc2b), claim: tx(st.cl.claim), held: tx(st.cl.held), books: tx(sm.itcBooks), matched: L('matched').length, decide: st.decideN, missing: L('books_only').length, notbooks: L('2b_only').length + L('confirm').length } : null,
+      missing: L('books_only').slice(0, 25).map(brief), notbooks: [...L('2b_only'), ...L('confirm')].slice(0, 25).map(brief),
+      decide: [...L('mismatch'), ...L('suggest'), ...L('gstin_diff')].map(x => [...brief(x), (RECO.decLabel(x.st, (((row.reco || {}).dec || {})[x.k] || {}).a) || 'not decided')]).slice(0, 25),
+      notes: row.notes || ''
+    };
+  }
+  async function pdf(S) {
+    const jsPDF = await loadJsPdf(), doc = new jsPDF({ unit: 'pt', format: 'a4' }), W = doc.internal.pageSize.getWidth();
+    const money = v => v == null || v === '' ? '' : (+v).toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+    let y = 40;
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(15); doc.text(`GST workings — ${S.client}`, 40, y); y += 18;
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(10); doc.setTextColor(90);
+    doc.text(`GSTIN ${S.gstin} · ${mon(S.period)} · prepared by ${S.prepared_by} on ${new Date(S.at).toLocaleDateString('en-IN')}`, 40, y); y += 8; doc.setTextColor(0);
+    const box = [['Tax on sales', S.tax_sales], ['Net ITC (4C)', S.net_itc], ['Cash to deposit', S.cash], ['Credit carried forward', S.credit_cf]];
+    doc.autoTable({ startY: y + 6, head: [box.map(b => b[0])], body: [box.map(b => 'Rs ' + money(b[1]))], theme: 'grid', styles: { fontSize: 11, halign: 'center', fontStyle: 'bold' }, headStyles: { fillColor: [31, 95, 214], fontSize: 9 }, margin: { left: 40, right: 40 } });
+    const T = (title, head, body, opts = {}) => { y = doc.lastAutoTable.finalY + 18; if (y > 760) { doc.addPage(); y = 40; }
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(11); doc.text(title, 40, y);
+      doc.autoTable({ startY: y + 5, head: [head], body: body.map(r => r.map((v, i) => i === 0 || typeof v === 'string' ? v : money(v))), theme: 'striped', styles: { fontSize: 8.5, cellPadding: 3 },
+        headStyles: { fillColor: [235, 240, 250], textColor: 30 }, columnStyles: Object.fromEntries(head.map((h, i) => [i, { halign: i === 0 || opts.left && opts.left.includes(i) ? 'left' : 'right' }])), margin: { left: 40, right: 40 }, ...opts.more }); };
+    const H5 = ['', 'Taxable', 'IGST', 'CGST', 'SGST', 'Cess'];
+    T(`GSTR-1 — draft as per portal (from ${S.g1_from})`, H5, [...S.g1, S.g1_total, ...(S.g1_filed ? [S.g1_filed] : [])]);
+    T('GSTR-3B — 3.1 Outward supplies', H5, S.b31);
+    T('GSTR-3B — 4 Eligible ITC', H5, S.b4.map(r => r.map((v, i) => i === 1 ? '' : v)));
+    T('GSTR-3B — 6.1 Payment of tax', ['Tax', 'Payable', 'Paid by ITC', 'Reverse charge (cash)', 'From cash ledger', 'Cash to deposit'], S.b61);
+    if (S.itc) T('ITC — GSTR-2B vs books', ['', 'Amount / count'], [['ITC in GSTR-2B', S.itc.in2b], ['ITC in books', S.itc.books], ['ITC claimed', S.itc.claim], ['Held back', S.itc.held],
+      ['Bills matched', String(S.itc.matched)], ['Bills to decide', String(S.itc.decide)], ['In books, not in 2B', String(S.itc.missing)], ['In 2B, not in books', String(S.itc.notbooks)]]);
+    if (S.decide.length) T('Bills decided / to decide', ['Supplier', 'GSTIN', 'Bill', 'Tax (books)', 'Tax (2B)', 'Decision'], S.decide, { left: [1, 2, 5] });
+    if (S.missing.length) T('In books, not in GSTR-2B (ITC held back)', ['Supplier', 'GSTIN', 'Bill', 'Tax (books)', 'Tax (2B)'], S.missing, { left: [1, 2] });
+    if (S.notbooks.length) T('In GSTR-2B, not in books', ['Supplier', 'GSTIN', 'Bill', 'Tax (books)', 'Tax (2B)'], S.notbooks, { left: [1, 2] });
+    if (S.notes) { y = doc.lastAutoTable.finalY + 18; if (y > 740) { doc.addPage(); y = 40; } doc.setFont('helvetica', 'bold'); doc.setFontSize(11); doc.text('Review notes', 40, y); doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.text(doc.splitTextToSize(S.notes, W - 80), 40, y + 14); }
+    const pages = doc.getNumberOfPages(); for (let i = 1; i <= pages; i++) { doc.setPage(i); doc.setFontSize(8); doc.setTextColor(130); doc.text(`${settings.firm_name || cfg.FIRM_NAME || ''} · GST workings ${mon(S.period)} · page ${i} of ${pages}`, 40, 820); }
+    return doc.output('blob');
+  }
+  // GST workings master (Excel) for the FY of this month
+  async function excel(c, period) {
+    const y = +period.slice(0, 4), m = +period.slice(5, 7), fyStart = m >= 4 ? y : y - 1, fy = `${fyStart}-${String((fyStart + 1) % 100).padStart(2, '0')}`;
+    const [XP, tpl, gm] = await Promise.all([loadXlsxPopulate(), fetch('gst-workings-master.xlsx', { cache: 'no-store' }).then(r => { if (!r.ok) throw new Error('Master template not found on the site'); return r.arrayBuffer(); }),
+      must(sb.from('gst_months').select('*').eq('client_id', c.id).gte('period', `${fyStart}-04-01`).lte('period', `${fyStart + 1}-03-01`).order('period'))]);
+    const months = (gm.data || []).map(r => ({ period: r.period, g1: r.g1, sales: r.sales, purchases: r.purchases, gstr2b: r.gstr2b, gstr3b: r.gstr3b, status: r.status }));
+    const sel = (gm.data || []).find(r => r.period === period);
+    const out = await fillGstWorkings(XP, new Uint8Array(tpl), { client: { name: c.name, gstin: c.gstin, trade: c.trade_name || '' }, fy, month: GW_MONTHS[(m + 8) % 12], months, notices: [], g1tasks: [],
+      preparedBy: me.full_name || me.email, verifiedBy: sel && sel.verified_by ? profName(sel.verified_by) : '' });
+    return { blob: new Blob([out], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), name: `GST Workings - ${c.name} - FY ${fy}.xlsx` };
+  }
+  async function files(c, period, S) {
+    const [p, x] = await Promise.all([pdf(S), excel(c, period).catch(e => { console.warn(e); return null; })]);
+    const out = [{ name: `GST ${mon(period)} - ${c.name} - summary.pdf`, mime: 'application/pdf', b64: await b64(p) }];
+    if (x) out.push({ name: x.name, mime: x.blob.type, b64: await b64(x.blob) });
+    return out;
+  }
+  async function load(c, period) { const r = await safe(sb.from('gst_reviews').select('*').eq('client_id', c.id).eq('period', period).maybeSingle()); return r.error ? { missing: true } : (r.data || null); }
+  const htmlEsc = s => String(s ?? '').replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+  async function send({ c, period, row, sm, st, D3, rev }) {
+    const sr = senior();
+    if (!sr || !sr.email) throw new Error('Choose the senior first: Settings → Senior verification & filing mails');
+    const S = summary({ c, period, row, sm, st, D3 }), fl = await files(c, period, S);
+    const token = rand(32), tag = rand(6).replace(/[-_]/g, 'x').toUpperCase(), link = new URL('review.html', location.href).href + '?t=' + token;
+    const rec = { client_id: c.id, period, state: 'sent', sent_at: new Date().toISOString(), sent_by: me.id, sends: ((rev && rev.sends) || 0) + 1, token_hash: await sha(token),
+      token_exp: new Date(Date.now() + 10 * 864e5).toISOString(), tag, summary: S };
+    const up = await safe(sb.from('gst_reviews').upsert(rec, { onConflict: 'client_id,period' }));
+    if (up.error) throw new Error(/gst_reviews/.test(up.error.message || '') ? 'Run update-session18.sql in Supabase first' : friendly(up.error));
+    const lines = [`Client: ${c.name} (${c.gstin})`, `Month: ${mon(period)}`, `Prepared by: ${me.full_name || me.email}`, '',
+      `Tax on sales: Rs ${S.tax_sales.toLocaleString('en-IN')}`, `Net ITC: Rs ${S.net_itc.toLocaleString('en-IN')}`, `Cash to deposit: Rs ${S.cash.toLocaleString('en-IN')}`,
+      ...(S.itc ? [`ITC in 2B Rs ${S.itc.in2b.toLocaleString('en-IN')} · claimed Rs ${S.itc.claim.toLocaleString('en-IN')} · held back Rs ${S.itc.held.toLocaleString('en-IN')} (${S.itc.missing} in books not in 2B, ${S.itc.notbooks} in 2B not in books)`] : []),
+      ...(S.notes ? ['', 'Notes: ' + S.notes] : [])];
+    const body = `Please verify the GST workings below. The PDF summary and the Excel workings are attached.\n\n${lines.join('\n')}\n\nApprove or ask for changes: ${link}\n\nOr reply to this email: write "Approved" on the first line to approve, or type your remarks.\n\n— ${settings.firm_name || cfg.FIRM_NAME || 'JLR Compliance'} tracker`;
+    const html = `<div style="font-family:Arial,sans-serif;font-size:14px;color:#14213d"><p>Please verify the GST workings below. The PDF summary and the Excel workings are attached.</p>
+      <table cellpadding="4" style="border-collapse:collapse">${lines.filter(Boolean).map(l => { const i = l.indexOf(':'); return `<tr><td style="color:#5b6b85">${htmlEsc(l.slice(0, i))}</td><td><b>${htmlEsc(l.slice(i + 1))}</b></td></tr>`; }).join('')}</table>
+      <p style="margin:22px 0"><a href="${link}&a=approve" style="background:#157347;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:bold">✓ Approve</a>
+      &nbsp; <a href="${link}&a=changes" style="background:#fff;color:#a3261d;border:1px solid #a3261d;padding:11px 20px;border-radius:8px;text-decoration:none;font-weight:bold">Needs changes</a></p>
+      <p style="color:#5b6b85;font-size:12px">Or reply to this email: write <b>Approved</b> on the first line to approve, or type your remarks. The link works for 10 days.</p></div>`;
+    const ins = await safe(sb.from('mail_jobs').insert({ kind: 'review', to_addr: sr.email, subject: `[JLR-REVIEW:${tag}] GST ${mon(period)} — ${c.name} — for verification`, body, html, files: fl, client_id: c.id, period }));
+    if (ins.error) throw new Error(friendly(ins.error));
+    return { tag, link };
+  }
+  // acknowledgements of this month's GST returns (GSTR-1, GSTR-3B), or just the one given
+  async function ackFiles(c, period, only) {
+    if (only && only.file) return [{ name: only.file.name || 'acknowledgement.pdf', mime: 'application/pdf', b64: await b64(only.file) }];
+    const r = await safe(sb.from('filing_acks').select('*').eq('client_id', c.id).order('created_at', { ascending: false }).limit(60));
+    const mine = (r.data || []).filter(a => /^GSTR-?(1|3B)/i.test(a.return_name || '') && (periodToMonth(a.period) || '') === period.slice(0, 7) && a.file_path);
+    const out = [], seen = new Set();
+    for (const a of mine) { if (seen.has(a.return_name)) continue; seen.add(a.return_name);
+      const s = await sb.storage.from('filing-acks').createSignedUrl(a.file_path, 120); if (s.error) continue;
+      const blob = await fetch(s.data.signedUrl).then(x => x.blob()).catch(() => null); if (blob) out.push({ name: `${a.return_name} ${mon(period)} acknowledgement${a.arn ? ' ' + a.arn : ''}.pdf`.replace(/[\\/:*?"<>|]+/g, '-'), mime: 'application/pdf', b64: await b64(blob) }); }
+    return out;
+  }
+  async function toClient({ c, period, row, sm, st, D3, rev, only, auto }) {
+    const to = String(c.email || '').split(/[,;\s]+/).filter(Boolean).join(',');
+    if (!to) throw new Error(`${c.name} has no email address — add it on the client first`);
+    const S = rev && rev.summary && ['approved', 'sent_client'].includes(rev.state) ? rev.summary : summary({ c, period, row, sm, st, D3 }), acks = await ackFiles(c, period, only);
+    if (!acks.length) throw new Error('No acknowledgement found for this month — upload the GSTR-1 / GSTR-3B acknowledgement first');
+    const fl = [...acks, ...(await files(c, period, S))], what = acks.map(a => a.name.split(' ')[0]).join(' and ');
+    const body = `Dear ${c.contact_person || c.name},\n\nYour GST return${acks.length > 1 ? 's' : ''} (${what}) for ${mon(period)} ${acks.length > 1 ? 'have' : 'has'} been filed. Attached:\n• Filing acknowledgement${acks.length > 1 ? 's' : ''}\n• GST working summary (PDF) and workings (Excel)\n\nTax paid in cash this month: Rs ${S.cash.toLocaleString('en-IN')}.\nYou can also see your acknowledgements on your client portal: ${new URL('portal.html', location.href).href}\n\nThank you,\n${settings.firm_name || cfg.FIRM_NAME || ''}`;
+    const ins = await safe(sb.from('mail_jobs').insert({ kind: 'client_filed', to_addr: to, subject: `GST ${what} filed — ${mon(period)} — ${c.name}`, body, files: fl, client_id: c.id, period }));
+    if (ins.error) throw new Error(/mail_jobs/.test(ins.error.message || '') ? 'Run update-session18.sql in Supabase first' : friendly(ins.error));
+    const sent = [...((rev && rev.client_sent) || []), { at: new Date().toISOString(), by: me.id, to, what, auto: !!auto }];
+    await safe(sb.from('gst_reviews').upsert({ client_id: c.id, period, state: 'sent_client', client_sent: sent }, { onConflict: 'client_id,period' }));
+    return { to, what };
+  }
+  return { STATE, summary, pdf, excel, files, load, send, toClient, senior, mon, rand, sha };
+})();
+
+// after an acknowledgement is saved: send workings + acknowledgement to the client when switched on and the month is approved
+async function autoSendAfterAck(task, file) {
+  try {
+    if (!settings.auto_send_filed || !/^GSTR-?(1|3B)/i.test(task.return_name || '')) return;
+    const c = clientById(task.client_id); const month = periodToMonth(task.period); if (!c || !month) return;
+    const period = month + '-01', rev = await REV.load(c, period);
+    if (!rev || rev.missing || !['approved', 'sent_client'].includes(rev.state)) { toast(`Not sent to ${c.name} automatically — ${mLabelOf(period)} is not approved by the senior yet.`, true); return; }
+    const gm = await safe(sb.from('gst_months').select('*').eq('client_id', c.id).eq('period', period).maybeSingle()); if (!gm.data) return;
+    const row = gm.data, sm = GR.summarise(row, { method: c.itc_method }), D3 = draft3b(row, sm, c);
+    const r = await REV.toClient({ c, period, row, sm, st: null, D3, rev, only: file ? { file } : null, auto: true });
+    toast(`${r.what} acknowledgement and workings queued to ${c.name} (${r.to})`);
+  } catch (e) { toast('Auto-send to client: ' + friendly(e), true); }
+}
+const mLabelOf = p => REV.mon(p);
 
 /* =====================================================================
    v17 · SESSION 1: RENEWALS · TAX PAYMENT INTIMATION · CLIENT ONBOARDING
@@ -9584,6 +9822,7 @@ const ACK = {
     const ins = await safe(sb.from('filing_acks').insert({ task_id: task.id, client_id: task.client_id, kind: r.kind, return_name: task.return_name, period: task.period,
       arn: r.arn || null, filed_on: r.filed_on || today(), file_name: file ? file.name : null, file_path: path }));
     await must(sb.from('tasks').update({ status: 'Filed', arn: r.arn || task.arn || null, filed_on: r.filed_on || today() }).eq('id', task.id));
+    autoSendAfterAck(task, file);
     return { stored: !!path, logged: !ins.error };
   },
   async open(a) {
@@ -10035,6 +10274,6 @@ const GAME = {
   }
 };
 
-window.__tracker = { draft3b, RULES, gstr1FromApi, GAME, ACK, dashTabs, AUDIT, IDLE, clientProblems, HEALTH, HELP, noticeLetter, BANK, bankReadFile, TDSW, MCA, BILL, parseMcaSheets, mcaPlanAll, fillGstWorkings, G1, GR, RECO, gstr3bFromApi, periodToMonth, strongPassword, periodFor, dueDateFor, parseCSV, toCSV, gstLateFee, gstInterest, tdsCalc, rocCalc, monthsSpan, tdsDepositDue, g1json, clientReportHtml, clientReportMsg, rnStage, anyDate, parseRenewalRows, gstPayDue, tdsPayDue, advInstalment, advCurrent, advDue, recurringPlan, taxMsg, addMonths, fyEndOf, obProgress, rnKind };
+window.__tracker = { autoSendAfterAck, REV, draft3b, RULES, gstr1FromApi, GAME, ACK, dashTabs, AUDIT, IDLE, clientProblems, HEALTH, HELP, noticeLetter, BANK, bankReadFile, TDSW, MCA, BILL, parseMcaSheets, mcaPlanAll, fillGstWorkings, G1, GR, RECO, gstr3bFromApi, periodToMonth, strongPassword, periodFor, dueDateFor, parseCSV, toCSV, gstLateFee, gstInterest, tdsCalc, rocCalc, monthsSpan, tdsDepositDue, g1json, clientReportHtml, clientReportMsg, rnStage, anyDate, parseRenewalRows, gstPayDue, tdsPayDue, advInstalment, advCurrent, advDue, recurringPlan, taxMsg, addMonths, fyEndOf, obProgress, rnKind };
 start();
 })();
