@@ -1814,7 +1814,11 @@ VIEWS.settings = async v => {
     <div class="card" id="revCard"><h3>Senior verification &amp; filing mails</h3>
       <div class="form-grid g2"><label>Senior who verifies GST workings<select id="revSenior"><option value="">— choose —</option>${profiles.filter(p => p.active !== false && ['manager', 'partner', 'admin'].includes(p.role)).map(p => `<option value="${p.id}" ${settings.senior_id === p.id ? 'selected' : ''}>${esc(p.full_name || p.email)} · ${esc(p.email || '')}</option>`).join('')}</select></label></div>
       <label class="check" style="margin-top:8px"><input type="checkbox" id="revAuto" ${settings.auto_send_filed ? 'checked' : ''}> After filing, send the acknowledgement and workings to the client automatically</label>
-      <p class="muted small">Sends when the GSTR-1 / GSTR-3B acknowledgement is uploaded, only for months the senior approved. A “Send to client” button is always there too.</p>
+      <p class="muted small">GSTR-1 and GSTR-3B are verified separately. When a return's acknowledgement is uploaded, that return's acknowledgement + workings go to the client — only if the senior approved it. A “Send to client” button is always there too.</p>
+      <h4 style="margin:14px 0 6px">How the mails look</h4>
+      <div class="form-grid g2"><label>Greeting<input id="revGreet" value="${esc(settings.mail_greeting || 'Respected Sir,')}"></label>
+        <label class="full">Signature (below “Thanks &amp; Regards, &lt;your name&gt;”)<textarea id="revSign" rows="4" placeholder="JLR &amp; Co&#10;Chartered Accountants&#10;Address · Phone">${esc(settings.mail_signature || '')}</textarea></label></div>
+      <div class="toolbar"><button class="btn sm" id="revSaveLook">Save</button><span class="muted small">If the Gmail script can read the mailbox's own Gmail signature (with the logo), it uses that instead.</span></div>
       <h4 style="margin:14px 0 6px">Mailbox key for these emails</h4>
       <p class="muted small">The office Gmail script sends these emails with their attachments and reads the senior's replies. ${settings.mailjob_key_hash ? `Key is set. ${settings.mailjob_seen_at ? 'Script last checked ' + new Date(settings.mailjob_seen_at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }) + '.' : '<span class="late">The script has not checked in yet — add MAILJOB_KEY to it (steps below).</span>'}` : '<span class="late">No key yet.</span>'}</p>
       <div class="toolbar"><button class="btn sm" id="revKey">${settings.mailjob_key_hash ? 'Make a new key' : 'Make the key'}</button><span class="muted small" id="revOut"></span></div>
@@ -1827,6 +1831,7 @@ VIEWS.settings = async v => {
   $('#boardOn').onchange = async e => { try { await save({ board_enabled: e.target.checked }); } catch (err) { toast(friendly(err), true); } };
   $('#revSenior').onchange = async e => { try { await save({ senior_id: e.target.value || null }); } catch (err) { toast(/senior_id/.test(err.message || '') ? 'Run update-session18.sql in Supabase first' : friendly(err), true); } };
   $('#revAuto').onchange = async e => { try { await save({ auto_send_filed: e.target.checked }); } catch (err) { toast(/auto_send/.test(err.message || '') ? 'Run update-session18.sql in Supabase first' : friendly(err), true); e.target.checked = !e.target.checked; } };
+  $('#revSaveLook').onclick = async () => { try { await save({ mail_greeting: $('#revGreet').value.trim() || 'Respected Sir,', mail_signature: $('#revSign').value.trim() || null }); } catch (err) { toast(/mail_greeting|mail_signature/.test(err.message || '') ? 'Run update-session19.sql in Supabase first' : friendly(err), true); } };
   $('#revKey').onclick = async () => {
     if (settings.mailjob_key_hash && !confirm('Make a new key? The script stops sending until you paste the new key into it.')) return;
     const key = 'mj_' + REV.rand(32), hash = await REV.sha(key);
@@ -4234,8 +4239,7 @@ VIEWS.gst = async v => {
   loadClientRules(grClient).catch(() => {});
   const r = await safe(sb.from('gst_months').select('*').eq('client_id', grClient).eq('period', period).maybeSingle());
   if (r.error) { body.innerHTML = '<div class="card"><p class="note">GST review is not set up yet — run <b>update-gst-review.sql</b> in Supabase.</p></div>'; return; }
-  let row = r.data || { client_id: grClient, period, status: 'Draft' }, recoHist = null, rev = await REV.load(c, period).catch(() => null);
-  if (rev && rev.missing) rev = null;
+  let row = r.data || { client_id: grClient, period, status: 'Draft' }, recoHist = null, revs = await REV.load(c, period).catch(() => ({ gstr1: null, gstr3b: null }));
   const save = async patch => {
     const next = { ...row, ...patch };
     const sm = gsum(next);
@@ -4243,10 +4247,15 @@ VIEWS.gst = async v => {
     patch.summary = { ...sm.trend, sales_n: sm.counts.sales, b2b_n: sm.counts.b2b, cash_draft: d3s.cashTotal, cash: { ...d3s.cashNeed }, cash_total: next.gstr3b && next.gstr3b.cash ? sm.trend.cash : d3s.cashTotal, deposit: d3s.depositTotal, at: new Date().toISOString() };
     const { data } = await must(sb.from('gst_months').upsert({ client_id: grClient, period, ...patch }, { onConflict: 'client_id,period' }).select().single());
     row = data || { ...next, ...patch };
-    if (rev && ['sent', 'approved'].includes(rev.state) && Object.keys(patch).some(k => ['sales', 'purchases', 'gstr2b', 'g1'].includes(k))) {
-      const u = await safe(sb.from('gst_reviews').update({ state: 'draft', token_hash: null }).eq('client_id', c.id).eq('period', period));
-      if (!u.error) { rev.state = 'draft'; toast('The workings changed after they were sent to the senior — send for verification again', true); }
+    const HIT = { gstr1: ['sales', 'g1'], gstr3b: ['sales', 'purchases', 'gstr2b', 'g1'] }, back = [];
+    for (const k of REV.KINDS) {
+      const rv = revs[k];
+      if (rv && ['sent', 'approved'].includes(rv.state) && Object.keys(patch).some(x => HIT[k].includes(x))) {
+        const u = await safe(sb.from('gst_reviews').update({ state: 'draft', token_hash: null }).eq('client_id', c.id).eq('period', period).eq('kind', k));
+        if (!u.error) { rv.state = 'draft'; back.push(REV.KIND[k].label); }
+      }
     }
+    if (back.length) toast(`The workings changed after ${back.join(' and ')} went to the senior — send for verification again`, true);
     render();
   };
   const by = () => ({ at: new Date().toISOString(), by: me.id });
@@ -4294,15 +4303,17 @@ VIEWS.gst = async v => {
     const sm = gsum(row), M = meth(), st = itcState(sm), D3 = draft3b(row, sm, c, st.ready ? st.cl.claim : null), mLabel = (() => { const [y, m] = grMonth.split('-'); return `${MONTHS_FULL[+m - 1]} ${y}`; })();
     const S = row.sales, P = row.purchases, B = row.gstr2b, G3 = row.gstr3b, G1f = row.gstr1;
     const g1chk = sm.checks.find(x => /vs GSTR-1$|vs GSTR-1 \(/.test(x.label));
+    const RST = { sent_client: ['Filed & sent to client ✓', 'ok'], approved: ['Approved — file now', 'ok'], changes: ['Changes needed', 'bad'], sent: ['Waiting for the senior', 'warn'] };
+    const r1 = revs.gstr1 && RST[revs.gstr1.state], r3 = revs.gstr3b && RST[revs.gstr3b.state];
     const stat = {
-      s1: !S && !G1f ? ['Nothing added', 'todo'] : !G1f ? ['Filed GSTR-1 not added', 'warn'] : G1f.source === 'working' ? ['Filed = copied from working', 'ok'] : g1chk && !g1chk.ok ? ['Filed ≠ working — check', 'bad'] : ['Filed ✓', 'ok'],
+      s1: r1 ? ['GSTR-1: ' + r1[0], r1[1]] : !S && !G1f ? ['Nothing added', 'todo'] : !G1f ? ['Filed GSTR-1 not added', 'warn'] : G1f.source === 'working' ? ['Filed = copied from working', 'ok'] : g1chk && !g1chk.ok ? ['Filed ≠ working — check', 'bad'] : ['Filed ✓', 'ok'],
       s2: !st.ready ? [M === '2b_confirm' ? 'Add GSTR-2B' : 'Add books and 2B', 'todo'] : st.decideN ? [`${st.decideN} to decide`, 'warn'] : st.openN ? [M === '2b_confirm' ? `${st.openN} waiting for client` : `${st.openN} not in books — open`, 'warn'] : ['All decided ✓', 'ok'],
       s3: !(sm.counts.sales || sm.counts.b2b || sm.counts.purchases || G1f) ? ['Waiting for data', 'todo'] : [`Cash ${gst$(D3.depositTotal)} to deposit`, G3 ? 'ok' : 'info'],
-      s4: rev && rev.state === 'sent_client' ? ['Filed & sent to client ✓', 'ok'] : rev && rev.state === 'approved' ? ['Approved — file now', 'ok'] : rev && rev.state === 'changes' ? ['Changes needed', 'bad'] : rev && rev.state === 'sent' ? ['Waiting for the senior', 'warn'] : row.status === 'Verified' ? ['Verified ✓', 'ok'] : sm.checks.some(x => !x.ok) ? [`${sm.checks.filter(x => !x.ok).length} check${sm.checks.filter(x => !x.ok).length > 1 ? 's' : ''} to look at`, 'bad'] : ['Not verified yet', 'info']
+      s4: r3 ? ['GSTR-3B: ' + r3[0], r3[1]] : row.status === 'Verified' ? ['Verified ✓', 'ok'] : sm.checks.some(x => !x.ok) ? [`${sm.checks.filter(x => !x.ok).length} check${sm.checks.filter(x => !x.ok).length > 1 ? 's' : ''} to look at`, 'bad'] : ['Not verified yet', 'info']
     };
     const head = `<div class="grh"><div class="grh-pick"><label>Client<select id="grC">${gClients.length ? opts(gClients, grClient, x => `${x.name} · ${x.gstin}`, x => x.id) : '<option value="">No GST clients</option>'}</select></label>
         <label>Month<input type="month" id="grM" value="${esc(grMonth)}"></label></div>
-      ${rev && rev.state !== 'draft' ? `<span class="pill ${REV.STATE[rev.state][1]}">${REV.STATE[rev.state][0]}</span>` : row.status === 'Verified' ? `<span class="st st-filed">✓ Verified · ${esc(profName(row.verified_by) || '')}</span>` : '<span class="st st-pending-data">Draft</span>'}
+      ${REV.KINDS.some(k => revs[k] && revs[k].state !== 'draft') ? REV.KINDS.filter(k => revs[k] && revs[k].state !== 'draft').map(k => `<span class="pill ${REV.STATE[revs[k].state][1]}">${REV.KIND[k].label}: ${REV.STATE[revs[k].state][0]}</span>`).join(' ') : row.status === 'Verified' ? `<span class="st st-filed">✓ Verified · ${esc(profName(row.verified_by) || '')}</span>` : '<span class="st st-pending-data">Draft</span>'}
       <span class="spacer"></span><button class="btn sm" data-portal-api>Fetch from GST portal</button><a class="btn sm" href="#/clientreport" data-crgo>Client report</a>
       ${isManager() ? (row.status === 'Verified' ? '<button class="btn sm" id="grUnver">Back to draft</button>' : '<button class="btn sm primary" id="grVer">✓ Mark as verified</button>') : ''}</div>`;
     if (grOv) { body.innerHTML = head + overviewHtml(sm, st, D3, stat, mLabel); bindPickers(body); return; }
@@ -4326,10 +4337,11 @@ VIEWS.gst = async v => {
         ${chips ? `<div class="grcs">${chips}</div>` : ''}
         ${SUBS.length ? `<div class="seg grs-sub" role="tablist">${SUBS.map(([k, l]) => `<button role="tab" aria-selected="${grTab === k}" class="${grTab === k ? 'on' : ''}" data-gt="${k}">${l}</button>`).join('')}</div>` : ''}
         <div id="grOut"></div>
+        ${sNow === 's1' ? revPanel('gstr1') : ''}
         ${sNow === 's4' ? `<div class="gr-verify"><label class="full">Review notes<textarea id="grNotes" rows="3" placeholder="e.g. Reversed ITC on 2 invoices missing in 2B; client informed">${esc(row.notes || '')}</textarea></label>
           <div class="toolbar" style="margin:8px 0 0"><button class="btn sm" id="grSaveNotes">Save notes</button><span class="spacer"></span>
-          ${isManager() && !(rev && ['sent', 'approved', 'sent_client'].includes(rev.state)) ? (row.status === 'Verified' ? '<button class="btn sm" id="grUnver">Back to draft</button>' : '<button class="btn sm" id="grVer" title="Without sending to the senior">Mark as verified here</button>') : ''}</div></div>
-          ${revPanel()}` : ''}
+          ${isManager() && !(revs.gstr3b && ['sent', 'approved', 'sent_client'].includes(revs.gstr3b.state)) ? (row.status === 'Verified' ? '<button class="btn sm" id="grUnver">Back to draft</button>' : '<button class="btn sm" id="grVer" title="Without sending to the senior">Mark as verified here</button>') : ''}</div></div>
+          ${revPanel('gstr3b')}` : ''}
       </section>
       <div class="grs-nav">${si > 0 ? `<button class="btn" data-go="${STEPS[si - 1][0]}">← ${si} · ${STEPS[si - 1][1]}</button>` : '<button class="btn" data-ov>← Overview</button>'}
         <span class="spacer"></span><label class="check small grs-chk"><input type="checkbox" data-step="${sNow}" ${chk && chk.ok ? 'checked' : ''}> Step checked${chk && chk.ok ? ` <span class="muted">· ${esc(profName(chk.by) || '')}</span>` : ''}</label>
@@ -4337,53 +4349,67 @@ VIEWS.gst = async v => {
     bindPickers(body);
     renderOut(sm, st);
   }
-  function revPanel() {
-    const sr = REV.senior(), RS = rev ? rev.state : 'draft', sh = d => d ? new Date(d).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }) : '';
+  // v36: one verification panel per return — GSTR-1 at the end of step 1, GSTR-3B in step 4
+  function revPanel(kind) {
+    const rev = revs[kind], K = REV.KIND[kind], sr = REV.senior(), RS = (rev && REV.STATE[rev.state] && rev.state) || 'draft', sn = esc(sr ? sr.full_name || sr.email : 'the senior');
+    const sh = d => d ? new Date(d).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }) : '';
     const canDecide = (settings.senior_id && me.id === settings.senior_id) || isManager();
+    const btn = (a, label, cls = '') => `<button class="btn ${cls}" data-rev="${a}" data-rk="${kind}" ${a === 'send' && !sr ? 'disabled' : ''}>${label}</button>`;
     const rem = ((rev && rev.remarks) || []).slice().reverse().map(x => `<li><b>${esc(x.by || '')}</b> <span class="muted small">${sh(x.at)} · ${x.via === 'link' ? 'by link' : x.via === 'email' ? 'by email reply' : 'in tracker'}</span><div>${esc(x.text)}</div></li>`).join('');
     const sent = ((rev && rev.client_sent) || []).slice().reverse().map(x => `<li>${esc(x.what || 'Workings')} → ${esc(x.to)} <span class="muted small">${sh(x.at)}${x.auto ? ' · automatic' : ''} · ${esc(profName(x.by) || '')}</span></li>`).join('');
+    const dr = rev && rev.draft;
+    const draftRow = ['draft', 'changes', 'sent'].includes(RS) ? `<div class="rev-d"><span class="rev-di" aria-hidden="true">PDF</span><div><b>${K.label} draft from the portal</b><br>
+        ${dr ? `<span class="small">${esc(dr.name)} <span class="muted">· ${dr.src === 'api' ? 'fetched' : 'uploaded'} ${sh(dr.at)}</span></span>` : '<span class="small muted">Not added — the tracker\'s own summary PDF (portal format) goes instead.</span>'}</div>
+        <span class="spacer"></span><button class="btn sm" data-rev="draft" data-rk="${kind}">${dr ? 'Replace' : 'Upload PDF'}</button><button class="btn sm" data-rev="fetch" data-rk="${kind}" title="Uses the GST API">Fetch from portal</button>${dr ? `<button class="link small danger-t" data-rev="undraft" data-rk="${kind}">Remove</button>` : ''}</div>` : '';
     const body = {
-      draft: `<p>Send the workings (PDF summary + Excel) to <b>${esc(sr ? sr.full_name || sr.email : 'the senior')}</b> for verification. The senior approves or asks for changes from the email — by clicking a button or by replying.</p>
+      draft: `<p>Send the ${K.label} workings to <b>${sn}</b>: the portal draft PDF and the ${K.short} workings (Excel). The senior approves from the mail — by the button or by replying.</p>
         ${sr ? '' : '<p class="note warn small">Choose the senior first: Settings → Senior verification &amp; filing mails.</p>'}
-        <div class="toolbar"><button class="btn primary" id="revSend" ${sr ? '' : 'disabled'}>Send for verification</button></div>`,
-      sent: `<p>Sent to <b>${esc(sr ? sr.full_name || sr.email : 'the senior')}</b> on ${sh(rev && rev.sent_at)}${rev && rev.sends > 1 ? ` (${rev.sends} times)` : ''} by ${esc(profName(rev && rev.sent_by) || '')}. Waiting for the answer.</p>
-        <div class="toolbar"><button class="btn" id="revSend">Send again</button>${canDecide ? '<span class="spacer"></span><button class="btn" id="revChanges">Needs changes</button><button class="btn primary" id="revApprove">✓ Approve</button>' : ''}</div>`,
-      changes: `<p class="late"><b>The senior asked for changes.</b> Update the workings, then send again.</p><div class="toolbar"><button class="btn primary" id="revSend">Send again for verification</button></div>`,
-      approved: `<p class="ok-t"><b>Approved</b> ${rev && rev.decided_at ? 'on ' + sh(rev.decided_at) : ''}${rev && rev.decided_via ? ` (${rev.decided_via === 'link' ? 'by link' : rev.decided_via === 'email' ? 'by email reply' : 'in the tracker'})` : ''}. File the returns on the portal, then upload the acknowledgement.</p>
-        <p class="small muted">${settings.auto_send_filed ? 'Automatic: when the GSTR-1 / GSTR-3B acknowledgement is uploaded, it goes to the client with the workings.' : 'Automatic sending is off (Settings). Use the button after filing.'}</p>
-        <div class="toolbar"><button class="btn primary" id="revClient">Send acknowledgement &amp; workings to client</button><button class="btn" id="revWa">WhatsApp</button></div>`,
-      sent_client: `<p class="ok-t"><b>Filed and sent to the client.</b></p><div class="toolbar"><button class="btn" id="revClient">Send again to client</button><button class="btn" id="revWa">WhatsApp</button></div>`
+        <div class="toolbar">${btn('send', `Send ${K.label} for verification`, 'primary')}</div>`,
+      sent: `<p>Sent to <b>${sn}</b> on ${sh(rev && rev.sent_at)}${rev && rev.sends > 1 ? ` (${rev.sends} times)` : ''} by ${esc(profName(rev && rev.sent_by) || '')}. Waiting for the answer.</p>
+        <div class="toolbar">${btn('send', 'Send again')}${canDecide ? `<span class="spacer"></span>${btn('changes', 'Needs changes')}${btn('approve', '✓ Approve', 'primary')}` : ''}</div>`,
+      changes: `<p class="late"><b>The senior asked for changes.</b> Update the workings, then send again.</p><div class="toolbar">${btn('send', 'Send again for verification', 'primary')}</div>`,
+      approved: `<p class="ok-t"><b>Approved</b> ${rev && rev.decided_at ? 'on ' + sh(rev.decided_at) : ''}${rev && rev.decided_via ? ` (${rev.decided_via === 'link' ? 'by link' : rev.decided_via === 'email' ? 'by email reply' : 'in the tracker'})` : ''}. File ${K.label} on the portal, then upload the ${K.label} acknowledgement.</p>
+        <p class="small muted">${settings.auto_send_filed ? `Automatic: when the ${K.label} acknowledgement is uploaded, it goes to the client with the workings.` : 'Automatic sending is off (Settings). Use the button after filing.'}</p>
+        <div class="toolbar">${btn('client', 'Send acknowledgement &amp; workings to client', 'primary')}${btn('wa', 'WhatsApp')}</div>`,
+      sent_client: `<p class="ok-t"><b>${K.label} filed and sent to the client.</b></p><div class="toolbar">${btn('client', 'Send again to client')}${btn('wa', 'WhatsApp')}</div>`
     }[RS];
-    return `<section class="rev-p rev-${RS}" aria-label="Senior verification"><div class="rev-h"><h3>Senior verification</h3><span class="pill ${REV.STATE[RS][1]}">${REV.STATE[RS][0]}</span></div>${body}
+    return `<section class="rev-p rev-${RS}" aria-label="${K.label} verification"><div class="rev-h"><h3>${K.label} — senior verification</h3><span class="pill ${REV.STATE[RS][1]}">${REV.STATE[RS][0]}</span></div>${draftRow}${body}
       ${rem ? `<h4>Remarks</h4><ul class="rev-l">${rem}</ul>` : ''}${sent ? `<h4>Sent to the client</h4><ul class="rev-l">${sent}</ul>` : ''}</section>`;
   }
-  async function revAction(id, btn) {
-    const sm = gsum(row), st = itcState(sm), D3 = draft3b(row, sm, c, st.ready ? st.cl.claim : null);
+  async function revAction(act, kind, btn) {
+    const sm = gsum(row), st = itcState(sm), D3 = draft3b(row, sm, c, st.ready ? st.cl.claim : null), K = REV.KIND[kind], rev = revs[kind];
+    if (act === 'wa') {
+      const txt = `Dear ${c.contact_person || c.name}, your ${K.label} for ${REV.mon(period)} is filed. The acknowledgement and workings have been emailed to you, and you can also download them from your client portal: ${new URL('portal.html', location.href).href} — ${settings.firm_name || cfg.FIRM_NAME || ''}`;
+      window.open(waShare(txt, c.phone), '_blank', 'noopener'); return;
+    }
+    if (act === 'fetch') { gstPortalFetch(c, grMonth, async patch => { await save(patch); }, kind === 'gstr1' ? 'g1' : ''); return; }
     btn.disabled = true; const old = btn.textContent; btn.textContent = 'Working…';
     try {
-      if (id === 'revSend') {
-        if (st.decideN && !confirm(`${st.decideN} bill(s) in step 2 are not decided yet. Send for verification anyway?`)) return;
-        await REV.send({ c, period, row, sm, st, D3, rev }); rev = await REV.load(c, period);
-        toast(`Sent to ${(REV.senior() || {}).full_name || 'the senior'} for verification`);
+      if (act === 'draft') {
+        const fs = await pickFiles('.pdf,application/pdf'); if (!fs.length) return;
+        await REV.setDraft(c, period, kind, fs[0]); toast(`${K.label} portal draft added — it goes with the workings`);
       }
-      if (id === 'revApprove' || id === 'revChanges') {
-        const txt = id === 'revChanges' ? prompt('Changes needed (the team sees this):', '') : null; if (id === 'revChanges' && !txt) return;
-        const { error } = await safe(sb.rpc('review_decide_staff', { p_client: c.id, p_period: period, p_decision: id === 'revApprove' ? 'approve' : 'changes', p_remarks: txt }));
-        if (error) throw error; rev = await REV.load(c, period);
+      if (act === 'undraft') { if (!confirm('Remove the portal draft PDF?')) return; await REV.clearDraft(c, period, kind); }
+      if (act === 'send') {
+        if (kind === 'gstr1' && !(row.sales || row.g1)) throw new Error('Add the sales register or the GSTR-1 entry first');
+        if (kind === 'gstr3b' && st.decideN && !confirm(`${st.decideN} bill(s) in step 2 are not decided yet. Send for verification anyway?`)) return;
+        if (!(rev && rev.draft) && !confirm(`No ${K.label} draft from the portal is added.\n\nSend with the tracker's own summary PDF (portal format) instead?`)) return;
+        await REV.send({ kind, c, period, row, sm, st, D3, rev });
+        toast(`${K.label} sent to ${(REV.senior() || {}).full_name || 'the senior'} for verification`);
+      }
+      if (act === 'approve' || act === 'changes') {
+        const txt = act === 'changes' ? prompt(`Changes needed in ${K.label} (the team sees this):`, '') : null; if (act === 'changes' && !txt) return;
+        const { error } = await safe(sb.rpc('review_decide_staff', { p_client: c.id, p_period: period, p_kind: kind, p_decision: act, p_remarks: txt }));
+        if (error) throw new Error(/review_decide_staff/.test(error.message || '') ? 'Run update-session19.sql in Supabase first' : friendly(error));
         const gm = await safe(sb.from('gst_months').select('*').eq('client_id', c.id).eq('period', period).maybeSingle()); if (gm.data) row = gm.data;
-        toast(id === 'revApprove' ? 'Approved — ready to file' : 'Changes sent to the team');
+        toast(act === 'approve' ? `${K.label} approved — ready to file` : 'Changes sent to the team');
       }
-      if (id === 'revClient') {
-        const S0 = rev && rev.summary && ['approved', 'sent_client'].includes(rev.state) ? rev : null;
-        const r = await REV.toClient({ c, period, row, sm, st, D3, rev: S0 || rev }); rev = await REV.load(c, period);
+      if (act === 'client') {
+        const r = await REV.toClient({ kind, c, period, row, sm, st, D3, rev });
         toast(`Queued to ${c.name}: ${r.what} acknowledgement + workings (${r.to})`);
       }
-      if (id === 'revWa') {
-        const txt = `Dear ${c.contact_person || c.name}, your GST returns for ${REV.mon(period)} are filed. The acknowledgements and workings have been emailed to you, and you can also download them from your client portal: ${new URL('portal.html', location.href).href} — ${settings.firm_name || cfg.FIRM_NAME || ''}`;
-        window.open(waShare(txt, c.phone), '_blank', 'noopener'); return;
-      }
     } catch (e) { toast(friendly(e), true); }
-    finally { btn.disabled = false; btn.textContent = old; }
+    finally { btn.disabled = false; btn.textContent = old; revs = await REV.load(c, period).catch(() => revs); }
     render();
   }
   function overviewHtml(sm, st, D3, stat, mLabel) {
@@ -4407,11 +4433,14 @@ VIEWS.gst = async v => {
     if (st.lw.wait.length) todo.push(['s2', `${st.lw.wait.length} earlier bill${st.lw.wait.length > 1 ? 's' : ''} still waiting for the client`, 'earlier']);
     if (!G3 && (S || G1f)) todo.push(['s3', 'Add the filed GSTR-3B after filing']);
     if (sm.checks.some(x => !x.ok)) todo.push(['s4', 'Look at the GSTR-1 vs 3B checks']);
-    const RS = rev ? rev.state : 'draft';
-    if (RS === 'changes') todo.unshift(['s4', `Senior asked for changes: ${((rev.remarks || []).slice(-1)[0] || {}).text || ''}`.slice(0, 120)]);
-    else if (RS === 'sent') todo.push(['s4', `Waiting for ${(REV.senior() || {}).full_name || 'the senior'} to verify (sent ${new Date(rev.sent_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })})`]);
-    else if (RS === 'approved') todo.unshift(['s4', 'Approved — file on the portal, then upload the acknowledgement (sends to the client)']);
-    else if (RS === 'draft' && (S || G1f) && (B || P) && !st.decideN) todo.push(['s4', 'Workings ready — send for verification to the senior']);
+    const srN = (REV.senior() || {}).full_name || 'the senior', dd = d => new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+    [['gstr1', 's1', !!(S || row.g1)], ['gstr3b', 's4', !!((S || G1f) && (B || P) && !st.decideN)]].forEach(([k, s, ready]) => {
+      const rv = revs[k], RS = rv ? rv.state : 'draft', L = REV.KIND[k].label;
+      if (RS === 'changes') todo.unshift([s, `Senior asked for changes on ${L}: ${((rv.remarks || []).slice(-1)[0] || {}).text || ''}`.slice(0, 130)]);
+      else if (RS === 'sent') todo.push([s, `${L} waiting for ${srN} to verify (sent ${dd(rv.sent_at)})`]);
+      else if (RS === 'approved') todo.unshift([s, `${L} approved — file on the portal, then upload the ${L} acknowledgement (sends to the client)`]);
+      else if (RS === 'draft' && ready) todo.push([s, `${L} workings ready — send for verification to ${srN}`]);
+    });
     if (!todo.length && row.status !== 'Verified') todo.push(['s4', 'Everything is in — review and mark as verified']);
     return `<div class="gro">
       <div class="gro-cards">
@@ -4881,7 +4910,7 @@ VIEWS.gst = async v => {
       if (!confirm(`Use our working as the filed GSTR-1?\n\nTaxable ${gst$(o2.t)} · IGST ${gst$(o2.ig)} · CGST ${gst$(o2.cg)} · SGST ${gst$(o2.sg)} · Cess ${gst$(o2.cs)}\n\nOnly do this when GSTR-1 was filed exactly from this working. It will be marked "copied from our working", and the GSTR-1 vs books check will not catch differences.`)) return;
       await save({ gstr1: { t: o2.t, ig: o2.ig, cg: o2.cg, sg: o2.sg, cs: o2.cs, source: 'working', ...by() } }).catch(err => toast(friendly(err), true)); toast('GSTR-1 (filed) set from our working');
     }
-    if (/^rev(Send|Approve|Changes|Client|Wa)$/.test(b.id)) { revAction(b.id, b); return; }
+    if (d.rev) { revAction(d.rev, d.rk || 'gstr3b', b); return; }
     if (b.id === 'grSaveNotes') { await save({ notes: $('#grNotes', body).value.trim() || null }).catch(err => toast(friendly(err), true)); toast('Notes saved'); }
     if (b.id === 'grVer') { if (!gsum(row).counts.sales && !row.gstr2b) return toast('Add the data first', true); await save({ status: 'Verified', notes: $('#grNotes', body).value.trim() || null }).catch(err => toast(friendly(err), true)); toast('Marked as verified'); }
     if (b.id === 'grUnver') { await save({ status: 'Draft' }).catch(err => toast(friendly(err), true)); }
@@ -5623,21 +5652,25 @@ const REV = (() => {
       notes: row.notes || ''
     };
   }
-  async function pdf(S) {
+  async function pdf(S, kind = 'gstr3b') {
     const jsPDF = await loadJsPdf(), doc = new jsPDF({ unit: 'pt', format: 'a4' }), W = doc.internal.pageSize.getWidth();
     const money = v => v == null || v === '' ? '' : (+v).toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
     let y = 40;
-    doc.setFont('helvetica', 'bold'); doc.setFontSize(15); doc.text(`GST workings — ${S.client}`, 40, y); y += 18;
+    const one = kind === 'gstr1', K = KIND[kind];
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(15); doc.text(`${one ? 'GSTR-1 — summary as per portal format' : 'GSTR-3B workings'} — ${S.client}`, 40, y); y += 18;
     doc.setFont('helvetica', 'normal'); doc.setFontSize(10); doc.setTextColor(90);
     doc.text(`GSTIN ${S.gstin} · ${mon(S.period)} · prepared by ${S.prepared_by} on ${new Date(S.at).toLocaleDateString('en-IN')}`, 40, y); y += 8; doc.setTextColor(0);
-    const box = [['Tax on sales', S.tax_sales], ['Net ITC (4C)', S.net_itc], ['Cash to deposit', S.cash], ['Credit carried forward', S.credit_cf]];
+    const gt = S.g1_total || [];
+    const box = one ? [['Taxable value', gt[1]], ['IGST', gt[2]], ['CGST', gt[3]], ['SGST', gt[4]]]
+      : [['Tax on sales', S.tax_sales], ['Net ITC (4C)', S.net_itc], ['Cash to deposit', S.cash], ['Credit carried forward', S.credit_cf]];
     doc.autoTable({ startY: y + 6, head: [box.map(b => b[0])], body: [box.map(b => 'Rs ' + money(b[1]))], theme: 'grid', styles: { fontSize: 11, halign: 'center', fontStyle: 'bold' }, headStyles: { fillColor: [31, 95, 214], fontSize: 9 }, margin: { left: 40, right: 40 } });
     const T = (title, head, body, opts = {}) => { y = doc.lastAutoTable.finalY + 18; if (y > 760) { doc.addPage(); y = 40; }
       doc.setFont('helvetica', 'bold'); doc.setFontSize(11); doc.text(title, 40, y);
       doc.autoTable({ startY: y + 5, head: [head], body: body.map(r => r.map((v, i) => i === 0 || typeof v === 'string' ? v : money(v))), theme: 'striped', styles: { fontSize: 8.5, cellPadding: 3 },
         headStyles: { fillColor: [235, 240, 250], textColor: 30 }, columnStyles: Object.fromEntries(head.map((h, i) => [i, { halign: i === 0 || opts.left && opts.left.includes(i) ? 'left' : 'right' }])), margin: { left: 40, right: 40 }, ...opts.more }); };
     const H5 = ['', 'Taxable', 'IGST', 'CGST', 'SGST', 'Cess'];
-    T(`GSTR-1 — draft as per portal (from ${S.g1_from})`, H5, [...S.g1, S.g1_total, ...(S.g1_filed ? [S.g1_filed] : [])]);
+    if (one) T(`GSTR-1 — tables as per portal (from ${S.g1_from})`, H5, [...S.g1, S.g1_total, ...(S.g1_filed ? [S.g1_filed] : [])]);
+    else {
     T('GSTR-3B — 3.1 Outward supplies', H5, S.b31);
     T('GSTR-3B — 4 Eligible ITC', H5, S.b4.map(r => r.map((v, i) => i === 1 ? '' : v)));
     T('GSTR-3B — 6.1 Payment of tax', ['Tax', 'Payable', 'Paid by ITC', 'Reverse charge (cash)', 'From cash ledger', 'Cash to deposit'], S.b61);
@@ -5646,8 +5679,9 @@ const REV = (() => {
     if (S.decide.length) T('Bills decided / to decide', ['Supplier', 'GSTIN', 'Bill', 'Tax (books)', 'Tax (2B)', 'Decision'], S.decide, { left: [1, 2, 5] });
     if (S.missing.length) T('In books, not in GSTR-2B (ITC held back)', ['Supplier', 'GSTIN', 'Bill', 'Tax (books)', 'Tax (2B)'], S.missing, { left: [1, 2] });
     if (S.notbooks.length) T('In GSTR-2B, not in books', ['Supplier', 'GSTIN', 'Bill', 'Tax (books)', 'Tax (2B)'], S.notbooks, { left: [1, 2] });
+    }
     if (S.notes) { y = doc.lastAutoTable.finalY + 18; if (y > 740) { doc.addPage(); y = 40; } doc.setFont('helvetica', 'bold'); doc.setFontSize(11); doc.text('Review notes', 40, y); doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.text(doc.splitTextToSize(S.notes, W - 80), 40, y + 14); }
-    const pages = doc.getNumberOfPages(); for (let i = 1; i <= pages; i++) { doc.setPage(i); doc.setFontSize(8); doc.setTextColor(130); doc.text(`${settings.firm_name || cfg.FIRM_NAME || ''} · GST workings ${mon(S.period)} · page ${i} of ${pages}`, 40, 820); }
+    const pages = doc.getNumberOfPages(); for (let i = 1; i <= pages; i++) { doc.setPage(i); doc.setFontSize(8); doc.setTextColor(130); doc.text(`${settings.firm_name || cfg.FIRM_NAME || ''} · ${K.label} ${mon(S.period)} · page ${i} of ${pages}`, 40, 820); }
     return doc.output('blob');
   }
   // GST workings master (Excel) for the FY of this month
@@ -5661,74 +5695,105 @@ const REV = (() => {
       preparedBy: me.full_name || me.email, verifiedBy: sel && sel.verified_by ? profName(sel.verified_by) : '' });
     return { blob: new Blob([out], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), name: `GST Workings - ${c.name} - FY ${fy}.xlsx` };
   }
-  async function files(c, period, S) {
-    const [p, x] = await Promise.all([pdf(S), excel(c, period).catch(e => { console.warn(e); return null; })]);
-    const out = [{ name: `GST ${mon(period)} - ${c.name} - summary.pdf`, mime: 'application/pdf', b64: await b64(p) }];
-    if (x) out.push({ name: x.name, mime: x.blob.type, b64: await b64(x.blob) });
+  // ===== v36: two rounds a month — GSTR-1 (before the 11th) and GSTR-3B (after 2B) =====
+  const KIND = { gstr1: { label: 'GSTR-1', short: 'GSTR 1', file: 'GSTR1' }, gstr3b: { label: 'GSTR-3B', short: 'GSTR 3B', file: 'GSTR3B' } }, KINDS = ['gstr1', 'gstr3b'];
+  const kindOf = name => /^GSTR-?3B/i.test(name || '') ? 'gstr3b' : /^GSTR-?1(?![0-9A-Z])/i.test(name || '') ? 'gstr1' : null;
+  const monShort = period => `${MONTHS[+period.slice(5, 7) - 1]} ${period.slice(2, 4)}`;
+  const mmyyyy = period => period.slice(5, 7) + period.slice(0, 4);
+  const inr = v => 'Rs ' + (+v || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+  const signature = () => (settings.mail_signature || settings.firm_name || cfg.FIRM_NAME || '').trim();
+  const greeting = () => (settings.mail_greeting || 'Respected Sir,').trim();
+  // the PDF that goes with the workings: the draft downloaded from the portal (uploaded / fetched), else our own in portal format
+  async function draftFile(c, period, S, kind, rev) {
+    if (rev && rev.draft && rev.draft.b64) return { name: rev.draft.name || `${KIND[kind].file}_${c.gstin}_${mmyyyy(period)}.pdf`, mime: 'application/pdf', b64: rev.draft.b64, portal: true };
+    return { name: `${KIND[kind].file}_${c.gstin}_${mmyyyy(period)} - summary (tracker).pdf`, mime: 'application/pdf', b64: await b64(await pdf(S, kind)), portal: false };
+  }
+  async function files(c, period, S, kind = 'gstr3b', rev = null) {
+    const [d, x] = await Promise.all([draftFile(c, period, S, kind, rev), excel(c, period).catch(e => { console.warn(e); return null; })]);
+    const out = [{ name: d.name, mime: d.mime, b64: d.b64 }];
+    if (x) out.push({ name: `${KIND[kind].short} Workings - ${c.name} - ${monShort(period)}.xlsx`.replace(/[\\/:*?"<>|]+/g, '-'), mime: x.blob.type, b64: await b64(x.blob) });
     return out;
   }
-  async function load(c, period) { const r = await safe(sb.from('gst_reviews').select('*').eq('client_id', c.id).eq('period', period).maybeSingle()); return r.error ? { missing: true } : (r.data || null); }
+  async function load(c, period) {
+    const r = await safe(sb.from('gst_reviews').select('*').eq('client_id', c.id).eq('period', period));
+    if (r.error) return { missing: true, gstr1: null, gstr3b: null };
+    const out = { gstr1: null, gstr3b: null }; (r.data || []).forEach(x => { out[x.kind || 'gstr3b'] = { ...x, state: x.state || 'draft' }; }); return out;
+  }
+  const v19 = e => /kind|draft|gst_reviews_pkey|no unique or exclusion constraint/i.test((e && e.message) || '') ? 'Run update-session19.sql in Supabase first' : friendly(e);
+  async function setDraft(c, period, kind, file, src = 'upload') {
+    if (!file) return;
+    if (!/pdf$/i.test(file.type || '') && !/\.pdf$/i.test(file.name || '')) throw new Error('Please choose the PDF downloaded from the GST portal');
+    if (file.size > 8 * 1024 * 1024) throw new Error('This PDF is larger than 8 MB');
+    const r = await safe(sb.from('gst_reviews').upsert({ client_id: c.id, period, kind, draft: { name: file.name || `${KIND[kind].file}_${c.gstin}_${mmyyyy(period)}.pdf`, b64: await b64(file), src, at: new Date().toISOString(), by: me.id } }, { onConflict: 'client_id,period,kind' }));
+    if (r.error) throw new Error(v19(r.error));
+  }
+  async function clearDraft(c, period, kind) { const r = await safe(sb.from('gst_reviews').update({ draft: null }).eq('client_id', c.id).eq('period', period).eq('kind', kind)); if (r.error) throw new Error(v19(r.error)); }
   const htmlEsc = s => String(s ?? '').replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
-  async function send({ c, period, row, sm, st, D3, rev }) {
+  const figures = (S, kind) => kind === 'gstr1'
+    ? [['Taxable value', inr(S.g1_total[1])], ['Tax', inr((+S.g1_total[2] || 0) + (+S.g1_total[3] || 0) + (+S.g1_total[4] || 0) + (+S.g1_total[5] || 0))], ['From', S.g1_from]]
+    : [['Tax on sales', inr(S.tax_sales)], ['Net ITC', inr(S.net_itc)], ['Cash to deposit', inr(S.cash)], ...(S.itc ? [['ITC in 2B / claimed / held back', `${inr(S.itc.in2b)} / ${inr(S.itc.claim)} / ${inr(S.itc.held)}`]] : [])];
+  const sigHtml = () => `<!--SIG--><div style="color:#444">${signature().split('\n').map(htmlEsc).join('<br>')}</div><!--/SIG-->`;
+  async function send({ kind = 'gstr3b', c, period, row, sm, st, D3, rev }) {
     const sr = senior();
     if (!sr || !sr.email) throw new Error('Choose the senior first: Settings → Senior verification & filing mails');
-    const S = summary({ c, period, row, sm, st, D3 }), fl = await files(c, period, S);
+    const K = KIND[kind], S = { ...summary({ c, period, row, sm, st, D3 }), kind }, fl = await files(c, period, S, kind, rev);
     const token = rand(32), tag = rand(6).replace(/[-_]/g, 'x').toUpperCase(), link = new URL('review.html', location.href).href + '?t=' + token;
-    const rec = { client_id: c.id, period, state: 'sent', sent_at: new Date().toISOString(), sent_by: me.id, sends: ((rev && rev.sends) || 0) + 1, token_hash: await sha(token),
+    const rec = { client_id: c.id, period, kind, state: 'sent', sent_at: new Date().toISOString(), sent_by: me.id, sends: ((rev && rev.sends) || 0) + 1, token_hash: await sha(token),
       token_exp: new Date(Date.now() + 10 * 864e5).toISOString(), tag, summary: S };
-    const up = await safe(sb.from('gst_reviews').upsert(rec, { onConflict: 'client_id,period' }));
-    if (up.error) throw new Error(/gst_reviews/.test(up.error.message || '') ? 'Run update-session18.sql in Supabase first' : friendly(up.error));
-    const lines = [`Client: ${c.name} (${c.gstin})`, `Month: ${mon(period)}`, `Prepared by: ${me.full_name || me.email}`, '',
-      `Tax on sales: Rs ${S.tax_sales.toLocaleString('en-IN')}`, `Net ITC: Rs ${S.net_itc.toLocaleString('en-IN')}`, `Cash to deposit: Rs ${S.cash.toLocaleString('en-IN')}`,
-      ...(S.itc ? [`ITC in 2B Rs ${S.itc.in2b.toLocaleString('en-IN')} · claimed Rs ${S.itc.claim.toLocaleString('en-IN')} · held back Rs ${S.itc.held.toLocaleString('en-IN')} (${S.itc.missing} in books not in 2B, ${S.itc.notbooks} in 2B not in books)`] : []),
-      ...(S.notes ? ['', 'Notes: ' + S.notes] : [])];
-    const body = `Please verify the GST workings below. The PDF summary and the Excel workings are attached.\n\n${lines.join('\n')}\n\nApprove or ask for changes: ${link}\n\nOr reply to this email: write "Approved" on the first line to approve, or type your remarks.\n\n— ${settings.firm_name || cfg.FIRM_NAME || 'JLR Compliance'} tracker`;
-    const html = `<div style="font-family:Arial,sans-serif;font-size:14px;color:#14213d"><p>Please verify the GST workings below. The PDF summary and the Excel workings are attached.</p>
-      <table cellpadding="4" style="border-collapse:collapse">${lines.filter(Boolean).map(l => { const i = l.indexOf(':'); return `<tr><td style="color:#5b6b85">${htmlEsc(l.slice(0, i))}</td><td><b>${htmlEsc(l.slice(i + 1))}</b></td></tr>`; }).join('')}</table>
-      <p style="margin:22px 0"><a href="${link}&a=approve" style="background:#157347;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:bold">✓ Approve</a>
-      &nbsp; <a href="${link}&a=changes" style="background:#fff;color:#a3261d;border:1px solid #a3261d;padding:11px 20px;border-radius:8px;text-decoration:none;font-weight:bold">Needs changes</a></p>
-      <p style="color:#5b6b85;font-size:12px">Or reply to this email: write <b>Approved</b> on the first line to approve, or type your remarks. The link works for 10 days.</p></div>`;
-    const ins = await safe(sb.from('mail_jobs').insert({ kind: 'review', to_addr: sr.email, subject: `[JLR-REVIEW:${tag}] GST ${mon(period)} — ${c.name} — for verification`, body, html, files: fl, client_id: c.id, period }));
-    if (ins.error) throw new Error(friendly(ins.error));
-    return { tag, link };
+    const up = await safe(sb.from('gst_reviews').upsert(rec, { onConflict: 'client_id,period,kind' }));
+    if (up.error) throw new Error(v19(up.error));
+    const who = me.full_name || me.email, F = figures(S, kind), line = `PFA the ${K.short} Workings of ${c.name} for ${mon(period)} for your reference.`;
+    const body = `${greeting()}\n\n${line}\n\n${F.map(([l, v]) => `${l}: ${v}`).join('\n')}${S.notes ? '\nNotes: ' + S.notes : ''}\n\nApprove or ask for changes: ${link}\nOr reply to this mail — "Approved" on the first line approves; anything else goes back to the team as remarks.\n\nThanks & Regards,\n${who}\n${signature()}`;
+    const html = `<div style="font-family:Arial,sans-serif;font-size:14px;color:#222;line-height:1.5">
+      <p>${htmlEsc(greeting())}</p><p>${htmlEsc(line)}</p>
+      <table cellpadding="3" style="border-collapse:collapse;font-size:13px;color:#333;margin:4px 0 10px">${F.map(([l, v]) => `<tr><td style="color:#6b7280;padding-right:14px">${htmlEsc(l)}</td><td><b>${htmlEsc(v)}</b></td></tr>`).join('')}</table>
+      ${S.notes ? `<p style="font-size:13px;color:#333"><b>Notes:</b> ${htmlEsc(S.notes)}</p>` : ''}
+      <p style="margin:16px 0"><a href="${link}&a=approve" style="background:#157347;color:#fff;padding:9px 18px;border-radius:6px;text-decoration:none;font-weight:bold;font-size:13px">✓ Approve</a>
+      &nbsp; <a href="${link}&a=changes" style="color:#a3261d;border:1px solid #a3261d;padding:8px 16px;border-radius:6px;text-decoration:none;font-weight:bold;font-size:13px">Needs changes</a></p>
+      <p style="color:#6b7280;font-size:12px">Or reply to this mail: write <b>Approved</b> on the first line to approve, or type your remarks.</p>
+      <p>Thanks &amp; Regards,<br>${htmlEsc(who)}</p>${sigHtml()}</div>`;
+    const ins = await safe(sb.from('mail_jobs').insert({ kind: 'review', kind2: kind, to_addr: sr.email, subject: `${K.short} Workings | ${monShort(period)} | ${c.name}  [JLR-REVIEW:${tag}]`, body, html, files: fl, client_id: c.id, period }));
+    if (ins.error) throw new Error(v19(ins.error));
+    return { tag, link, portal: !!(rev && rev.draft) };
   }
-  // acknowledgements of this month's GST returns (GSTR-1, GSTR-3B), or just the one given
-  async function ackFiles(c, period, only) {
+  // the acknowledgement of this return for the month (or the one just uploaded)
+  async function ackFiles(c, period, only, kind) {
     if (only && only.file) return [{ name: only.file.name || 'acknowledgement.pdf', mime: 'application/pdf', b64: await b64(only.file) }];
     const r = await safe(sb.from('filing_acks').select('*').eq('client_id', c.id).order('created_at', { ascending: false }).limit(60));
-    const mine = (r.data || []).filter(a => /^GSTR-?(1|3B)/i.test(a.return_name || '') && (periodToMonth(a.period) || '') === period.slice(0, 7) && a.file_path);
-    const out = [], seen = new Set();
-    for (const a of mine) { if (seen.has(a.return_name)) continue; seen.add(a.return_name);
-      const s = await sb.storage.from('filing-acks').createSignedUrl(a.file_path, 120); if (s.error) continue;
-      const blob = await fetch(s.data.signedUrl).then(x => x.blob()).catch(() => null); if (blob) out.push({ name: `${a.return_name} ${mon(period)} acknowledgement${a.arn ? ' ' + a.arn : ''}.pdf`.replace(/[\\/:*?"<>|]+/g, '-'), mime: 'application/pdf', b64: await b64(blob) }); }
-    return out;
+    const a = (r.data || []).find(a => kindOf(a.return_name) === kind && (periodToMonth(a.period) || '') === period.slice(0, 7) && a.file_path);
+    if (!a) return [];
+    const s = await sb.storage.from('filing-acks').createSignedUrl(a.file_path, 120); if (s.error) return [];
+    const blob = await fetch(s.data.signedUrl).then(x => x.blob()).catch(() => null);
+    return blob ? [{ name: `${KIND[kind].label} ${mon(period)} acknowledgement${a.arn ? ' ' + a.arn : ''}.pdf`.replace(/[\\/:*?"<>|]+/g, '-'), mime: 'application/pdf', b64: await b64(blob) }] : [];
   }
-  async function toClient({ c, period, row, sm, st, D3, rev, only, auto }) {
-    const to = String(c.email || '').split(/[,;\s]+/).filter(Boolean).join(',');
+  async function toClient({ kind = 'gstr3b', c, period, row, sm, st, D3, rev, only, auto }) {
+    const K = KIND[kind], to = String(c.email || '').split(/[,;\s]+/).filter(Boolean).join(',');
     if (!to) throw new Error(`${c.name} has no email address — add it on the client first`);
-    const S = rev && rev.summary && ['approved', 'sent_client'].includes(rev.state) ? rev.summary : summary({ c, period, row, sm, st, D3 }), acks = await ackFiles(c, period, only);
-    if (!acks.length) throw new Error('No acknowledgement found for this month — upload the GSTR-1 / GSTR-3B acknowledgement first');
-    const fl = [...acks, ...(await files(c, period, S))], what = acks.map(a => a.name.split(' ')[0]).join(' and ');
-    const body = `Dear ${c.contact_person || c.name},\n\nYour GST return${acks.length > 1 ? 's' : ''} (${what}) for ${mon(period)} ${acks.length > 1 ? 'have' : 'has'} been filed. Attached:\n• Filing acknowledgement${acks.length > 1 ? 's' : ''}\n• GST working summary (PDF) and workings (Excel)\n\nTax paid in cash this month: Rs ${S.cash.toLocaleString('en-IN')}.\nYou can also see your acknowledgements on your client portal: ${new URL('portal.html', location.href).href}\n\nThank you,\n${settings.firm_name || cfg.FIRM_NAME || ''}`;
-    const ins = await safe(sb.from('mail_jobs').insert({ kind: 'client_filed', to_addr: to, subject: `GST ${what} filed — ${mon(period)} — ${c.name}`, body, files: fl, client_id: c.id, period }));
-    if (ins.error) throw new Error(/mail_jobs/.test(ins.error.message || '') ? 'Run update-session18.sql in Supabase first' : friendly(ins.error));
-    const sent = [...((rev && rev.client_sent) || []), { at: new Date().toISOString(), by: me.id, to, what, auto: !!auto }];
-    await safe(sb.from('gst_reviews').upsert({ client_id: c.id, period, state: 'sent_client', client_sent: sent }, { onConflict: 'client_id,period' }));
-    return { to, what };
+    const S = rev && rev.summary && ['approved', 'sent_client'].includes(rev.state) ? { ...rev.summary, kind } : { ...summary({ c, period, row, sm, st, D3 }), kind }, acks = await ackFiles(c, period, only, kind);
+    if (!acks.length) throw new Error(`No ${K.label} acknowledgement found for ${mon(period)} — upload it first`);
+    const fl = [...acks, ...(await files(c, period, S, kind, rev))];
+    const body = `Dear ${c.contact_person || c.name},\n\nYour ${K.label} for ${mon(period)} has been filed. Please find attached:\n• ${K.label} filing acknowledgement\n• ${K.label} summary\n• ${K.short} workings (Excel)\n${kind === 'gstr3b' ? `\nTax paid in cash this month: ${inr(S.cash)}.\n` : ''}\nYou can also see your acknowledgements on your client portal: ${new URL('portal.html', location.href).href}\n\nThanks & Regards,\n${signature()}`;
+    const ins = await safe(sb.from('mail_jobs').insert({ kind: 'client_filed', kind2: kind, to_addr: to, subject: `${K.label} filed — ${mon(period)} — ${c.name}`, body, files: fl, client_id: c.id, period }));
+    if (ins.error) throw new Error(v19(ins.error));
+    const sent = [...((rev && rev.client_sent) || []), { at: new Date().toISOString(), by: me.id, to, what: K.label, auto: !!auto }];
+    const u = await safe(sb.from('gst_reviews').upsert({ client_id: c.id, period, kind, state: 'sent_client', client_sent: sent }, { onConflict: 'client_id,period,kind' }));
+    if (u.error) throw new Error(v19(u.error));
+    return { to, what: K.label };
   }
-  return { STATE, summary, pdf, excel, files, load, send, toClient, senior, mon, rand, sha };
+  return { STATE, KIND, KINDS, kindOf, summary, pdf, excel, files, load, send, toClient, setDraft, clearDraft, senior, mon, monShort, rand, sha };
 })();
 
-// after an acknowledgement is saved: send workings + acknowledgement to the client when switched on and the month is approved
+// after an acknowledgement is saved: send that return's workings + acknowledgement to the client when switched on and approved
 async function autoSendAfterAck(task, file) {
   try {
-    if (!settings.auto_send_filed || !/^GSTR-?(1|3B)/i.test(task.return_name || '')) return;
+    const kind = REV.kindOf(task.return_name);
+    if (!settings.auto_send_filed || !kind) return;
     const c = clientById(task.client_id); const month = periodToMonth(task.period); if (!c || !month) return;
-    const period = month + '-01', rev = await REV.load(c, period);
-    if (!rev || rev.missing || !['approved', 'sent_client'].includes(rev.state)) { toast(`Not sent to ${c.name} automatically — ${mLabelOf(period)} is not approved by the senior yet.`, true); return; }
+    const period = month + '-01', rev = (await REV.load(c, period))[kind];
+    if (!rev || !['approved', 'sent_client'].includes(rev.state)) { toast(`Not sent to ${c.name} automatically — ${REV.KIND[kind].label} ${mLabelOf(period)} is not approved by the senior yet.`, true); return; }
     const gm = await safe(sb.from('gst_months').select('*').eq('client_id', c.id).eq('period', period).maybeSingle()); if (!gm.data) return;
     const row = gm.data, sm = GR.summarise(row, { method: c.itc_method }), D3 = draft3b(row, sm, c);
-    const r = await REV.toClient({ c, period, row, sm, st: null, D3, rev, only: file ? { file } : null, auto: true });
+    const r = await REV.toClient({ kind, c, period, row, sm, st: null, D3, rev, only: file ? { file } : null, auto: true });
     toast(`${r.what} acknowledgement and workings queued to ${c.name} (${r.to})`);
   } catch (e) { toast('Auto-send to client: ' + friendly(e), true); }
 }

@@ -1,4 +1,4 @@
-/* v35: the senior opens this from the verification email (no login). The link carries a one-time token. */
+/* v36 (two rounds: GSTR-1 / GSTR-3B) — v35: the senior opens this from the verification email (no login). The link carries a one-time token. */
 (() => {
   const cfg = window.TRACKER_CONFIG || {}, sb = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY, { auth: { persistSession: false } });
   const q = new URLSearchParams(location.search), token = q.get('t') || '', want = q.get('a') || '';
@@ -16,7 +16,8 @@
     const { data, error } = await sb.rpc('review_peek', { p_token: token });
     if (error || !data || data.error) { out.innerHTML = `<div class="card"><p>${esc((data && data.error) || (error && error.message) || 'Could not open this link.')}</p></div>`; sub.textContent = ''; return; }
     const S = data.summary || {}, H5 = ['', 'Taxable', 'IGST', 'CGST', 'SGST', 'Cess'];
-    title.textContent = `${data.client} — GST ${mon(data.period)}`;
+    const one = data.kind === 'gstr1', ret = data.ret || (one ? 'GSTR-1' : 'GSTR-3B'), g = S.g1_total || [];
+    title.textContent = `${data.client} — ${ret} ${mon(data.period)}`;
     sub.textContent = `GSTIN ${data.gstin} · prepared by ${data.sent_by || S.prepared_by || ''} · sent ${new Date(data.sent_at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })}`;
     if (data.state !== 'sent') { out.innerHTML = `<div class="card"><p>This has already been ${data.state === 'approved' ? 'approved' : data.state === 'changes' ? 'sent back for changes' : 'handled'}.</p></div>`; return; }
     const box = (l, v, cls = '') => `<div class="rc-b ${cls}"><small>${l}</small><b>${inr(v)}</b></div>`;
@@ -28,15 +29,17 @@
           <div class="toolbar" style="margin-top:8px"><button class="btn primary" id="send">Send remarks to the team</button></div></div>
         <p class="muted small" id="msg"></p>
       </div>
+      ${one ? `<div class="rc-sum rc4">${box('Taxable value', g[1])}${box('IGST', g[2])}${box('CGST', g[3])}${box('SGST', g[4])}</div>
+      <div class="card"><h3>GSTR-1 — tables as per portal <span class="muted small">(${esc(S.g1_from || '')})</span></h3>${table(H5, [...(S.g1 || []), ...(S.g1_total ? [S.g1_total] : []), ...(S.g1_filed ? [S.g1_filed] : [])])}
+        <p class="small muted">The portal draft PDF and the GSTR 1 workings (Excel) are attached to the mail.</p></div>` : `
       <div class="rc-sum rc4">${box('Tax on sales', S.tax_sales)}${box('Net ITC', S.net_itc)}${box('Credit carried forward', S.credit_cf)}${box('Cash to deposit', S.cash, S.cash ? 'bad' : 'ok')}</div>
-      <div class="card"><h3>GSTR-1 — draft as per portal <span class="muted small">(${esc(S.g1_from || '')})</span></h3>${table(H5, [...(S.g1 || []), ...(S.g1_total ? [S.g1_total] : []), ...(S.g1_filed ? [S.g1_filed] : [])])}</div>
       <div class="card"><h3>GSTR-3B — 3.1 Outward supplies</h3>${table(H5, S.b31 || [])}
         <h3>4 Eligible ITC</h3>${table(['', 'IGST', 'CGST', 'SGST', 'Cess'], (S.b4 || []).map(r => [r[0], ...r.slice(2)]))}
         <h3>6.1 Payment of tax</h3>${table(['Tax', 'Payable', 'Paid by ITC', 'Reverse charge (cash)', 'From cash ledger', 'Cash to deposit'], S.b61 || [])}</div>
       ${S.itc ? `<div class="card"><h3>ITC — GSTR-2B vs books</h3>${table(['', 'Amount'], [['ITC in GSTR-2B', S.itc.in2b], ['ITC in books', S.itc.books], ['ITC claimed', S.itc.claim], ['Held back', S.itc.held]])}
         <p class="small muted">${S.itc.matched} matched · ${S.itc.decide} to decide · ${S.itc.missing} in books not in 2B · ${S.itc.notbooks} in 2B not in books</p>
         ${(S.decide || []).length ? '<h4>Bills with a difference</h4>' + table(['Supplier', 'GSTIN', 'Bill', 'Tax (books)', 'Tax (2B)', 'Decision'], S.decide) : ''}
-        ${(S.missing || []).length ? '<h4>In books, not in GSTR-2B</h4>' + table(['Supplier', 'GSTIN', 'Bill', 'Tax (books)', 'Tax (2B)'], S.missing) : ''}</div>` : ''}
+        ${(S.missing || []).length ? '<h4>In books, not in GSTR-2B</h4>' + table(['Supplier', 'GSTIN', 'Bill', 'Tax (books)', 'Tax (2B)'], S.missing) : ''}</div>` : ''}`}
       ${S.notes ? `<div class="card"><h3>Review notes</h3><p style="white-space:pre-wrap">${esc(S.notes)}</p></div>` : ''}
       ${(data.remarks || []).length ? `<div class="card"><h3>Earlier remarks</h3><ul>${data.remarks.map(r => `<li>${esc(r.text)} <span class="muted small">— ${esc(r.by)}</span></li>`).join('')}</ul></div>` : ''}`;
     const msg = t => { document.getElementById('msg').textContent = t; };
@@ -44,7 +47,7 @@
       document.querySelectorAll('#act button').forEach(b => b.disabled = true); msg('Saving…');
       const { data: res, error: e } = await sb.rpc('review_decide', { p_token: token, p_decision: d, p_remarks: rm || null });
       if (e) { msg(e.message || 'Could not save — try again'); document.querySelectorAll('#act button').forEach(b => b.disabled = false); return; }
-      document.getElementById('act').innerHTML = res === 'approved' ? '<h3 style="margin-top:0" class="ok-t">✓ Approved. The team has been told to file.</h3>' : res === 'changes' ? '<h3 style="margin-top:0">Remarks sent to the team. Thank you.</h3>' : `<p>${esc(res)}</p>`;
+      document.getElementById('act').innerHTML = res === 'approved' ? `<h3 style="margin-top:0" class="ok-t">✓ ${esc(ret)} approved. The team has been told to file.</h3>` : res === 'changes' ? '<h3 style="margin-top:0">Remarks sent to the team. Thank you.</h3>' : `<p>${esc(res)}</p>`;
     };
     document.getElementById('ok').onclick = () => decide('approve');
     document.getElementById('chg').onclick = () => { document.getElementById('chgBox').hidden = false; document.getElementById('rm').focus(); };
